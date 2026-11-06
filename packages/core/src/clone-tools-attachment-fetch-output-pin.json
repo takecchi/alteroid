@@ -1,0 +1,2277 @@
+{
+  "lengths": {
+    "fetch-kinds#1": 170,
+    "fetch-kinds#2": 172,
+    "fetch-kinds#3": 184,
+    "fetch-kinds#4": 167,
+    "fetch-kinds#5": 168,
+    "fetch-kinds#6": 182,
+    "fetch-kinds#7": 162,
+    "fetch-external#1": 179,
+    "fetch-external#2": 182,
+    "fetch-external#3": 191,
+    "fetch-external#4": 194,
+    "fetch-empty#1": 174,
+    "fetch-empty#2": 189,
+    "fetch-names-multibyte#1": 177,
+    "fetch-names-multibyte#2": 178,
+    "fetch-names-multibyte#3": 169,
+    "fetch-names-multibyte#4": 352,
+    "fetch-names-multibyte#5": 620,
+    "fetch-names-special#1": 187,
+    "fetch-names-special#2": 167,
+    "fetch-names-special#3": 161,
+    "fetch-names-special#4": 165,
+    "fetch-names-special#5": 175,
+    "fetch-names-special#6": 169,
+    "fetch-names-special#7": 187,
+    "fetch-names-special#8": 175,
+    "fetch-names-special#9": 173,
+    "fetch-names-special#10": 181,
+    "reuse#1": 167,
+    "reuse#2": 182,
+    "reuse#3": 182,
+    "reuse-prepared#1": 186,
+    "reuse-prepared#2": 186,
+    "reuse-prepared#3": 187,
+    "reuse-prepared#4": 188,
+    "reuse-prepared#5": 190,
+    "not-found#1": 54,
+    "not-found#2": 56,
+    "not-found#3": 49,
+    "not-found#4": 48,
+    "not-found#5": 245,
+    "not-found#6": 50,
+    "not-found#7": 45,
+    "mismatch#1": 95,
+    "mismatch#2": 94,
+    "mismatch#3": 97,
+    "mismatch#4": 96,
+    "mismatch-stale-copy#1": 95,
+    "mismatch-stale-copy#2": 95,
+    "unsafe-id#1": 49,
+    "unsafe-id#2": 49,
+    "unsafe-id#3": 49,
+    "unsafe-id#4": 49,
+    "unsafe-id#5": 49,
+    "unsafe-id#6": 285,
+    "open-throws#1": 58,
+    "open-throws#2": 54,
+    "open-throws#3": 46,
+    "open-throws#4": 66,
+    "open-throws#5": 60,
+    "open-throws#6": 158,
+    "stream-throws#1": 62,
+    "stream-throws#2": 63,
+    "stream-throws#3": 55,
+    "stream-throws#4": 63,
+    "retry-after-failure#1": 66,
+    "retry-after-failure#2": 175,
+    "retry-after-failure#3": 190,
+    "copies-blocked": 118
+  },
+  "scenarios": {
+    "fetch-kinds#1": {
+      "output": {
+        "length": 170,
+        "text": "添付 att-png を取り出した。Read で開ける。\npath=<copies>/att-png/photo.png\nname=photo.png type=image/png size=12 sha256=8dc580175969db9757b7c06c3118570db35acd52f55f97c9220e4e1edbbfc693",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-png/", "att-png/photo.png (12 B, sha256=8dc580175969)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-png"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-png"
+          },
+          "outcome": "ok 12 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#2": {
+      "output": {
+        "length": 172,
+        "text": "添付 att-pdf を取り出した。Read で開ける。\npath=<copies>/att-pdf/doc.pdf\nname=doc.pdf type=application/pdf size=33 sha256=9dd0191aa2271bc910c89fecfbaad15d47722ff2608d70cdb8eaf399deed27c7",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-pdf"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-pdf"
+          },
+          "outcome": "ok 33 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#3": {
+      "output": {
+        "length": 184,
+        "text": "添付 att-txt を取り出した。Read で開ける。\npath=<copies>/att-txt/note.txt\nname=note.txt type=text/plain; charset=utf-8 size=61 sha256=f50406e7193eb6ccaf2af5b4677c42af0e5773f55ccc6eb431d88da4ef964711",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)",
+        "att-txt/",
+        "att-txt/note.txt (61 B, sha256=f50406e7193e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-txt"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-txt"
+          },
+          "outcome": "ok 61 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#4": {
+      "output": {
+        "length": 167,
+        "text": "添付 att-log を取り出した。Read で開ける。\npath=<copies>/att-log/run.log\nname=run.log type=text/x-log size=29 sha256=bce2aeea9e6fc31f09b164dbaf832b013ee75fbd323262cbee9d42b8b51077b1",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-log/",
+        "att-log/run.log (29 B, sha256=bce2aeea9e6f)",
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)",
+        "att-txt/",
+        "att-txt/note.txt (61 B, sha256=f50406e7193e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-log"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-log"
+          },
+          "outcome": "ok 29 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#5": {
+      "output": {
+        "length": 168,
+        "text": "添付 att-mp4 を取り出した。Read で開ける。\npath=<copies>/att-mp4/clip.mp4\nname=clip.mp4 type=video/mp4 size=40 sha256=41158422cbee1b61550b1d690cc76f17c480ce4cd263a0eea981055f4aec384d",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-log/",
+        "att-log/run.log (29 B, sha256=bce2aeea9e6f)",
+        "att-mp4/",
+        "att-mp4/clip.mp4 (40 B, sha256=41158422cbee)",
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)",
+        "att-txt/",
+        "att-txt/note.txt (61 B, sha256=f50406e7193e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-mp4"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-mp4"
+          },
+          "outcome": "ok 40 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#6": {
+      "output": {
+        "length": 182,
+        "text": "添付 att-bin を取り出した。Read で開ける。\npath=<copies>/att-bin/all.bin\nname=all.bin type=application/octet-stream size=256 sha256=40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-bin/",
+        "att-bin/all.bin (256 B, sha256=40aff2e9d2d8)",
+        "att-log/",
+        "att-log/run.log (29 B, sha256=bce2aeea9e6f)",
+        "att-mp4/",
+        "att-mp4/clip.mp4 (40 B, sha256=41158422cbee)",
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)",
+        "att-txt/",
+        "att-txt/note.txt (61 B, sha256=f50406e7193e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-bin"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-bin"
+          },
+          "outcome": "ok 256 bytes"
+        }
+      ]
+    },
+    "fetch-kinds#7": {
+      "output": {
+        "length": 162,
+        "text": "添付 att-notype を取り出した。Read で開ける。\npath=<copies>/att-notype/no-type\nname=no-type type= size=3 sha256=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-bin/",
+        "att-bin/all.bin (256 B, sha256=40aff2e9d2d8)",
+        "att-log/",
+        "att-log/run.log (29 B, sha256=bce2aeea9e6f)",
+        "att-mp4/",
+        "att-mp4/clip.mp4 (40 B, sha256=41158422cbee)",
+        "att-notype/",
+        "att-notype/no-type (3 B, sha256=ba7816bf8f01)",
+        "att-pdf/",
+        "att-pdf/doc.pdf (33 B, sha256=9dd0191aa227)",
+        "att-png/",
+        "att-png/photo.png (12 B, sha256=8dc580175969)",
+        "att-txt/",
+        "att-txt/note.txt (61 B, sha256=f50406e7193e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-notype"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-notype"
+          },
+          "outcome": "ok 3 bytes"
+        }
+      ]
+    },
+    "fetch-external#1": {
+      "output": {
+        "length": 179,
+        "text": "添付 att-ext-big を取り出した。Read で開ける。\npath=<copies>/att-ext-big/big.bin\nname=big.bin type=text/plain size=100000 sha256=6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-ext-big/", "att-ext-big/big.bin (100000 B, sha256=6d1cf22d7cc0)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ext-big"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "externalBlob.read",
+          "args": {
+            "id": "att-ext-big"
+          },
+          "outcome": "ok 100000 bytes"
+        }
+      ]
+    },
+    "fetch-external#2": {
+      "output": {
+        "length": 182,
+        "text": "添付 att-ext-small を取り出した。Read で開ける。\npath=<copies>/att-ext-small/small.txt\nname=small.txt type=text/plain size=9 sha256=94598a9bcbbe50f3a4928c291ec49034b05816db8e547c06e0926b16d9fe8aa5",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-ext-big/",
+        "att-ext-big/big.bin (100000 B, sha256=6d1cf22d7cc0)",
+        "att-ext-small/",
+        "att-ext-small/small.txt (9 B, sha256=94598a9bcbbe)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ext-small"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "externalBlob.read",
+          "args": {
+            "id": "att-ext-small"
+          },
+          "outcome": "ok 9 bytes"
+        }
+      ]
+    },
+    "fetch-external#3": {
+      "output": {
+        "length": 191,
+        "text": "添付 att-inline-small を取り出した。Read で開ける。\npath=<copies>/att-inline-small/inline.txt\nname=inline.txt type=text/plain size=12 sha256=49531e81c023dab2ae6a6b5ec2ada54ba6cc5b715cf69ae6c8bf1f50dc3b4c91",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-ext-big/",
+        "att-ext-big/big.bin (100000 B, sha256=6d1cf22d7cc0)",
+        "att-ext-small/",
+        "att-ext-small/small.txt (9 B, sha256=94598a9bcbbe)",
+        "att-inline-small/",
+        "att-inline-small/inline.txt (12 B, sha256=49531e81c023)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-inline-small"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-inline-small"
+          },
+          "outcome": "ok 12 bytes"
+        }
+      ]
+    },
+    "fetch-external#4": {
+      "output": {
+        "length": 194,
+        "text": "添付 att-ext-big を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-ext-big/big.bin\nname=big.bin type=text/plain size=100000 sha256=6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [
+        "att-ext-big/",
+        "att-ext-big/big.bin (100000 B, sha256=6d1cf22d7cc0)",
+        "att-ext-small/",
+        "att-ext-small/small.txt (9 B, sha256=94598a9bcbbe)",
+        "att-inline-small/",
+        "att-inline-small/inline.txt (12 B, sha256=49531e81c023)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ext-big"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "fetch-empty#1": {
+      "output": {
+        "length": 174,
+        "text": "添付 att-empty を取り出した。Read で開ける。\npath=<copies>/att-empty/empty.txt\nname=empty.txt type=text/plain size=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-empty/", "att-empty/empty.txt (0 B, sha256=e3b0c44298fc)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-empty"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-empty"
+          },
+          "outcome": "ok 0 bytes"
+        }
+      ]
+    },
+    "fetch-empty#2": {
+      "output": {
+        "length": 189,
+        "text": "添付 att-empty を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-empty/empty.txt\nname=empty.txt type=text/plain size=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-empty/", "att-empty/empty.txt (0 B, sha256=e3b0c44298fc)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-empty"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "fetch-names-multibyte#1": {
+      "output": {
+        "length": 177,
+        "text": "添付 att-ja を取り出した。Read で開ける。\npath=<copies>/att-ja/日本語のファイル名.txt\nname=日本語のファイル名.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-ja/", "att-ja/日本語のファイル名.txt (23 B, sha256=cd2d04aafd38)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ja"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-ja"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-multibyte#2": {
+      "output": {
+        "length": 178,
+        "text": "添付 att-sp を取り出した。Read で開ける。\npath=<copies>/att-sp/写真 2026年 春.png\nname=写真 2026年 春.png type=image/png size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-ja/",
+        "att-ja/日本語のファイル名.txt (23 B, sha256=cd2d04aafd38)",
+        "att-sp/",
+        "att-sp/写真 2026年 春.png (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-sp"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-sp"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-multibyte#3": {
+      "output": {
+        "length": 169,
+        "text": "添付 att-emoji を取り出した。Read で開ける。\npath=<copies>/att-emoji/😀.txt\nname=😀.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-emoji/",
+        "att-emoji/😀.txt (23 B, sha256=cd2d04aafd38)",
+        "att-ja/",
+        "att-ja/日本語のファイル名.txt (23 B, sha256=cd2d04aafd38)",
+        "att-sp/",
+        "att-sp/写真 2026年 春.png (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-emoji"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-emoji"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-multibyte#4": {
+      "output": {
+        "length": 352,
+        "text": "添付 att-longja を取り出した。Read で開ける。\npath=<copies>/att-longja/日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本.txt\nname=日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-emoji/",
+        "att-emoji/😀.txt (23 B, sha256=cd2d04aafd38)",
+        "att-ja/",
+        "att-ja/日本語のファイル名.txt (23 B, sha256=cd2d04aafd38)",
+        "att-longja/",
+        "att-longja/日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本.txt (23 B, sha256=cd2d04aafd38)",
+        "att-sp/",
+        "att-sp/写真 2026年 春.png (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-longja"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-longja"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-multibyte#5": {
+      "output": {
+        "length": 620,
+        "text": "添付 att-longascii を取り出した。Read で開ける。\npath=<copies>/att-longascii/longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lo\nname=longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lon type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-emoji/",
+        "att-emoji/😀.txt (23 B, sha256=cd2d04aafd38)",
+        "att-ja/",
+        "att-ja/日本語のファイル名.txt (23 B, sha256=cd2d04aafd38)",
+        "att-longascii/",
+        "att-longascii/longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname longname lo (23 B, sha256=cd2d04aafd38)",
+        "att-longja/",
+        "att-longja/日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語日本.txt (23 B, sha256=cd2d04aafd38)",
+        "att-sp/",
+        "att-sp/写真 2026年 春.png (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-longascii"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-longascii"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#1": {
+      "output": {
+        "length": 187,
+        "text": "添付 att-dots を取り出した。Read で開ける。\npath=<copies>/att-dots/.._.._etc_passwd\nname=.._.._etc_passwd type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-dots/", "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-dots"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-dots"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#2": {
+      "output": {
+        "length": 167,
+        "text": "添付 att-dotdot を取り出した。Read で開ける。\npath=<copies>/att-dotdot/file\nname=file type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-dotdot"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-dotdot"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#3": {
+      "output": {
+        "length": 161,
+        "text": "添付 att-dot を取り出した。Read で開ける。\npath=<copies>/att-dot/file\nname=file type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-dot"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-dot"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#4": {
+      "output": {
+        "length": 165,
+        "text": "添付 att-blank を取り出した。Read で開ける。\npath=<copies>/att-blank/file\nname=file type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-blank"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-blank"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#5": {
+      "output": {
+        "length": 175,
+        "text": "添付 att-pad を取り出した。Read で開ける。\npath=<copies>/att-pad/padded name\nname=padded name type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-pad"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-pad"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#6": {
+      "output": {
+        "length": 169,
+        "text": "添付 att-back を取り出した。Read で開ける。\npath=<copies>/att-back/a_b.txt\nname=a_b.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-back/",
+        "att-back/a_b.txt (23 B, sha256=cd2d04aafd38)",
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-back"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-back"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#7": {
+      "output": {
+        "length": 187,
+        "text": "添付 att-ctrl を取り出した。Read で開ける。\npath=<copies>/att-ctrl/tab_new_line.txt\nname=tab_new_line.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-back/",
+        "att-back/a_b.txt (23 B, sha256=cd2d04aafd38)",
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-ctrl/",
+        "att-ctrl/tab_new_line.txt (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ctrl"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-ctrl"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#8": {
+      "output": {
+        "length": 175,
+        "text": "添付 att-nul を取り出した。Read で開ける。\npath=<copies>/att-nul/nulbyte.txt\nname=nulbyte.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-back/",
+        "att-back/a_b.txt (23 B, sha256=cd2d04aafd38)",
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-ctrl/",
+        "att-ctrl/tab_new_line.txt (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-nul/",
+        "att-nul/nulbyte.txt (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-nul"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-nul"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#9": {
+      "output": {
+        "length": 173,
+        "text": "添付 att-hidden を取り出した。Read で開ける。\npath=<copies>/att-hidden/.hidden\nname=.hidden type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-back/",
+        "att-back/a_b.txt (23 B, sha256=cd2d04aafd38)",
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-ctrl/",
+        "att-ctrl/tab_new_line.txt (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-hidden/",
+        "att-hidden/.hidden (23 B, sha256=cd2d04aafd38)",
+        "att-nul/",
+        "att-nul/nulbyte.txt (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-hidden"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-hidden"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "fetch-names-special#10": {
+      "output": {
+        "length": 181,
+        "text": "添付 att-dash を取り出した。Read で開ける。\npath=<copies>/att-dash/-leading dash\nname=-leading dash type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-back/",
+        "att-back/a_b.txt (23 B, sha256=cd2d04aafd38)",
+        "att-blank/",
+        "att-blank/file (23 B, sha256=cd2d04aafd38)",
+        "att-ctrl/",
+        "att-ctrl/tab_new_line.txt (23 B, sha256=cd2d04aafd38)",
+        "att-dash/",
+        "att-dash/-leading dash (23 B, sha256=cd2d04aafd38)",
+        "att-dot/",
+        "att-dot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dotdot/",
+        "att-dotdot/file (23 B, sha256=cd2d04aafd38)",
+        "att-dots/",
+        "att-dots/.._.._etc_passwd (23 B, sha256=cd2d04aafd38)",
+        "att-hidden/",
+        "att-hidden/.hidden (23 B, sha256=cd2d04aafd38)",
+        "att-nul/",
+        "att-nul/nulbyte.txt (23 B, sha256=cd2d04aafd38)",
+        "att-pad/",
+        "att-pad/padded name (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-dash"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-dash"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "reuse#1": {
+      "output": {
+        "length": 167,
+        "text": "添付 att-r を取り出した。Read で開ける。\npath=<copies>/att-r/again.txt\nname=again.txt type=text/plain size=13 sha256=3e62b506e09033b3a3cc15fde1b7afd25ad299c8d835b56d0600fd4196f31f65",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-r/", "att-r/again.txt (13 B, sha256=3e62b506e090)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-r"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-r"
+          },
+          "outcome": "ok 13 bytes"
+        }
+      ]
+    },
+    "reuse#2": {
+      "output": {
+        "length": 182,
+        "text": "添付 att-r を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-r/again.txt\nname=again.txt type=text/plain size=13 sha256=3e62b506e09033b3a3cc15fde1b7afd25ad299c8d835b56d0600fd4196f31f65",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-r/", "att-r/again.txt (13 B, sha256=3e62b506e090)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-r"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "reuse#3": {
+      "output": {
+        "length": 182,
+        "text": "添付 att-r を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-r/again.txt\nname=again.txt type=text/plain size=13 sha256=3e62b506e09033b3a3cc15fde1b7afd25ad299c8d835b56d0600fd4196f31f65",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-r/", "att-r/again.txt (13 B, sha256=3e62b506e090)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-r"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "reuse-prepared#1": {
+      "output": {
+        "length": 186,
+        "text": "添付 att-same を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-same/same.txt\nname=same.txt type=text/plain size=12 sha256=a636bd7cd42060a4d07fa1bfbcc010eb7794c2ba721e1e3e4c20335a15b66eaf",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [
+        "att-diffsize/",
+        "att-diffsize/diffsize.txt (5 B, sha256=f9b0078b5df5)",
+        "att-emptycopy/",
+        "att-emptycopy/emptycopy.txt (0 B, sha256=e3b0c44298fc)",
+        "att-othername/",
+        "att-othername/old-name.txt (1 B, sha256=2d711642b726)",
+        "att-same/",
+        "att-same/same.txt (12 B, sha256=a636bd7cd420)",
+        "att-samesize/",
+        "att-samesize/samesize.txt (8 B, sha256=9ac2197d9258)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-same"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "reuse-prepared#2": {
+      "output": {
+        "length": 186,
+        "text": "添付 att-samesize を取り出した。Read で開ける。\npath=<copies>/att-samesize/samesize.txt\nname=samesize.txt type=text/plain size=8 sha256=9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-diffsize/",
+        "att-diffsize/diffsize.txt (5 B, sha256=f9b0078b5df5)",
+        "att-emptycopy/",
+        "att-emptycopy/emptycopy.txt (0 B, sha256=e3b0c44298fc)",
+        "att-othername/",
+        "att-othername/old-name.txt (1 B, sha256=2d711642b726)",
+        "att-same/",
+        "att-same/same.txt (12 B, sha256=a636bd7cd420)",
+        "att-samesize/",
+        "att-samesize/samesize.txt (8 B, sha256=9c56cc51b374)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-samesize"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-samesize"
+          },
+          "outcome": "ok 8 bytes"
+        }
+      ]
+    },
+    "reuse-prepared#3": {
+      "output": {
+        "length": 187,
+        "text": "添付 att-diffsize を取り出した。Read で開ける。\npath=<copies>/att-diffsize/diffsize.txt\nname=diffsize.txt type=text/plain size=14 sha256=70a0cd99ffd971003cc710fc3c7453b53b2c717bf90b6d79a30be364ebd34f0e",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-diffsize/",
+        "att-diffsize/diffsize.txt (14 B, sha256=70a0cd99ffd9)",
+        "att-emptycopy/",
+        "att-emptycopy/emptycopy.txt (0 B, sha256=e3b0c44298fc)",
+        "att-othername/",
+        "att-othername/old-name.txt (1 B, sha256=2d711642b726)",
+        "att-same/",
+        "att-same/same.txt (12 B, sha256=a636bd7cd420)",
+        "att-samesize/",
+        "att-samesize/samesize.txt (8 B, sha256=9c56cc51b374)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-diffsize"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-diffsize"
+          },
+          "outcome": "ok 14 bytes"
+        }
+      ]
+    },
+    "reuse-prepared#4": {
+      "output": {
+        "length": 188,
+        "text": "添付 att-othername を取り出した。Read で開ける。\npath=<copies>/att-othername/new-name.txt\nname=new-name.txt type=text/plain size=1 sha256=2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-diffsize/",
+        "att-diffsize/diffsize.txt (14 B, sha256=70a0cd99ffd9)",
+        "att-emptycopy/",
+        "att-emptycopy/emptycopy.txt (0 B, sha256=e3b0c44298fc)",
+        "att-othername/",
+        "att-othername/new-name.txt (1 B, sha256=2d711642b726)",
+        "att-othername/old-name.txt (1 B, sha256=2d711642b726)",
+        "att-same/",
+        "att-same/same.txt (12 B, sha256=a636bd7cd420)",
+        "att-samesize/",
+        "att-samesize/samesize.txt (8 B, sha256=9c56cc51b374)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-othername"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-othername"
+          },
+          "outcome": "ok 1 bytes"
+        }
+      ]
+    },
+    "reuse-prepared#5": {
+      "output": {
+        "length": 190,
+        "text": "添付 att-emptycopy を取り出した。Read で開ける。\npath=<copies>/att-emptycopy/emptycopy.txt\nname=emptycopy.txt type=text/plain size=3 sha256=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-diffsize/",
+        "att-diffsize/diffsize.txt (14 B, sha256=70a0cd99ffd9)",
+        "att-emptycopy/",
+        "att-emptycopy/emptycopy.txt (3 B, sha256=ba7816bf8f01)",
+        "att-othername/",
+        "att-othername/new-name.txt (1 B, sha256=2d711642b726)",
+        "att-othername/old-name.txt (1 B, sha256=2d711642b726)",
+        "att-same/",
+        "att-same/same.txt (12 B, sha256=a636bd7cd420)",
+        "att-samesize/",
+        "att-samesize/samesize.txt (8 B, sha256=9c56cc51b374)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-emptycopy"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-emptycopy"
+          },
+          "outcome": "ok 3 bytes"
+        }
+      ]
+    },
+    "not-found#1": {
+      "output": {
+        "length": 54,
+        "text": "添付 att-ghost は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-ghost"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#2": {
+      "output": {
+        "length": 56,
+        "text": "添付 att-expired は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-expired"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#3": {
+      "output": {
+        "length": 49,
+        "text": "添付 ../x は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "../x"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#4": {
+      "output": {
+        "length": 48,
+        "text": "添付 a b は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "a b"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#5": {
+      "output": {
+        "length": 245,
+        "text": "添付 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#6": {
+      "output": {
+        "length": 50,
+        "text": "添付 添付の誤り は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "添付の誤り"
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "not-found#7": {
+      "output": {
+        "length": 45,
+        "text": "添付  は見つからない（保持期限が過ぎて消えた、または id の誤り）。人間に再送を頼む。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": ""
+          },
+          "outcome": "undefined"
+        }
+      ]
+    },
+    "mismatch#1": {
+      "output": {
+        "length": 95,
+        "text": "添付 att-short は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-short/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-short"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-short"
+          },
+          "outcome": "ok 5 bytes"
+        }
+      ]
+    },
+    "mismatch#2": {
+      "output": {
+        "length": 94,
+        "text": "添付 att-long は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-long/", "att-short/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-long"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-long"
+          },
+          "outcome": "ok 10 bytes"
+        }
+      ]
+    },
+    "mismatch#3": {
+      "output": {
+        "length": 97,
+        "text": "添付 att-corrupt は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-corrupt/", "att-long/", "att-short/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-corrupt"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-corrupt"
+          },
+          "outcome": "ok 8 bytes"
+        }
+      ]
+    },
+    "mismatch#4": {
+      "output": {
+        "length": 96,
+        "text": "添付 att-badsha は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-badsha/", "att-corrupt/", "att-long/", "att-short/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-badsha"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-badsha"
+          },
+          "outcome": "ok 8 bytes"
+        }
+      ]
+    },
+    "mismatch-stale-copy#1": {
+      "output": {
+        "length": 95,
+        "text": "添付 att-stale は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-stale/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-stale"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-stale"
+          },
+          "outcome": "ok 5 bytes"
+        }
+      ]
+    },
+    "mismatch-stale-copy#2": {
+      "output": {
+        "length": 95,
+        "text": "添付 att-stale は取り出せなかった（置き場から読んだ中身が、控えの大きさか sha256 と合わない。途中で切れたか壊れている。写しは残していない。もう一度試すと直る場合がある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-stale/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-stale"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-stale"
+          },
+          "outcome": "ok 5 bytes"
+        }
+      ]
+    },
+    "unsafe-id#1": {
+      "output": {
+        "length": 49,
+        "text": "添付 att-u1 は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u1"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "unsafe-id#2": {
+      "output": {
+        "length": 49,
+        "text": "添付 att-u2 は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u2"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "unsafe-id#3": {
+      "output": {
+        "length": 49,
+        "text": "添付 att-u3 は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u3"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "unsafe-id#4": {
+      "output": {
+        "length": 49,
+        "text": "添付 att-u4 は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u4"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "unsafe-id#5": {
+      "output": {
+        "length": 49,
+        "text": "添付 att-u5 は取り出せない（置き場が返した id か名前が、置き場所の外へ出る形だった）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u5"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "unsafe-id#6": {
+      "output": {
+        "length": 285,
+        "text": "添付 att-u6 を取り出した。Read で開ける。\npath=<copies>/abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/u6.txt\nname=u6.txt type=text/plain size=23 sha256=cd2d04aafd38f4b24906154be6adada359570a9a477a7d7a9b203b6f557f8872",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/",
+        "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/u6.txt (23 B, sha256=cd2d04aafd38)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-u6"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-u6"
+          },
+          "outcome": "ok 23 bytes"
+        }
+      ]
+    },
+    "open-throws#1": {
+      "output": {
+        "length": 58,
+        "text": "添付 att-o を取り出せなかった: Error: 置き場に繋がらない（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "open-throws#2": {
+      "output": {
+        "length": 54,
+        "text": "添付 att-o を取り出せなかった: raw string failure（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "threw string"
+        }
+      ]
+    },
+    "open-throws#3": {
+      "output": {
+        "length": 46,
+        "text": "添付 att-o を取り出せなかった: Error: 一行目（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "open-throws#4": {
+      "output": {
+        "length": 66,
+        "text": "添付 att-o を取り出せなかった: Error: 接続できない TOKEN=[REDACTED]（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "open-throws#5": {
+      "output": {
+        "length": 60,
+        "text": "添付 att-o を取り出せなかった: Error: 接続できない [REDACTED]（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": null,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "open-throws#6": {
+      "output": {
+        "length": 158,
+        "text": "添付 att-o を取り出した。Read で開ける。\npath=<copies>/att-o/o.txt\nname=o.txt type=text/plain size=7 sha256=9964331e1a4c5fcbf19d8f3ae400ec4f9fad3b5dbbeb3288f0abbd10cb3805a6",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-o/", "att-o/o.txt (7 B, sha256=9964331e1a4c)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-o"
+          },
+          "outcome": "ok 7 bytes"
+        }
+      ]
+    },
+    "stream-throws#1": {
+      "output": {
+        "length": 62,
+        "text": "添付 att-s1 を取り出せなかった: Error: 置き場の読みが始まらない（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-s1/", "att-s4/", "att-s4/s4.txt (10 B, sha256=295be7a5269e)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-s1"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-s1"
+          },
+          "outcome": "threw Error after 0 bytes"
+        }
+      ]
+    },
+    "stream-throws#2": {
+      "output": {
+        "length": 63,
+        "text": "添付 att-s2 を取り出せなかった: Error: 置き場の読みが途中で切れた（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-s1/", "att-s2/", "att-s4/", "att-s4/s4.txt (10 B, sha256=295be7a5269e)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-s2"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-s2"
+          },
+          "outcome": "threw Error after 5 bytes"
+        }
+      ]
+    },
+    "stream-throws#3": {
+      "output": {
+        "length": 55,
+        "text": "添付 att-s3 を取り出せなかった: raw string failure（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": [
+        "att-s1/",
+        "att-s2/",
+        "att-s3/",
+        "att-s4/",
+        "att-s4/s4.txt (10 B, sha256=295be7a5269e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-s3"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-s3"
+          },
+          "outcome": "threw string after 5 bytes"
+        }
+      ]
+    },
+    "stream-throws#4": {
+      "output": {
+        "length": 63,
+        "text": "添付 att-s4 を取り出せなかった: Error: 置き場の読みが途中で切れた（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": [
+        "att-s1/",
+        "att-s2/",
+        "att-s3/",
+        "att-s4/",
+        "att-s4/s4.txt (10 B, sha256=295be7a5269e)"
+      ],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-s4"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-s4"
+          },
+          "outcome": "threw Error after 5 bytes"
+        }
+      ]
+    },
+    "retry-after-failure#1": {
+      "output": {
+        "length": 66,
+        "text": "添付 att-retry を取り出せなかった: Error: 置き場の読みが途中で切れた（test）（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-retry/"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-retry"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-retry"
+          },
+          "outcome": "threw Error after 5 bytes"
+        }
+      ]
+    },
+    "retry-after-failure#2": {
+      "output": {
+        "length": 175,
+        "text": "添付 att-retry を取り出した。Read で開ける。\npath=<copies>/att-retry/retry.txt\nname=retry.txt type=text/plain size=28 sha256=58e4073e7c3c2b0acf91c86a91a04090b3c9a15825d19027a8f4514a8784c45c",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "copy",
+      "copies": ["att-retry/", "att-retry/retry.txt (28 B, sha256=58e4073e7c3c)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-retry"
+          },
+          "outcome": "found"
+        },
+        {
+          "op": "inlineContent.read",
+          "args": {
+            "id": "att-retry"
+          },
+          "outcome": "ok 28 bytes"
+        }
+      ]
+    },
+    "retry-after-failure#3": {
+      "output": {
+        "length": 190,
+        "text": "添付 att-retry を取り出した（既にあった写しを使い回した）。Read で開ける。\npath=<copies>/att-retry/retry.txt\nname=retry.txt type=text/plain size=28 sha256=58e4073e7c3c2b0acf91c86a91a04090b3c9a15825d19027a8f4514a8784c45c",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-retry/", "att-retry/retry.txt (28 B, sha256=58e4073e7c3c)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-retry"
+          },
+          "outcome": "found"
+        }
+      ]
+    },
+    "copies-blocked": {
+      "output": {
+        "length": 118,
+        "text": "添付 att-blocked を取り出せなかった: Error: EEXIST: file already exists, mkdir '<copies>/att-blocked' code=EEXIST（もう一度試すと直る場合がある）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "copies": ["att-blocked (29 B, sha256=309cce2381bd)"],
+      "journal": [],
+      "dropped": [],
+      "streamDestroyed": true,
+      "calls": [
+        {
+          "op": "attachments.open",
+          "args": {
+            "id": "att-blocked"
+          },
+          "outcome": "found"
+        }
+      ]
+    }
+  }
+}
