@@ -175,7 +175,7 @@
     // 依存種別の名前 `pnpm-workspace.overrides` は Renovate の
     // `lib/modules/manager/npm/dep-types.ts`（2026-04-08 の renovatebot/renovate#42247）と
     // 公式文書の npm マネージャーの頁にある。`package.json` の `pnpm.overrides` とは
-    // 別の名前である（pnpm 11 はあちらを読まない）。minor / patch はこれまでどおり
+    // 別の名前である（pnpm 11 以降はあちらを読まない）。minor / patch はこれまでどおり
     // `non-major dependencies` の束に入る。
     {
       matchManagers: ['npm'],
