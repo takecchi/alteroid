@@ -17,7 +17,7 @@ export interface EditDraft {
   keep: () => void;
 }
 
-// `memory edit` と `practice edit` に共通の骨格:
+// `memory edit`・`practice edit`・`mcp edit`・`profile edit` に共通の骨格:
 // 一時ファイルに書く → エディタで開く → 読み直す → 変わっていなければ何もしない → 空なら断る → 送る。
 // どの段で落ちても、人間が書いた内容は残す（`openEditorKeepingEdits` と `keepDraftOnFailure`）。
 // サービスごとに違う所（雛形・変更なしの判定・空の案内・送り先・衝突の扱い）は呼び手が渡す。
@@ -30,11 +30,20 @@ export async function runEditSession(options: {
   initial: string;
   /** 下書きを残したときに案内する、打ち直しのコマンド（一時ファイルの場所から作る） */
   resume: (path: string) => string;
+  /**
+   * エディタを起動できない・途中で落ちたときの失敗の文に添える、エディタを使わずに同じことをする手順
+   * （`alteroid memory set <slug> --file <path>` など。「…で渡す」「エディタを使わないなら …」の後ろに入る）
+   */
   alternative: string;
+  /** 一時ファイルの権限。鍵が入りうる中身（MCP の登録・プロファイル）は `0o600` で絞る。省略は既定の権限 */
+  mode?: number;
   /** 読み直した中身が「変更なし」か。変更なしなら書かずに「変更はありません。」と言う */
   isUnchanged: (edited: string) => boolean;
-  /** 本文が空（空白だけを含む）のときの断りの文。`edit` に無い `--allow-empty` を案内しないため、呼び手が書く */
-  emptyMessage: (path: string, resume: string) => string;
+  /**
+   * 本文が空（空白だけを含む）のときの断りの文。`edit` に無い `--allow-empty` を案内しないため、呼び手が書く。
+   * 省略すると空かどうかを見ない（空は `save` 側の検査が断る。MCP の登録は JSON の形の検査が断る）
+   */
+  emptyMessage?: (path: string, resume: string) => string;
   save: (edited: string, draft: EditDraft) => Promise<void>;
 }): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), options.dirPrefix));
@@ -44,6 +53,7 @@ export async function runEditSession(options: {
     dir,
     path,
     initial: options.initial,
+    ...(options.mode === undefined ? {} : { mode: options.mode }),
     resume,
     alternative: options.alternative,
   });
@@ -56,7 +66,9 @@ export async function runEditSession(options: {
       return;
     }
     // 「変更なし」の判定より後に置く: 元から空のものを触らずに閉じたのは、変更なしのため
-    if (edited.trim().length === 0) throw new Error(options.emptyMessage(path, resume));
+    if (options.emptyMessage !== undefined && edited.trim().length === 0) {
+      throw new Error(options.emptyMessage(path, resume));
+    }
     await options.save(edited, { dir, path, keep });
   });
 }
