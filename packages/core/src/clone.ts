@@ -2681,7 +2681,8 @@ class Clone implements CloneHost {
     await this.#journalSelf(
       'outbound',
       `${EXCHANGE_KIND_THINNING_PREFIX}動ける仕事が無い発意 tick なので、ターンを起こさずに畳んだ（モデルへは1文字も渡していない）。` +
-        `待ち行列: queued=${gate.queued} needs_decision=${gate.needsDecision} waiting=${gate.waiting}、` +
+        `待ち行列: queued=${gate.queued} needs_decision=${gate.needsDecision} waiting=${gate.waiting}` +
+        `（queued のうち起点の会話が無い自分のメモ（門を開けない）: ${gate.unanchoredSelfMemos}件）、` +
         `直近に発意 tick のターンを回した時刻: ${gate.lastTickAt ?? 'なし'}`,
     );
   }

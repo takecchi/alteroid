@@ -75,6 +75,7 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
       queued: 0,
       needsDecision: 0,
       waiting: 2,
+      unanchoredSelfMemos: 0,
       lastTickAt,
     });
   });
