@@ -1,0 +1,2462 @@
+{
+  "lengths": {
+    "remove-specs#1": 15,
+    "remove-specs#2": 15,
+    "remove-specs#3": 14,
+    "remove-state-fields": 19,
+    "remove-request-forms#1": 15,
+    "remove-request-forms#2": 15,
+    "remove-request-forms#3": 15,
+    "remove-request-forms#4": 12,
+    "remove-request-forms#5": 14,
+    "remove-value-in-request": 19,
+    "timers-dropped": 19,
+    "timers-none#1": 19,
+    "timers-none#2": 7,
+    "timers-none#3": 7,
+    "no-drop-port": 19,
+    "timers-failures#1": 7,
+    "timers-failures#2": 7,
+    "timers-failures#3": 7,
+    "not-found#1": 17,
+    "not-found#2": 13,
+    "not-found#3": 19,
+    "kind-forms#1": 12,
+    "kind-forms#2": 77,
+    "kind-forms#3": 21,
+    "kind-forms#4": 17,
+    "kind-forms#5": 21,
+    "kind-forms#6": 15,
+    "kind-forms#7": 70,
+    "unreadable-row": 19,
+    "raced-delete": 25,
+    "raced-bump": 19,
+    "journal-first-fails#1": 231,
+    "journal-first-fails#2": 231,
+    "journal-first-fails#3": 19,
+    "journal-retraction-fails#1": 25,
+    "journal-retraction-fails#2": 7,
+    "store-failures#1": 16,
+    "store-failures#2": 16,
+    "store-failures#3": 19
+  },
+  "scenarios": {
+    "remove-specs#1": {
+      "output": {
+        "length": 15,
+        "text": "daily-one を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "cron-one",
+          "spec": {
+            "type": "cron",
+            "expression": "0 10 * * 1"
+          },
+          "request": "cron の依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "every-one",
+          "spec": {
+            "type": "every",
+            "minutes": 30
+          },
+          "request": "一定の間隔の依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "keep-one",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "残る依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: daily-one: 毎日の依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "daily-one"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: daily-one: 毎日の依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "daily-one",
+            "options": null
+          },
+          "outcome": "removed request=毎日の依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-specs#2": {
+      "output": {
+        "length": 15,
+        "text": "every-one を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "cron-one",
+          "spec": {
+            "type": "cron",
+            "expression": "0 10 * * 1"
+          },
+          "request": "cron の依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "keep-one",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "残る依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: every-one: 一定の間隔の依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "every-one"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: every-one: 一定の間隔の依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "every-one",
+            "options": null
+          },
+          "outcome": "removed request=一定の間隔の依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-specs#3": {
+      "output": {
+        "length": 14,
+        "text": "cron-one を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "keep-one",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "残る依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: cron-one: cron の依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "cron-one"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: cron-one: cron の依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "cron-one",
+            "options": null
+          },
+          "outcome": "removed request=cron の依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-state-fields": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 印つきの依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 印つきの依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=印つきの依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-request-forms#1": {
+      "output": {
+        "length": 15,
+        "text": "long-body を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "multibyte",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "日本語😀の依頼\n二行目 é",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "multiline",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "一行目\n\n三行目",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "one-char",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "あ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "spaced",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "  前後に空白  ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: long-body: long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "long-body"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: long-body: long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "long-body",
+            "options": null
+          },
+          "outcome": "removed request=long long long long "
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-request-forms#2": {
+      "output": {
+        "length": 15,
+        "text": "multibyte を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "multiline",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "一行目\n\n三行目",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "one-char",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "あ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "spaced",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "  前後に空白  ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: multibyte: 日本語😀の依頼\n二行目 é",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "multibyte"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: multibyte: 日本語😀の依頼\n二行目 é",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "multibyte",
+            "options": null
+          },
+          "outcome": "removed request=日本語😀の依頼\n二行目 é"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-request-forms#3": {
+      "output": {
+        "length": 15,
+        "text": "multiline を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "one-char",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "あ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "spaced",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "  前後に空白  ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: multiline: 一行目\n\n三行目",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "multiline"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: multiline: 一行目\n\n三行目",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "multiline",
+            "options": null
+          },
+          "outcome": "removed request=一行目\n\n三行目"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-request-forms#4": {
+      "output": {
+        "length": 12,
+        "text": "spaced を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "one-char",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "あ",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "定期の依頼を外す: spaced:   前後に空白  ",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "spaced"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: spaced:   前後に空白  ",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "spaced",
+            "options": null
+          },
+          "outcome": "removed request=  前後に空白  "
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-request-forms#5": {
+      "output": {
+        "length": 14,
+        "text": "one-char を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "定期の依頼を外す: one-char: あ",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "one-char"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: one-char: あ",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "one-char",
+            "options": null
+          },
+          "outcome": "removed request=あ"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "remove-value-in-request": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を使う",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を使う",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=export TOKEN=FAKE_NO"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "timers-dropped": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "other",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "別の依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-3",
+          "type": "timer",
+          "kind": "other"
+        },
+        {
+          "id": "d-1",
+          "type": "distill"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "4 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-1", "t-2"]
+          },
+          "outcome": "removed [\"t-1\",\"t-2\"]"
+        },
+        {
+          "op": "dropQueuedInboxEvents",
+          "args": {
+            "ids": ["t-1", "t-2"]
+          },
+          "outcome": "dropped 2"
+        }
+      ]
+    },
+    "timers-none#1": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "a",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "A",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "b",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "B",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-9",
+          "type": "timer",
+          "kind": "other"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        }
+      ]
+    },
+    "timers-none#2": {
+      "output": {
+        "length": 7,
+        "text": "a を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "b",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "B",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-9",
+          "type": "timer",
+          "kind": "other"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: a: A",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "a"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: a: A",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "a",
+            "options": null
+          },
+          "outcome": "removed request=A"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        }
+      ]
+    },
+    "timers-none#3": {
+      "output": {
+        "length": 7,
+        "text": "b を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-9",
+          "type": "timer",
+          "kind": "other"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: b: B",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "b"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: b: B",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "b",
+            "options": null
+          },
+          "outcome": "removed request=B"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        }
+      ]
+    },
+    "no-drop-port": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=依頼"
+        }
+      ]
+    },
+    "timers-failures#1": {
+      "output": {
+        "length": 7,
+        "text": "p を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "d",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼 d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "r",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼 r",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-p",
+          "type": "timer",
+          "kind": "p"
+        },
+        {
+          "id": "t-r",
+          "type": "timer",
+          "kind": "r"
+        },
+        {
+          "id": "t-d",
+          "type": "timer",
+          "kind": "d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: p: 依頼 p",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 取り消した定期の依頼の未読の起動の消し込みを記録できませんでした（kind=p）: Error: 受信箱が読めない（test）\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "p"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: p: 依頼 p",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "p",
+            "options": null
+          },
+          "outcome": "removed request=依頼 p"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "timers-failures#2": {
+      "output": {
+        "length": 7,
+        "text": "r を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "d",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼 d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-p",
+          "type": "timer",
+          "kind": "p"
+        },
+        {
+          "id": "t-r",
+          "type": "timer",
+          "kind": "r"
+        },
+        {
+          "id": "t-d",
+          "type": "timer",
+          "kind": "d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: r: 依頼 r",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 取り消した定期の依頼の未読の起動の消し込みを記録できませんでした（kind=r）: Error: 受信箱から消せない（test）\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "r"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: r: 依頼 r",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "r",
+            "options": null
+          },
+          "outcome": "removed request=依頼 r"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "3 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-r"]
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "timers-failures#3": {
+      "output": {
+        "length": 7,
+        "text": "d を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-p",
+          "type": "timer",
+          "kind": "p"
+        },
+        {
+          "id": "t-r",
+          "type": "timer",
+          "kind": "r"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: d: 依頼 d",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:03:00.000Z 取り消した定期の依頼の未読の起動の消し込みを記録できませんでした（kind=d）: Error: 配達を止められない（test）\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "d"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: d: 依頼 d",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "d",
+            "options": null
+          },
+          "outcome": "removed request=依頼 d"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "3 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-d"]
+          },
+          "outcome": "removed [\"t-d\"]"
+        },
+        {
+          "op": "dropQueuedInboxEvents",
+          "args": {
+            "ids": ["t-d"]
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "not-found#1": {
+      "output": {
+        "length": 17,
+        "text": "継続中の依頼 ghost は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "present",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "在る依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "ghost"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "ghost"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "not-found#2": {
+      "output": {
+        "length": 13,
+        "text": "present を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "ghost"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: present: 在る依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "present"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: present: 在る依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "present",
+            "options": null
+          },
+          "outcome": "removed request=在る依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        }
+      ]
+    },
+    "not-found#3": {
+      "output": {
+        "length": 19,
+        "text": "継続中の依頼 present は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "ghost"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "present"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#1": {
+      "output": {
+        "length": 12,
+        "text": "継続中の依頼  は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": ""
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#2": {
+      "output": {
+        "length": 77,
+        "text": "継続中の依頼 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#3": {
+      "output": {
+        "length": 21,
+        "text": "継続中の依頼 has space は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "has space"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#4": {
+      "output": {
+        "length": 17,
+        "text": "継続中の依頼 UPPER は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "UPPER"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#5": {
+      "output": {
+        "length": 21,
+        "text": "継続中の依頼 日本語の kind は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "日本語の kind"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#6": {
+      "output": {
+        "length": 15,
+        "text": "継続中の依頼 a\u0000b は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "64字の kind",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "a\u0000b"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "kind-forms#7": {
+      "output": {
+        "length": 70,
+        "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "定期の依頼を外す: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 64字の kind",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 64字の kind",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "options": null
+          },
+          "outcome": "removed request=64字の kind"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "unreadable-row": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "other",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "別の依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "読めない形で入っていた依頼を外す: weekly-review",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "threw UnreadableScheduleError"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていた依頼を外す: weekly-review",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "unreadable"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "removed [\"t-1\"]"
+        },
+        {
+          "op": "dropQueuedInboxEvents",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "dropped 1"
+        }
+      ]
+    },
+    "raced-delete": {
+      "output": {
+        "length": 25,
+        "text": "継続中の依頼 weekly-review は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 消される依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の定期の依頼を外す行は効いていない（外していない）。理由: 外す直前に依頼がほかで消えていた",
+          "grounds": "weekly-review の取り外し。日誌を先に書いたが、依頼を外す操作が実行されなかったため打ち消す"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 消される依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "直前の定期の依頼を外す行は効いていない（外していない）。理由: 外す直前に依頼がほかで消えていた",
+            "grounds": "weekly-review の取り外し。日誌を先に書いたが、依頼を外す操作が実行されなかったため打ち消す"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "raced-bump": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 書き換えられる依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼の取り外し（weekly-review）の間に依頼が書き換わっていた。先の行に書いたものではなく、実際に外したのは次のとおり: 依頼 別の手で書き換えた本文",
+          "grounds": "先の行の記録: 依頼 書き換えられる依頼"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 書き換えられる依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=別の手で書き換えた本文"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼の取り外し（weekly-review）の間に依頼が書き換わっていた。先の行に書いたものではなく、実際に外したのは次のとおり: 依頼 別の手で書き換えた本文",
+            "grounds": "先の行の記録: 依頼 書き換えられる依頼"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "journal-first-fails#1": {
+      "output": {
+        "length": 231,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nschedule_remove は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=27 grounds.chars=16\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "u",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "壊れた行",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "weekly-review",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=27 grounds.chars=16）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-first-fails#2": {
+      "output": {
+        "length": 231,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\nschedule_remove は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=19 grounds.chars=16\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "u",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "壊れた行",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        },
+        {
+          "kind": "weekly-review",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 日誌を記録できませんでした（decision decision.chars=19 grounds.chars=16）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "u"
+          },
+          "outcome": "threw UnreadableScheduleError"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "読めない形で入っていた依頼を外す: u",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-first-fails#3": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "u",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "壊れた行",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "removed [\"t-1\"]"
+        },
+        {
+          "op": "dropQueuedInboxEvents",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "dropped 1"
+        }
+      ]
+    },
+    "journal-retraction-fails#1": {
+      "output": {
+        "length": 25,
+        "text": "継続中の依頼 weekly-review は無い。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [
+        {
+          "kind": "b",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼 B",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼 A",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 定期の依頼を外す日誌の打ち消しを記録できませんでした（kind=weekly-review）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼 A",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "直前の定期の依頼を外す行は効いていない（外していない）。理由: 外す直前に依頼がほかで消えていた",
+            "grounds": "weekly-review の取り外し。日誌を先に書いたが、依頼を外す操作が実行されなかったため打ち消す"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-retraction-fails#2": {
+      "output": {
+        "length": 7,
+        "text": "b を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: b: 依頼 B",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 定期の依頼の取り外しで実際に外した行の補いの日誌を記録できませんでした（kind=b）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "b"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: b: 依頼 B",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "b",
+            "options": null
+          },
+          "outcome": "removed request=別の手で書き換えた本文"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼の取り外し（b）の間に依頼が書き換わっていた。先の行に書いたものではなく、実際に外したのは次のとおり: 依頼 別の手で書き換えた本文",
+            "grounds": "先の行の記録: 依頼 依頼 B"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "0 entries"
+        }
+      ]
+    },
+    "store-failures#1": {
+      "output": {
+        "length": 16,
+        "text": "定期の依頼が読めない（test）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "schedules": [
+        {
+          "kind": "weekly-review",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "store-failures#2": {
+      "output": {
+        "length": 16,
+        "text": "定期の依頼を外せない（test）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "journal",
+      "schedules": [
+        {
+          "kind": "weekly-review",
+          "spec": {
+            "type": "every",
+            "minutes": 60
+          },
+          "request": "依頼",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z"
+        }
+      ],
+      "inbox": [
+        {
+          "id": "t-1",
+          "type": "timer",
+          "kind": "weekly-review"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "threw Error"
+        }
+      ]
+    },
+    "store-failures#3": {
+      "output": {
+        "length": 19,
+        "text": "weekly-review を外した。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "state",
+      "schedules": [],
+      "inbox": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "定期の依頼を外す: weekly-review: 依頼",
+          "grounds": "この依頼はもう要らないという判断"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "schedules.get",
+          "args": {
+            "kind": "weekly-review"
+          },
+          "outcome": "row updatedAt=2026-10-01T00:00:00.000Z"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "定期の依頼を外す: weekly-review: 依頼",
+            "grounds": "この依頼はもう要らないという判断"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "schedules.removeIfPresent",
+          "args": {
+            "kind": "weekly-review",
+            "options": null
+          },
+          "outcome": "removed request=依頼"
+        },
+        {
+          "op": "inbox.peekPending",
+          "args": {},
+          "outcome": "1 entries"
+        },
+        {
+          "op": "inbox.removeMany",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "removed [\"t-1\"]"
+        },
+        {
+          "op": "dropQueuedInboxEvents",
+          "args": {
+            "ids": ["t-1"]
+          },
+          "outcome": "dropped 1"
+        }
+      ]
+    }
+  }
+}
