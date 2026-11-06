@@ -2075,19 +2075,19 @@
         "6 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}},{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}},{\"id\":\"g3\",\"rule\":\"Bash(git status)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g3\",\"answer\"…(836)",
         "8 > registry.list",
         "8 < registry.list 2 runners",
-        "10 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
-        "10 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
-        "11 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
-        "11 < runner-b.setPermissionRules {\"count\":2,\"changed\":true}",
-        "14 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
-        "15 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
-        "17 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
-        "18 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
-        "21 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
-        "22 < journal.append {\"type\":\"decision\",\"id\":\"id-3\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
-        "24 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
-        "25 < journal.append {\"type\":\"decision\",\"id\":\"id-4\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
-        "28 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":true,\"count\":2,\"changed\":true}]"
+        "9 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
+        "9 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\",\"Bash(python:*)\"]]",
+        "10 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "10 < runner-b.setPermissionRules {\"count\":2,\"changed\":true}",
+        "15 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "16 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "18 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
+        "19 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
+        "22 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "23 < journal.append {\"type\":\"decision\",\"id\":\"id-3\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を 2 件配った（許可 id: g1, g2）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "25 > journal.append [{\"type\":\"decision\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}]",
+        "26 < journal.append {\"type\":\"decision\",\"id\":\"id-4\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"<str 138 chars>\",\"grounds\":\"許可が足された（#5435）\"}",
+        "29 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":true,\"count\":2,\"changed\":true}]"
       ],
       "journal": [
         {
@@ -2137,11 +2137,11 @@
         "3 < permissionGrants.list [{\"id\":\"g2\",\"rule\":\"Bash(python:*)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g2\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
         "5 > registry.list",
         "5 < registry.list 1 runners",
-        "7 > runner-a.setPermissionRules [[\"Bash(python:*)\"]]",
-        "8 < runner-a.setPermissionRules {\"count\":1,\"changed\":false}",
-        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}]",
-        "12 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}",
-        "14 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":1,\"changed\":false}]"
+        "6 > runner-a.setPermissionRules [[\"Bash(python:*)\"]]",
+        "7 < runner-a.setPermissionRules {\"count\":1,\"changed\":false}",
+        "12 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}]",
+        "13 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 1 件配った（許可 id: g2）\",\"grounds\":\"名乗り直し（#4952。前方一致も載せる: #5435）\"}",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":1,\"changed\":false}]"
       ],
       "journal": [
         {
@@ -2175,15 +2175,15 @@
         "3 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
         "5 > registry.list",
         "5 < registry.list 2 runners",
-        "7 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
-        "7 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
-        "8 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
-        "8 < runner-b.setPermissionRules threw Error: runner b is down",
-        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
-        "12 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
-        "15 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}]",
-        "16 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}",
-        "18 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner b is down\"}]"
+        "6 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "6 > runner-b.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "7 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "7 < runner-b.setPermissionRules threw Error: runner b is down",
+        "12 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "13 < journal.append {\"type\":\"decision\",\"id\":\"id-1\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}",
+        "16 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}]",
+        "17 < journal.append {\"type\":\"decision\",\"id\":\"id-2\",\"at\":\"2026-11-08T00:00:00.000Z\",\"decision\":\"runner-b へ委譲先の許可規則を配れなかった（その runner のセッションには前の一覧が残っている）\",\"grounds\":\"許可が足された。理由: Error: runner b is down（#4952）\"}",
+        "19 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true},{\"runnerId\":\"runner-b\",\"ok\":false,\"error\":\"Error: runner b is down\"}]"
       ],
       "journal": [
         {
@@ -2281,11 +2281,11 @@
         "3 < permissionGrants.list [{\"id\":\"g1\",\"rule\":\"Bash(gh pr view 12)\",\"allows\":[\"x\"],\"denies\":[\"y\"],\"approvalId\":\"ap-g1\",\"answer\":\"許可します\",\"grantedAt\":\"2026-11-08T00:00:00.000Z\",\"route\":{\"principalKind\":\"account\",\"accountId\":\"acc-1\"}}]",
         "5 > registry.list",
         "5 < registry.list 1 runners",
-        "7 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
-        "8 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
-        "11 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
-        "11 < journal.append threw Error: 日誌が落ちた（test）",
-        "14 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true}]"
+        "6 > runner-a.setPermissionRules [[\"Bash(gh pr view 12)\"]]",
+        "7 < runner-a.setPermissionRules {\"count\":2,\"changed\":true}",
+        "12 > journal.append [{\"type\":\"decision\",\"decision\":\"runner-a へ委譲先の許可規則を 2 件配った（許可 id: g1）\",\"grounds\":\"許可が足された（#4952。前方一致も載せる: #5435）\"}]",
+        "12 < journal.append threw Error: 日誌が落ちた（test）",
+        "15 onPushed [{\"runnerId\":\"runner-a\",\"ok\":true,\"count\":2,\"changed\":true}]"
       ],
       "journal": [],
       "stderr": [

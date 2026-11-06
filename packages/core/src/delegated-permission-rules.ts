@@ -9,6 +9,7 @@ import {
   type RunnerPermissionRulesResult,
   type RunnerRegistry,
 } from './runner-protocol.js';
+import { pushToRunners } from './push-channel.js';
 import type { PermissionGrant } from './schema.js';
 import { createSerialQueue } from './serial-queue.js';
 import { sessionAllowRuleShapeOf } from './session-allow-rules.js';
@@ -244,35 +245,18 @@ export function createDelegatedPermissionRuleService(
           notifyFailure(listed ?? [], reasonOf(error), listed === null);
           return [];
         }
-        let rosterFailed = false;
-        const open = await runners.list().catch(() => {
-          rosterFailed = true;
-          return [];
-        });
-        if (rosterFailed) {
+        let results: PermissionRulesRunnerResult[];
+        try {
+          results = await pushToRunners<PermissionRulesRunnerResult>(runners, async (runner) => {
+            const placed = await runner.setPermissionRules(set.rules);
+            return { count: placed.count, changed: placed.changed };
+          });
+        } catch {
+          // 名簿（`runners.list()`）の失敗だけがここへ来る（runner ごとの失敗は結果の `ok:false` に入る）。
           // 配る先が分からない: 知っている runner（ManagerPool の帳面）へ失敗を記録させる。
           notifyFailure([], '登録済みの runner の名簿を引けなかった', true);
           return [];
         }
-        const results = await Promise.all(
-          open.map(async (runner): Promise<PermissionRulesRunnerResult> => {
-            try {
-              const placed = await runner.setPermissionRules(set.rules);
-              return {
-                runnerId: runner.runnerId,
-                ok: true,
-                count: placed.count,
-                changed: placed.changed,
-              };
-            } catch (error) {
-              return {
-                runnerId: runner.runnerId,
-                ok: false,
-                error: reasonOf(error),
-              };
-            }
-          }),
-        );
         for (const result of results) {
           if (result.ok) {
             await journal(
