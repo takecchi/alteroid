@@ -1,0 +1,3215 @@
+{
+  "lengths": {
+    "tokenid-refused#1": 23,
+    "tokenid-refused#2": 23,
+    "tokenid-refused#3": 23,
+    "tokenid-refused#4": 537,
+    "date-refused#1": 94,
+    "date-refused#2": 94,
+    "date-refused#3": 89,
+    "date-refused#4": 86,
+    "date-refused#5": 97,
+    "date-refused#6": 97,
+    "date-refused#7": 96,
+    "date-refused#8": 96,
+    "date-refused#9": 96,
+    "date-refused#10": 96,
+    "date-refused#11": 96,
+    "date-refused#12": 96,
+    "date-refused#13": 96,
+    "date-refused#14": 94,
+    "date-refused#15": 85,
+    "date-refused#16": 94,
+    "date-refused#17": 94,
+    "date-refused#18": 96,
+    "date-leap-accepted#1": 1337,
+    "date-leap-accepted#2": 608,
+    "date-leap-accepted#3": 608,
+    "date-leap-accepted#4": 346,
+    "date-leap-accepted#5": 608,
+    "date-leap-accepted#6": 1337,
+    "ledger-empty#1": 378,
+    "ledger-empty#2": 383,
+    "ledger-empty#3": 680,
+    "ledger-empty#4": 54,
+    "ledger-empty#5": 54,
+    "ledger-empty#6": 378,
+    "ledger-empty#7": 431,
+    "summary-basic": 1679,
+    "summary-tied-costs#1": 1028,
+    "summary-tied-costs#2": 573,
+    "axes#1": 573,
+    "axes#2": 567,
+    "axes#3": 510,
+    "axes#4": 531,
+    "axes#5": 567,
+    "axes#6": 569,
+    "zero-vs-unreadable#1": 608,
+    "zero-vs-unreadable#2": 1122,
+    "zero-vs-unreadable#3": 489,
+    "unmetered-and-unreadable-rows#1": 1075,
+    "unmetered-and-unreadable-rows#2": 618,
+    "unmetered-and-unreadable-rows#3": 623,
+    "unmetered-and-unreadable-rows#4": 1226,
+    "unmetered-and-unreadable-rows#5": 667,
+    "unmetered-only#1": 273,
+    "unmetered-only#2": 358,
+    "filters-single#1": 1073,
+    "filters-single#2": 1069,
+    "filters-single#3": 1069,
+    "filters-single#4": 496,
+    "filters-single#5": 973,
+    "filters-single#6": 502,
+    "filters-single#7": 1073,
+    "filters-single#8": 494,
+    "filters-single#9": 1308,
+    "filters-single#10": 1246,
+    "filters-single#11": 535,
+    "filters-combined#1": 979,
+    "filters-combined#2": 1123,
+    "filters-combined#3": 970,
+    "filters-combined#4": 502,
+    "filters-combined#5": 1246,
+    "filters-combined#6": 573,
+    "filters-no-match#1": 932,
+    "filters-no-match#2": 479,
+    "filters-no-match#3": 670,
+    "filters-no-match#4": 932,
+    "filters-no-match#5": 474,
+    "date-order-notice#1": 666,
+    "date-order-notice#2": 527,
+    "date-order-notice#3": 1123,
+    "date-order-notice#4": 1342,
+    "date-order-notice#5": 979,
+    "date-order-notice#6": 1101,
+    "date-order-notice-empty": 258,
+    "summary-cut-and-follow#1": 1693,
+    "summary-cut-and-follow#2": 686,
+    "axis-page-and-follow#1": 4361,
+    "axis-page-and-follow#2": 1586,
+    "axis-page-and-follow#3": 503,
+    "axis-cursor-chain#1": 1683,
+    "axis-cursor-chain#2": 4359,
+    "axis-cursor-chain#3": 1068,
+    "axis-cursor-chain#4": 503,
+    "axis-cursor-risen#1": 4361,
+    "axis-cursor-risen#2": 1728,
+    "axis-cursor-refused#1": 96,
+    "axis-cursor-refused#2": 96,
+    "axis-cursor-refused#3": 96,
+    "axis-cursor-refused#4": 99,
+    "axis-cursor-refused#5": 1342,
+    "axis-cursor-wrong-axis#1": 1693,
+    "axis-cursor-wrong-axis#2": 88,
+    "axis-cursor-wrong-axis#3": 1693,
+    "axis-cursor-wrong-axis#4": 686,
+    "account-states#1": 1342,
+    "account-states#2": 1679,
+    "account-states#3": 1520,
+    "account-states#4": 1508,
+    "account-states#5": 1599,
+    "account-states#6": 1374,
+    "account-states#7": 1451,
+    "account-states#8": 1439,
+    "account-states#9": 1342,
+    "account-with-axis#1": 573,
+    "account-with-axis#2": 496,
+    "unrecorded-managers#1": 1342,
+    "unrecorded-managers#2": 1483,
+    "unrecorded-managers#3": 1342,
+    "unrecorded-managers#4": 1337,
+    "unrecorded-managers#5": 1111,
+    "unrecorded-managers#6": 754,
+    "unrecorded-managers-axis#1": 567,
+    "unrecorded-managers-axis#2": 535,
+    "unrecorded-managers-empty-range": 492,
+    "ledger-axes-sources#1": 613,
+    "ledger-axes-sources#2": 1018,
+    "ledger-axes-sources#3": 421,
+    "ledger-axes-sources#4": 351,
+    "ledger-axes-sources#5": 351,
+    "ledger-axes-sources#6": 533,
+    "value-forms#1": 1216,
+    "value-forms#2": 620,
+    "aggregate-throws#1": 13,
+    "aggregate-throws#2": 13,
+    "aggregate-throws#3": 13,
+    "aggregate-throws#4": 89,
+    "aggregate-throws#5": 23,
+    "aggregate-throws#6": 1820,
+    "recorded-or-managers-throws#1": 10,
+    "recorded-or-managers-throws#2": 10,
+    "recorded-or-managers-throws#3": 10,
+    "recorded-or-managers-throws#4": 573
+  },
+  "scenarios": {
+    "tokenid-refused#1": {
+      "output": {
+        "length": 23,
+        "text": "tokenId は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "tokenid-refused#2": {
+      "output": {
+        "length": 23,
+        "text": "tokenId は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "tokenid-refused#3": {
+      "output": {
+        "length": 23,
+        "text": "tokenId は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "tokenid-refused#4": {
+      "output": {
+        "length": 537,
+        "text": "日別（全 2 件）\n  2026-10-22: $0.5000 / 1回 / 1回 $0.5000\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "tokenId": "tk-a"
+          },
+          "outcome": "ok rows=3 turnRows=2 unmetered=0"
+        }
+      ]
+    },
+    "date-refused#1": {
+      "output": {
+        "length": 94,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-2-3\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#2": {
+      "output": {
+        "length": 94,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"20261020\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#3": {
+      "output": {
+        "length": 89,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"abc\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#4": {
+      "output": {
+        "length": 86,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#5": {
+      "output": {
+        "length": 97,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \" 2026-10-20\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#6": {
+      "output": {
+        "length": 97,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-10-20 \"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#7": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-00-10\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#8": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-13-01\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#9": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-01-00\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#10": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-02-30\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#11": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-04-31\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#12": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2025-02-29\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#13": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2100-02-29\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#14": {
+      "output": {
+        "length": 94,
+        "text": "`to` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-02-30\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#15": {
+      "output": {
+        "length": 85,
+        "text": "`to` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"x\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#16": {
+      "output": {
+        "length": 94,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"bad-from\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#17": {
+      "output": {
+        "length": 94,
+        "text": "`to` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-02-30\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-refused#18": {
+      "output": {
+        "length": 96,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"2026-02-30\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "date-leap-accepted#1": {
+      "output": {
+        "length": 1337,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2024-02-29"
+          },
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "date-leap-accepted#2": {
+      "output": {
+        "length": 608,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "to": "2000-02-29"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-leap-accepted#3": {
+      "output": {
+        "length": 608,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-01-31",
+            "to": "2026-04-30"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-leap-accepted#4": {
+      "output": {
+        "length": 346,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-12-31",
+            "to": "2026-12-31"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-leap-accepted#5": {
+      "output": {
+        "length": 608,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-02-28",
+            "to": "2026-02-28"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-leap-accepted#6": {
+      "output": {
+        "length": 1337,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "0001-01-01",
+            "to": "9999-12-31"
+          },
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "ledger-empty#1": {
+      "output": {
+        "length": 378,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "ledger-empty#2": {
+      "output": {
+        "length": 383,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 0 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "ledger-empty#3": {
+      "output": {
+        "length": 680,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n⚠ 台帳に1行も記録が無い委譲: 6件。上の合計にはまだ入っていない。\n  mgr-903 [done]（起こした時刻: 2026-10-01T00:00:00.000Z）\n  mgr-001 [running]（起こした時刻: 2026-10-19T00:00:00.000Z）\n  mgr-002 [done]（起こした時刻: 2026-10-20T00:00:00.000Z）\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 0 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "ledger-empty#4": {
+      "output": {
+        "length": 54,
+        "text": "台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "ledger-empty#5": {
+      "output": {
+        "length": 54,
+        "text": "台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "ledger-empty#6": {
+      "output": {
+        "length": 378,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-01",
+            "to": "2026-10-31",
+            "managerId": "mgr-001"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "ledger-empty#7": {
+      "output": {
+        "length": 431,
+        "text": "to（2026-10-01）が from（2026-10-31）より前なので、この範囲には1日も入らない\n## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-31",
+            "to": "2026-10-01"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "summary-basic": {
+      "output": {
+        "length": 1679,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: max / 組織: org-fake\n認証の出所（apiKeySource。判定には使っていない観測）: none（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）\n鍵の届き具合（tokenSource）: 値が届いている（内容はここに出さない）\n枠:\n  five_hour: 42% 使用 / あと 1時間30分でリセット\n  seven_day: 7% 使用 / あと 3日5時間でリセット\n  seven_day_opus: 0% 使用\n  seven_day_sonnet: 使用率は取れなかった / あと 0分でリセット\n支出上限: 12.5 USD / 100 USD（12.5% 使用）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "summary-tied-costs#1": {
+      "output": {
+        "length": 1028,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $6.00 / 3回 / 1回 $2.00\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $6.00 / 3回 / 1回 $2.00\n\nマネージャー別:\n  mgr-001: $2.00 / 1回 / 1回 $2.00\n  mgr-002: $2.00 / 1回 / 1回 $2.00\n  mgr-003: $2.00 / 1回 / 1回 $2.00\n\nモデル別:\n  opus: $6.00\n\n層別（誰が）:\n  manager: $6.00 / 3回 / 1回 $2.00\n\n場所別（どこで）:\n  session: $6.00 / 3回 / 1回 $2.00\n\n認証トークン別:\n  （トークンの帰属が無い分）: $6.00 / 3回 / 1回 $2.00\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=3 turnRows=3 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "summary-tied-costs#2": {
+      "output": {
+        "length": 573,
+        "text": "マネージャー別（全 3 件）\n  mgr-001: $2.00 / 1回 / 1回 $2.00\n  mgr-002: $2.00 / 1回 / 1回 $2.00\n  mgr-003: $2.00 / 1回 / 1回 $2.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=3 turnRows=3 unmetered=0"
+        }
+      ]
+    },
+    "axes#1": {
+      "output": {
+        "length": 573,
+        "text": "日別（全 3 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axes#2": {
+      "output": {
+        "length": 567,
+        "text": "マネージャー別（全 3 件）\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axes#3": {
+      "output": {
+        "length": 510,
+        "text": "モデル別（全 3 件）\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axes#4": {
+      "output": {
+        "length": 531,
+        "text": "層別（誰が）（全 2 件）\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axes#5": {
+      "output": {
+        "length": 567,
+        "text": "場所別（どこで）（全 3 件）\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axes#6": {
+      "output": {
+        "length": 569,
+        "text": "認証トークン別（全 3 件）\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "zero-vs-unreadable#1": {
+      "output": {
+        "length": 608,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸はまだ1件も記録していない。\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 0 ids"
+        }
+      ]
+    },
+    "zero-vs-unreadable#2": {
+      "output": {
+        "length": 1122,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.5000 / 2回 / 1回 $0.2500\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0 / Web検索 2回（費用は合計に含む）\n⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: 入力 1回 / Web検索 1回 / 費用 2回）。\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $0.5000 / 2回 / 1回 $0.2500\n\nマネージャー別:\n  mgr-002: $0.5000 / 1回 / 1回 $0.5000\n  mgr-001: $0.0000 / 1回 / 1回 $0.0000\n\nモデル別:\n  sonnet: $0.5000\n\n層別（誰が）:\n  manager: $0.5000 / 2回 / 1回 $0.2500\n\n場所別（どこで）:\n  session: $0.5000 / 2回 / 1回 $0.2500\n\n認証トークン別:\n  （トークンの帰属が無い分）: $0.5000 / 2回 / 1回 $0.2500\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:01:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 2 ids"
+        }
+      ]
+    },
+    "zero-vs-unreadable#3": {
+      "output": {
+        "length": 489,
+        "text": "モデル別（全 1 件）\n  sonnet: $0.5000\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:01:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        }
+      ]
+    },
+    "unmetered-and-unreadable-rows#1": {
+      "output": {
+        "length": 1075,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $1.00 / 1回 / 1回 $1.00\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: aaa・manager層 1ターン / codex・clone層 1ターン / codex・manager層 2ターン）。\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $1.00 / 1回 / 1回 $1.00\n\nマネージャー別:\n  mgr-001: $1.00 / 1回 / 1回 $1.00\n\nモデル別:\n  opus: $1.00\n\n層別（誰が）:\n  manager: $1.00 / 1回 / 1回 $1.00\n\n場所別（どこで）:\n  session: $1.00 / 1回 / 1回 $1.00\n\n認証トークン別:\n  （トークンの帰属が無い分）: $1.00 / 1回 / 1回 $1.00\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=1 turnRows=1 unmetered=3"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "unmetered-and-unreadable-rows#2": {
+      "output": {
+        "length": 618,
+        "text": "日別（全 1 件）\n  2026-10-20: $1.00 / 1回 / 1回 $1.00\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: aaa・manager層 1ターン / codex・clone層 1ターン / codex・manager層 2ターン）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=1 turnRows=1 unmetered=3"
+        }
+      ]
+    },
+    "unmetered-and-unreadable-rows#3": {
+      "output": {
+        "length": 623,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-no-such"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "unmetered-and-unreadable-rows#4": {
+      "output": {
+        "length": 1226,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $1.00 / 1回 / 1回 $1.00\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n⚠ 読めない使用量の行が 7 行あり、合計に入っていない（読めない行の値は足していない。合計はその分少ない。内訳: 消費量の行 6 行 / 回数の行 1 行。日付: 2026-10-15, 2026-10-16, 2026-10-17, 2026-10-18, 2026-10-19 ほか 1 日）。\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: aaa・manager層 1ターン / codex・clone層 1ターン / codex・manager層 2ターン）。\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $1.00 / 1回 / 1回 $1.00\n\nマネージャー別:\n  mgr-001: $1.00 / 1回 / 1回 $1.00\n\nモデル別:\n  opus: $1.00\n\n層別（誰が）:\n  manager: $1.00 / 1回 / 1回 $1.00\n\n場所別（どこで）:\n  session: $1.00 / 1回 / 1回 $1.00\n\n認証トークン別:\n  （トークンの帰属が無い分）: $1.00 / 1回 / 1回 $1.00\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=1 turnRows=1 unmetered=3"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "unmetered-and-unreadable-rows#5": {
+      "output": {
+        "length": 667,
+        "text": "モデル別（全 1 件）\n  opus: $1.00\n⚠ 読めない使用量の行が 1 行あり、合計に入っていない（読めない行の値は足していない。合計はその分少ない。内訳: 回数の行 1 行）。\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: aaa・manager層 1ターン / codex・clone層 1ターン / codex・manager層 2ターン）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=1 turnRows=1 unmetered=3"
+        }
+      ]
+    },
+    "unmetered-only#1": {
+      "output": {
+        "length": 273,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: codex・manager層 1ターン）。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=1"
+        }
+      ]
+    },
+    "unmetered-only#2": {
+      "output": {
+        "length": 358,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n⚠ 読めない使用量の行が 1 行あり、合計に入っていない（読めない行の値は足していない。合計はその分少ない。内訳: 消費量の行 1 行。日付: 2026-10-20）。\n⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: codex・manager層 1ターン）。\n\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=0 turnRows=0 unmetered=1"
+        }
+      ]
+    },
+    "filters-single#1": {
+      "output": {
+        "length": 1073,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $2.25 / 3回 / 1回 $0.7500\n  入力 117 / 出力 227 / キャッシュ読み 50 / キャッシュ書き 10\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5000 / 1回 / 1回 $0.5000\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n\nモデル別:\n  opus: $1.50\n  haiku: $0.5000\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $2.25 / 3回 / 1回 $0.7500\n\n場所別（どこで）:\n  session: $1.75 / 2回 / 1回 $0.8750\n  distill: $0.5000 / 1回 / 1回 $0.5000\n\n認証トークン別:\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-001"
+          },
+          "outcome": "ok rows=3 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#2": {
+      "output": {
+        "length": 1069,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.0052 / 2回 / 1回 $0.0026\n  入力 6 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.0010 / 1回 / 1回 $0.0010\n  2026-10-21: $0.0042 / 1回 / 1回 $0.0042\n\nマネージャー別:\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $0.0042\n  sonnet: $0.0010\n\n層別（誰が）:\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  session: $0.0042 / 1回 / 1回 $0.0042\n  distill: $0.0010 / 1回 / 1回 $0.0010\n\n認証トークン別:\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "clone"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#3": {
+      "output": {
+        "length": 1069,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.0052 / 2回 / 1回 $0.0026\n  入力 6 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.0010 / 1回 / 1回 $0.0010\n  2026-10-21: $0.0042 / 1回 / 1回 $0.0042\n\nマネージャー別:\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $0.0042\n  sonnet: $0.0010\n\n層別（誰が）:\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  session: $0.0042 / 1回 / 1回 $0.0042\n  distill: $0.0010 / 1回 / 1回 $0.0010\n\n認証トークン別:\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "layer": "clone"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#4": {
+      "output": {
+        "length": 496,
+        "text": "層別（誰が）（全 1 件）\n  manager: $5.25 / 4回 / 1回 $1.31\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "layer": "manager"
+          },
+          "outcome": "ok rows=4 turnRows=3 unmetered=0"
+        }
+      ]
+    },
+    "filters-single#5": {
+      "output": {
+        "length": 973,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $3.00 / 1回 / 1回 $3.00\n  入力 1,000,000 / 出力 2,500 / キャッシュ読み 0 / キャッシュ書き 0 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $3.00 / 1回 / 1回 $3.00\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n\nモデル別:\n  opus: $3.00\n\n層別（誰が）:\n  manager: $3.00 / 1回 / 1回 $3.00\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "site": "peer"
+          },
+          "outcome": "ok rows=1 turnRows=1 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#6": {
+      "output": {
+        "length": 502,
+        "text": "場所別（どこで）（全 1 件）\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "site": "distill"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        }
+      ]
+    },
+    "filters-single#7": {
+      "output": {
+        "length": 1073,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $2.25 / 3回 / 1回 $0.7500\n  入力 117 / 出力 227 / キャッシュ読み 50 / キャッシュ書き 10\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5000 / 1回 / 1回 $0.5000\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n\nモデル別:\n  opus: $1.50\n  haiku: $0.5000\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $2.25 / 3回 / 1回 $0.7500\n\n場所別（どこで）:\n  session: $1.75 / 2回 / 1回 $0.8750\n  distill: $0.5000 / 1回 / 1回 $0.5000\n\n認証トークン別:\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "tokenId": "tk-a"
+          },
+          "outcome": "ok rows=3 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#8": {
+      "output": {
+        "length": 494,
+        "text": "認証トークン別（全 1 件）\n  tk-b: $3.00 / 1回 / 1回 $3.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "tokenId": "tk-b"
+          },
+          "outcome": "ok rows=1 turnRows=1 unmetered=0"
+        }
+      ]
+    },
+    "filters-single#9": {
+      "output": {
+        "length": 1308,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $3.51 / 4回 / 1回 $0.8763\n  入力 1,000,013 / 出力 2,507 / キャッシュ読み 0 / キャッシュ書き 0 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $0.5000 / 1回 / 1回 $0.5000\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $3.00\n  haiku: $0.5000\n  sonnet: $0.0010\n\n層別（誰が）:\n  manager: $3.50 / 2回 / 1回 $1.75\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  distill: $0.5010 / 2回 / 1回 $0.2505\n  session: $0.0042 / 1回 / 1回 $0.0042\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $0.5000 / 1回 / 1回 $0.5000\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-21"
+          },
+          "outcome": "ok rows=4 turnRows=4 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#10": {
+      "output": {
+        "length": 1246,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $4.75 / 4回 / 1回 $1.19\n  入力 1,000,115 / 出力 2,720 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $1.75 / 2回 / 1回 $0.8750\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別:\n  opus: $4.50\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $4.75 / 3回 / 1回 $1.58\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $1.75 / 2回 / 1回 $0.8750\n  （トークンの帰属が無い分）: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "to": "2026-10-21"
+          },
+          "outcome": "ok rows=4 turnRows=3 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-single#11": {
+      "output": {
+        "length": 535,
+        "text": "日別（全 2 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-21"
+          },
+          "outcome": "ok rows=4 turnRows=4 unmetered=0"
+        }
+      ]
+    },
+    "filters-combined#1": {
+      "output": {
+        "length": 979,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $1.75 / 2回 / 1回 $0.8750\n  入力 110 / 出力 220 / キャッシュ読み 50 / キャッシュ書き 10\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-001: $1.75 / 2回 / 1回 $0.8750\n\nモデル別:\n  opus: $1.50\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $1.75 / 2回 / 1回 $0.8750\n\n場所別（どこで）:\n  session: $1.75 / 2回 / 1回 $0.8750\n\n認証トークン別:\n  tk-a: $1.75 / 2回 / 1回 $0.8750\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-20",
+            "to": "2026-10-20",
+            "managerId": "mgr-001",
+            "layer": "manager",
+            "site": "session",
+            "tokenId": "tk-a"
+          },
+          "outcome": "ok rows=2 turnRows=1 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-combined#2": {
+      "output": {
+        "length": 1123,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $3.00 / 2回 / 1回 $1.50\n  入力 1,000,005 / 出力 2,500 / キャッシュ読み 0 / キャッシュ書き 0 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別:\n  opus: $3.00\n\n層別（誰が）:\n  manager: $3.00 / 1回 / 1回 $3.00\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $0.0042 / 1回 / 1回 $0.0042\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  （トークンの帰属が無い分）: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-21",
+            "to": "2026-10-21"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-combined#3": {
+      "output": {
+        "length": 970,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.5000 / 1回 / 1回 $0.5000\n  入力 7 / 出力 7 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5000 / 1回 / 1回 $0.5000\n\nマネージャー別:\n  mgr-001: $0.5000 / 1回 / 1回 $0.5000\n\nモデル別:\n  haiku: $0.5000\n\n層別（誰が）:\n  manager: $0.5000 / 1回 / 1回 $0.5000\n\n場所別（どこで）:\n  distill: $0.5000 / 1回 / 1回 $0.5000\n\n認証トークン別:\n  tk-a: $0.5000 / 1回 / 1回 $0.5000\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-001",
+            "site": "distill"
+          },
+          "outcome": "ok rows=1 turnRows=1 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-combined#4": {
+      "output": {
+        "length": 502,
+        "text": "場所別（どこで）（全 1 件）\n  distill: $0.0010 / 1回 / 1回 $0.0010\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22",
+            "layer": "clone"
+          },
+          "outcome": "ok rows=1 turnRows=1 unmetered=0"
+        }
+      ]
+    },
+    "filters-combined#5": {
+      "output": {
+        "length": 1246,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $4.75 / 4回 / 1回 $1.19\n  入力 1,000,115 / 出力 2,720 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $1.75 / 2回 / 1回 $0.8750\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別:\n  opus: $4.50\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $4.75 / 3回 / 1回 $1.58\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $1.75 / 2回 / 1回 $0.8750\n  （トークンの帰属が無い分）: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-09-01",
+            "to": "2026-10-21"
+          },
+          "outcome": "ok rows=4 turnRows=3 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "filters-combined#6": {
+      "output": {
+        "length": 573,
+        "text": "日別（全 3 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-09-01"
+          },
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "filters-no-match#1": {
+      "output": {
+        "length": 932,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-no-such"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "filters-no-match#2": {
+      "output": {
+        "length": 479,
+        "text": "マネージャー別（全 0 件）\n  （その軸には記録が無い）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-no-such"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "filters-no-match#3": {
+      "output": {
+        "length": 670,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2027-01-01"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "filters-no-match#4": {
+      "output": {
+        "length": 932,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "layer": "clone",
+            "site": "peer"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "filters-no-match#5": {
+      "output": {
+        "length": 474,
+        "text": "日別（全 0 件）\n  （その軸には記録が無い）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "to": "2026-10-01"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-order-notice#1": {
+      "output": {
+        "length": 666,
+        "text": "to（2026-10-20）が from（2026-10-22）より前なので、この範囲には1日も入らない\n## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22",
+            "to": "2026-10-20"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "date-order-notice#2": {
+      "output": {
+        "length": 527,
+        "text": "to（2026-10-20）が from（2026-10-22）より前なので、この範囲には1日も入らない\n日別（全 0 件）\n  （その軸には記録が無い）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22",
+            "to": "2026-10-20"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        }
+      ]
+    },
+    "date-order-notice#3": {
+      "output": {
+        "length": 1123,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $3.00 / 2回 / 1回 $1.50\n  入力 1,000,005 / 出力 2,500 / キャッシュ読み 0 / キャッシュ書き 0 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別:\n  opus: $3.00\n\n層別（誰が）:\n  manager: $3.00 / 1回 / 1回 $3.00\n  clone: $0.0042 / 1回 / 1回 $0.0042\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $0.0042 / 1回 / 1回 $0.0042\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  （トークンの帰属が無い分）: $0.0042 / 1回 / 1回 $0.0042\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-21",
+            "to": "2026-10-21"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "date-order-notice#4": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-20",
+            "to": "2026-10-22"
+          },
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "date-order-notice#5": {
+      "output": {
+        "length": 979,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $1.75 / 2回 / 1回 $0.8750\n  入力 110 / 出力 220 / キャッシュ読み 50 / キャッシュ書き 10\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-001: $1.75 / 2回 / 1回 $0.8750\n\nモデル別:\n  opus: $1.50\n  sonnet: $0.2500\n\n層別（誰が）:\n  manager: $1.75 / 2回 / 1回 $0.8750\n\n場所別（どこで）:\n  session: $1.75 / 2回 / 1回 $0.8750\n\n認証トークン別:\n  tk-a: $1.75 / 2回 / 1回 $0.8750\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "to": "2026-10-20"
+          },
+          "outcome": "ok rows=2 turnRows=1 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "date-order-notice#6": {
+      "output": {
+        "length": 1101,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.5010 / 2回 / 1回 $0.2505\n  入力 8 / 出力 7 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n\nマネージャー別:\n  mgr-001: $0.5000 / 1回 / 1回 $0.5000\n  clone: $0.0010 / 1回 / 1回 $0.0010\n\nモデル別:\n  haiku: $0.5000\n  sonnet: $0.0010\n\n層別（誰が）:\n  manager: $0.5000 / 1回 / 1回 $0.5000\n  clone: $0.0010 / 1回 / 1回 $0.0010\n\n場所別（どこで）:\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-a: $0.5000 / 1回 / 1回 $0.5000\n  （トークンの帰属が無い分）: $0.0010 / 1回 / 1回 $0.0010\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "date-order-notice-empty": {
+      "output": {
+        "length": 258,
+        "text": "to（2026-10-20）が from（2026-10-22）より前なので、この範囲には1日も入らない\n## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n台帳にはまだ1件も記録が無い。\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22",
+            "to": "2026-10-20"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 0 ids"
+        }
+      ]
+    },
+    "summary-cut-and-follow#1": {
+      "output": {
+        "length": 1693,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $210.00 / 20回 / 1回 $10.50\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $20.00 / 1回 / 1回 $20.00\n  2026-10-19: $19.00 / 1回 / 1回 $19.00\n  2026-10-18: $18.00 / 1回 / 1回 $18.00\n  2026-10-17: $17.00 / 1回 / 1回 $17.00\n  2026-10-16: $16.00 / 1回 / 1回 $16.00\n  2026-10-15: $15.00 / 1回 / 1回 $15.00\n  2026-10-14: $14.00 / 1回 / 1回 $14.00\n  2026-10-13: $13.00 / 1回 / 1回 $13.00\n  2026-10-12: $12.00 / 1回 / 1回 $12.00\n  2026-10-11: $11.00 / 1回 / 1回 $11.00\n  2026-10-10: $10.00 / 1回 / 1回 $10.00\n  2026-10-09: $9.00 / 1回 / 1回 $9.00\n  2026-10-08: $8.00 / 1回 / 1回 $8.00\n  2026-10-07: $7.00 / 1回 / 1回 $7.00\n  …（残り 6 件は出していない。axis=\"date\", cursor=\"eyJheGlzIjoiZGF0ZSIsImxhYmVsIjoiMjAyNi0xMC0wNyIsImNvc3QiOjcsImFzT2YiOiIyMDI2LTEwLTIzVDEyOjE5OjAwLjAwMFoiLCJ0aWVkQXRBc09mIjpbeyJsYWJlbCI6IjIwMjYtMTAtMjAiLCJjb3N0IjoyMH1dfQ\" で続きが出る）\n\nマネージャー別:\n  mgr-001: $210.00 / 20回 / 1回 $10.50\n\nモデル別:\n  opus: $210.00\n\n層別（誰が）:\n  manager: $210.00 / 20回 / 1回 $10.50\n\n場所別（どこで）:\n  session: $210.00 / 20回 / 1回 $10.50\n\n認証トークン別:\n  （トークンの帰属が無い分）: $210.00 / 20回 / 1回 $10.50\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "summary-cut-and-follow#2": {
+      "output": {
+        "length": 686,
+        "text": "日別（全 20 件）\n  2026-10-06: $6.00 / 1回 / 1回 $6.00\n  2026-10-05: $5.00 / 1回 / 1回 $5.00\n  2026-10-04: $4.00 / 1回 / 1回 $4.00\n  2026-10-03: $3.00 / 1回 / 1回 $3.00\n  2026-10-02: $2.00 / 1回 / 1回 $2.00\n  2026-10-01: $1.00 / 1回 / 1回 $1.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        }
+      ]
+    },
+    "axis-page-and-follow#1": {
+      "output": {
+        "length": 4361,
+        "text": "マネージャー別（全 130 件）\n  mgr-001: $1000.00 / 1回 / 1回 $1000.00\n  mgr-002: $999.00 / 1回 / 1回 $999.00\n  mgr-003: $998.00 / 1回 / 1回 $998.00\n  mgr-004: $997.00 / 1回 / 1回 $997.00\n  mgr-005: $996.00 / 1回 / 1回 $996.00\n  mgr-006: $995.00 / 1回 / 1回 $995.00\n  mgr-007: $994.00 / 1回 / 1回 $994.00\n  mgr-008: $993.00 / 1回 / 1回 $993.00\n  mgr-009: $992.00 / 1回 / 1回 $992.00\n  mgr-010: $991.00 / 1回 / 1回 $991.00\n  mgr-011: $990.00 / 1回 / 1回 $990.00\n  mgr-012: $989.00 / 1回 / 1回 $989.00\n  mgr-013: $988.00 / 1回 / 1回 $988.00\n  mgr-014: $987.00 / 1回 / 1回 $987.00\n  mgr-015: $986.00 / 1回 / 1回 $986.00\n  mgr-016: $985.00 / 1回 / 1回 $985.00\n  mgr-017: $984.00 / 1回 / 1回 $984.00\n  mgr-018: $983.00 / 1回 / 1回 $983.00\n  mgr-019: $982.00 / 1回 / 1回 $982.00\n  mgr-020: $981.00 / 1回 / 1回 $981.00\n  mgr-021: $980.00 / 1回 / 1回 $980.00\n  mgr-022: $979.00 / 1回 / 1回 $979.00\n  mgr-023: $978.00 / 1回 / 1回 $978.00\n  mgr-024: $977.00 / 1回 / 1回 $977.00\n  mgr-025: $976.00 / 1回 / 1回 $976.00\n  mgr-026: $975.00 / 1回 / 1回 $975.00\n  mgr-027: $974.00 / 1回 / 1回 $974.00\n  mgr-028: $973.00 / 1回 / 1回 $973.00\n  mgr-029: $972.00 / 1回 / 1回 $972.00\n  mgr-030: $971.00 / 1回 / 1回 $971.00\n  mgr-031: $970.00 / 1回 / 1回 $970.00\n  mgr-032: $969.00 / 1回 / 1回 $969.00\n  mgr-033: $968.00 / 1回 / 1回 $968.00\n  mgr-034: $967.00 / 1回 / 1回 $967.00\n  mgr-035: $966.00 / 1回 / 1回 $966.00\n  mgr-036: $965.00 / 1回 / 1回 $965.00\n  mgr-037: $964.00 / 1回 / 1回 $964.00\n  mgr-038: $963.00 / 1回 / 1回 $963.00\n  mgr-039: $962.00 / 1回 / 1回 $962.00\n  mgr-040: $961.00 / 1回 / 1回 $961.00\n  mgr-041: $960.00 / 1回 / 1回 $960.00\n  mgr-042: $959.00 / 1回 / 1回 $959.00\n  mgr-043: $958.00 / 1回 / 1回 $958.00\n  mgr-044: $957.00 / 1回 / 1回 $957.00\n  mgr-045: $956.00 / 1回 / 1回 $956.00\n  mgr-046: $955.00 / 1回 / 1回 $955.00\n  mgr-047: $954.00 / 1回 / 1回 $954.00\n  mgr-048: $953.00 / 1回 / 1回 $953.00\n  mgr-049: $952.00 / 1回 / 1回 $952.00\n  mgr-050: $951.00 / 1回 / 1回 $951.00\n  mgr-051: $950.00 / 1回 / 1回 $950.00\n  mgr-052: $949.00 / 1回 / 1回 $949.00\n  mgr-053: $948.00 / 1回 / 1回 $948.00\n  mgr-054: $947.00 / 1回 / 1回 $947.00\n  mgr-055: $946.00 / 1回 / 1回 $946.00\n  mgr-056: $945.00 / 1回 / 1回 $945.00\n  mgr-057: $944.00 / 1回 / 1回 $944.00\n  mgr-058: $943.00 / 1回 / 1回 $943.00\n  mgr-059: $942.00 / 1回 / 1回 $942.00\n  mgr-060: $941.00 / 1回 / 1回 $941.00\n  mgr-061: $940.00 / 1回 / 1回 $940.00\n  mgr-062: $939.00 / 1回 / 1回 $939.00\n  mgr-063: $938.00 / 1回 / 1回 $938.00\n  mgr-064: $937.00 / 1回 / 1回 $937.00\n  mgr-065: $936.00 / 1回 / 1回 $936.00\n  mgr-066: $935.00 / 1回 / 1回 $935.00\n  mgr-067: $934.00 / 1回 / 1回 $934.00\n  mgr-068: $933.00 / 1回 / 1回 $933.00\n  mgr-069: $932.00 / 1回 / 1回 $932.00\n  mgr-070: $931.00 / 1回 / 1回 $931.00\n  mgr-071: $930.00 / 1回 / 1回 $930.00\n  mgr-072: $929.00 / 1回 / 1回 $929.00\n  mgr-073: $928.00 / 1回 / 1回 $928.00\n  mgr-074: $927.00 / 1回 / 1回 $927.00\n  mgr-075: $926.00 / 1回 / 1回 $926.00\n  mgr-076: $925.00 / 1回 / 1回 $925.00\n  mgr-077: $924.00 / 1回 / 1回 $924.00\n  mgr-078: $923.00 / 1回 / 1回 $923.00\n  mgr-079: $922.00 / 1回 / 1回 $922.00\n  mgr-080: $921.00 / 1回 / 1回 $921.00\n  mgr-081: $920.00 / 1回 / 1回 $920.00\n  mgr-082: $919.00 / 1回 / 1回 $919.00\n  mgr-083: $918.00 / 1回 / 1回 $918.00\n  mgr-084: $917.00 / 1回 / 1回 $917.00\n  mgr-085: $916.00 / 1回 / 1回 $916.00\n  mgr-086: $915.00 / 1回 / 1回 $915.00\n  mgr-087: $914.00 / 1回 / 1回 $914.00\n  mgr-088: $913.00 / 1回 / 1回 $913.00\n  mgr-089: $912.00 / 1回 / 1回 $912.00\n  mgr-090: $911.00 / 1回 / 1回 $911.00\n  mgr-091: $910.00 / 1回 / 1回 $910.00\n  mgr-092: $909.00 / 1回 / 1回 $909.00\n  mgr-093: $908.00 / 1回 / 1回 $908.00\n  mgr-094: $907.00 / 1回 / 1回 $907.00\n  mgr-095: $906.00 / 1回 / 1回 $906.00\n  mgr-096: $905.00 / 1回 / 1回 $905.00\n  mgr-097: $904.00 / 1回 / 1回 $904.00\n  mgr-098: $903.00 / 1回 / 1回 $903.00\n  mgr-099: $902.00 / 1回 / 1回 $902.00\n  mgr-100: $901.00 / 1回 / 1回 $901.00\n  …（残り 30 件は出していない。axis=\"manager\", cursor=\"eyJheGlzIjoibWFuYWdlciIsImxhYmVsIjoibWdyLTEwMCIsImNvc3QiOjkwMSwiYXNPZiI6IjIwMjYtMTAtMjNUMTQ6MDk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOltdfQ\" で続きが出る）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-page-and-follow#2": {
+      "output": {
+        "length": 1586,
+        "text": "マネージャー別（全 130 件）\n  mgr-101: $900.00 / 1回 / 1回 $900.00\n  mgr-102: $899.00 / 1回 / 1回 $899.00\n  mgr-103: $898.00 / 1回 / 1回 $898.00\n  mgr-104: $897.00 / 1回 / 1回 $897.00\n  mgr-105: $896.00 / 1回 / 1回 $896.00\n  mgr-106: $895.00 / 1回 / 1回 $895.00\n  mgr-107: $894.00 / 1回 / 1回 $894.00\n  mgr-108: $893.00 / 1回 / 1回 $893.00\n  mgr-109: $892.00 / 1回 / 1回 $892.00\n  mgr-110: $891.00 / 1回 / 1回 $891.00\n  mgr-111: $890.00 / 1回 / 1回 $890.00\n  mgr-112: $889.00 / 1回 / 1回 $889.00\n  mgr-113: $888.00 / 1回 / 1回 $888.00\n  mgr-114: $887.00 / 1回 / 1回 $887.00\n  mgr-115: $886.00 / 1回 / 1回 $886.00\n  mgr-116: $885.00 / 1回 / 1回 $885.00\n  mgr-117: $884.00 / 1回 / 1回 $884.00\n  mgr-118: $883.00 / 1回 / 1回 $883.00\n  mgr-119: $882.00 / 1回 / 1回 $882.00\n  mgr-120: $881.00 / 1回 / 1回 $881.00\n  mgr-121: $880.00 / 1回 / 1回 $880.00\n  mgr-122: $879.00 / 1回 / 1回 $879.00\n  mgr-123: $878.00 / 1回 / 1回 $878.00\n  mgr-124: $877.00 / 1回 / 1回 $877.00\n  mgr-125: $876.00 / 1回 / 1回 $876.00\n  mgr-126: $875.00 / 1回 / 1回 $875.00\n  mgr-127: $874.00 / 1回 / 1回 $874.00\n  mgr-128: $873.00 / 1回 / 1回 $873.00\n  mgr-129: $872.00 / 1回 / 1回 $872.00\n  mgr-130: $871.00 / 1回 / 1回 $871.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-page-and-follow#3": {
+      "output": {
+        "length": 503,
+        "text": "マネージャー別（全 130 件）\n  （cursor より後ろは無い。これが最後の頁）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-chain#1": {
+      "output": {
+        "length": 1683,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $121615.00 / 130回 / 1回 $935.50\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $121615.00 / 130回 / 1回 $935.50\n\nマネージャー別:\n  mgr-001: $1000.00 / 1回 / 1回 $1000.00\n  mgr-002: $999.00 / 1回 / 1回 $999.00\n  mgr-003: $998.00 / 1回 / 1回 $998.00\n  mgr-004: $997.00 / 1回 / 1回 $997.00\n  mgr-005: $996.00 / 1回 / 1回 $996.00\n  mgr-006: $995.00 / 1回 / 1回 $995.00\n  mgr-007: $994.00 / 1回 / 1回 $994.00\n  mgr-008: $993.00 / 1回 / 1回 $993.00\n  mgr-009: $992.00 / 1回 / 1回 $992.00\n  mgr-010: $991.00 / 1回 / 1回 $991.00\n  mgr-011: $990.00 / 1回 / 1回 $990.00\n  mgr-012: $989.00 / 1回 / 1回 $989.00\n  mgr-013: $988.00 / 1回 / 1回 $988.00\n  mgr-014: $987.00 / 1回 / 1回 $987.00\n  …（残り 116 件は出していない。axis=\"manager\", cursor=\"eyJheGlzIjoibWFuYWdlciIsImxhYmVsIjoibWdyLTAxNCIsImNvc3QiOjk4NywiYXNPZiI6IjIwMjYtMTAtMjNUMTQ6MDk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOltdfQ\" で続きが出る）\n\nモデル別:\n  opus: $121615.00\n\n層別（誰が）:\n  manager: $121615.00 / 130回 / 1回 $935.50\n\n場所別（どこで）:\n  session: $121615.00 / 130回 / 1回 $935.50\n\n認証トークン別:\n  （トークンの帰属が無い分）: $121615.00 / 130回 / 1回 $935.50\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 130 ids"
+        }
+      ]
+    },
+    "axis-cursor-chain#2": {
+      "output": {
+        "length": 4359,
+        "text": "マネージャー別（全 130 件）\n  mgr-015: $986.00 / 1回 / 1回 $986.00\n  mgr-016: $985.00 / 1回 / 1回 $985.00\n  mgr-017: $984.00 / 1回 / 1回 $984.00\n  mgr-018: $983.00 / 1回 / 1回 $983.00\n  mgr-019: $982.00 / 1回 / 1回 $982.00\n  mgr-020: $981.00 / 1回 / 1回 $981.00\n  mgr-021: $980.00 / 1回 / 1回 $980.00\n  mgr-022: $979.00 / 1回 / 1回 $979.00\n  mgr-023: $978.00 / 1回 / 1回 $978.00\n  mgr-024: $977.00 / 1回 / 1回 $977.00\n  mgr-025: $976.00 / 1回 / 1回 $976.00\n  mgr-026: $975.00 / 1回 / 1回 $975.00\n  mgr-027: $974.00 / 1回 / 1回 $974.00\n  mgr-028: $973.00 / 1回 / 1回 $973.00\n  mgr-029: $972.00 / 1回 / 1回 $972.00\n  mgr-030: $971.00 / 1回 / 1回 $971.00\n  mgr-031: $970.00 / 1回 / 1回 $970.00\n  mgr-032: $969.00 / 1回 / 1回 $969.00\n  mgr-033: $968.00 / 1回 / 1回 $968.00\n  mgr-034: $967.00 / 1回 / 1回 $967.00\n  mgr-035: $966.00 / 1回 / 1回 $966.00\n  mgr-036: $965.00 / 1回 / 1回 $965.00\n  mgr-037: $964.00 / 1回 / 1回 $964.00\n  mgr-038: $963.00 / 1回 / 1回 $963.00\n  mgr-039: $962.00 / 1回 / 1回 $962.00\n  mgr-040: $961.00 / 1回 / 1回 $961.00\n  mgr-041: $960.00 / 1回 / 1回 $960.00\n  mgr-042: $959.00 / 1回 / 1回 $959.00\n  mgr-043: $958.00 / 1回 / 1回 $958.00\n  mgr-044: $957.00 / 1回 / 1回 $957.00\n  mgr-045: $956.00 / 1回 / 1回 $956.00\n  mgr-046: $955.00 / 1回 / 1回 $955.00\n  mgr-047: $954.00 / 1回 / 1回 $954.00\n  mgr-048: $953.00 / 1回 / 1回 $953.00\n  mgr-049: $952.00 / 1回 / 1回 $952.00\n  mgr-050: $951.00 / 1回 / 1回 $951.00\n  mgr-051: $950.00 / 1回 / 1回 $950.00\n  mgr-052: $949.00 / 1回 / 1回 $949.00\n  mgr-053: $948.00 / 1回 / 1回 $948.00\n  mgr-054: $947.00 / 1回 / 1回 $947.00\n  mgr-055: $946.00 / 1回 / 1回 $946.00\n  mgr-056: $945.00 / 1回 / 1回 $945.00\n  mgr-057: $944.00 / 1回 / 1回 $944.00\n  mgr-058: $943.00 / 1回 / 1回 $943.00\n  mgr-059: $942.00 / 1回 / 1回 $942.00\n  mgr-060: $941.00 / 1回 / 1回 $941.00\n  mgr-061: $940.00 / 1回 / 1回 $940.00\n  mgr-062: $939.00 / 1回 / 1回 $939.00\n  mgr-063: $938.00 / 1回 / 1回 $938.00\n  mgr-064: $937.00 / 1回 / 1回 $937.00\n  mgr-065: $936.00 / 1回 / 1回 $936.00\n  mgr-066: $935.00 / 1回 / 1回 $935.00\n  mgr-067: $934.00 / 1回 / 1回 $934.00\n  mgr-068: $933.00 / 1回 / 1回 $933.00\n  mgr-069: $932.00 / 1回 / 1回 $932.00\n  mgr-070: $931.00 / 1回 / 1回 $931.00\n  mgr-071: $930.00 / 1回 / 1回 $930.00\n  mgr-072: $929.00 / 1回 / 1回 $929.00\n  mgr-073: $928.00 / 1回 / 1回 $928.00\n  mgr-074: $927.00 / 1回 / 1回 $927.00\n  mgr-075: $926.00 / 1回 / 1回 $926.00\n  mgr-076: $925.00 / 1回 / 1回 $925.00\n  mgr-077: $924.00 / 1回 / 1回 $924.00\n  mgr-078: $923.00 / 1回 / 1回 $923.00\n  mgr-079: $922.00 / 1回 / 1回 $922.00\n  mgr-080: $921.00 / 1回 / 1回 $921.00\n  mgr-081: $920.00 / 1回 / 1回 $920.00\n  mgr-082: $919.00 / 1回 / 1回 $919.00\n  mgr-083: $918.00 / 1回 / 1回 $918.00\n  mgr-084: $917.00 / 1回 / 1回 $917.00\n  mgr-085: $916.00 / 1回 / 1回 $916.00\n  mgr-086: $915.00 / 1回 / 1回 $915.00\n  mgr-087: $914.00 / 1回 / 1回 $914.00\n  mgr-088: $913.00 / 1回 / 1回 $913.00\n  mgr-089: $912.00 / 1回 / 1回 $912.00\n  mgr-090: $911.00 / 1回 / 1回 $911.00\n  mgr-091: $910.00 / 1回 / 1回 $910.00\n  mgr-092: $909.00 / 1回 / 1回 $909.00\n  mgr-093: $908.00 / 1回 / 1回 $908.00\n  mgr-094: $907.00 / 1回 / 1回 $907.00\n  mgr-095: $906.00 / 1回 / 1回 $906.00\n  mgr-096: $905.00 / 1回 / 1回 $905.00\n  mgr-097: $904.00 / 1回 / 1回 $904.00\n  mgr-098: $903.00 / 1回 / 1回 $903.00\n  mgr-099: $902.00 / 1回 / 1回 $902.00\n  mgr-100: $901.00 / 1回 / 1回 $901.00\n  mgr-101: $900.00 / 1回 / 1回 $900.00\n  mgr-102: $899.00 / 1回 / 1回 $899.00\n  mgr-103: $898.00 / 1回 / 1回 $898.00\n  mgr-104: $897.00 / 1回 / 1回 $897.00\n  mgr-105: $896.00 / 1回 / 1回 $896.00\n  mgr-106: $895.00 / 1回 / 1回 $895.00\n  mgr-107: $894.00 / 1回 / 1回 $894.00\n  mgr-108: $893.00 / 1回 / 1回 $893.00\n  mgr-109: $892.00 / 1回 / 1回 $892.00\n  mgr-110: $891.00 / 1回 / 1回 $891.00\n  mgr-111: $890.00 / 1回 / 1回 $890.00\n  mgr-112: $889.00 / 1回 / 1回 $889.00\n  mgr-113: $888.00 / 1回 / 1回 $888.00\n  mgr-114: $887.00 / 1回 / 1回 $887.00\n  …（残り 16 件は出していない。axis=\"manager\", cursor=\"eyJheGlzIjoibWFuYWdlciIsImxhYmVsIjoibWdyLTExNCIsImNvc3QiOjg4NywiYXNPZiI6IjIwMjYtMTAtMjNUMTQ6MDk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOltdfQ\" で続きが出る）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-chain#3": {
+      "output": {
+        "length": 1068,
+        "text": "マネージャー別（全 130 件）\n  mgr-115: $886.00 / 1回 / 1回 $886.00\n  mgr-116: $885.00 / 1回 / 1回 $885.00\n  mgr-117: $884.00 / 1回 / 1回 $884.00\n  mgr-118: $883.00 / 1回 / 1回 $883.00\n  mgr-119: $882.00 / 1回 / 1回 $882.00\n  mgr-120: $881.00 / 1回 / 1回 $881.00\n  mgr-121: $880.00 / 1回 / 1回 $880.00\n  mgr-122: $879.00 / 1回 / 1回 $879.00\n  mgr-123: $878.00 / 1回 / 1回 $878.00\n  mgr-124: $877.00 / 1回 / 1回 $877.00\n  mgr-125: $876.00 / 1回 / 1回 $876.00\n  mgr-126: $875.00 / 1回 / 1回 $875.00\n  mgr-127: $874.00 / 1回 / 1回 $874.00\n  mgr-128: $873.00 / 1回 / 1回 $873.00\n  mgr-129: $872.00 / 1回 / 1回 $872.00\n  mgr-130: $871.00 / 1回 / 1回 $871.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-chain#4": {
+      "output": {
+        "length": 503,
+        "text": "マネージャー別（全 130 件）\n  （cursor より後ろは無い。これが最後の頁）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-risen#1": {
+      "output": {
+        "length": 4361,
+        "text": "マネージャー別（全 130 件）\n  mgr-001: $1000.00 / 1回 / 1回 $1000.00\n  mgr-002: $999.00 / 1回 / 1回 $999.00\n  mgr-003: $998.00 / 1回 / 1回 $998.00\n  mgr-004: $997.00 / 1回 / 1回 $997.00\n  mgr-005: $996.00 / 1回 / 1回 $996.00\n  mgr-006: $995.00 / 1回 / 1回 $995.00\n  mgr-007: $994.00 / 1回 / 1回 $994.00\n  mgr-008: $993.00 / 1回 / 1回 $993.00\n  mgr-009: $992.00 / 1回 / 1回 $992.00\n  mgr-010: $991.00 / 1回 / 1回 $991.00\n  mgr-011: $990.00 / 1回 / 1回 $990.00\n  mgr-012: $989.00 / 1回 / 1回 $989.00\n  mgr-013: $988.00 / 1回 / 1回 $988.00\n  mgr-014: $987.00 / 1回 / 1回 $987.00\n  mgr-015: $986.00 / 1回 / 1回 $986.00\n  mgr-016: $985.00 / 1回 / 1回 $985.00\n  mgr-017: $984.00 / 1回 / 1回 $984.00\n  mgr-018: $983.00 / 1回 / 1回 $983.00\n  mgr-019: $982.00 / 1回 / 1回 $982.00\n  mgr-020: $981.00 / 1回 / 1回 $981.00\n  mgr-021: $980.00 / 1回 / 1回 $980.00\n  mgr-022: $979.00 / 1回 / 1回 $979.00\n  mgr-023: $978.00 / 1回 / 1回 $978.00\n  mgr-024: $977.00 / 1回 / 1回 $977.00\n  mgr-025: $976.00 / 1回 / 1回 $976.00\n  mgr-026: $975.00 / 1回 / 1回 $975.00\n  mgr-027: $974.00 / 1回 / 1回 $974.00\n  mgr-028: $973.00 / 1回 / 1回 $973.00\n  mgr-029: $972.00 / 1回 / 1回 $972.00\n  mgr-030: $971.00 / 1回 / 1回 $971.00\n  mgr-031: $970.00 / 1回 / 1回 $970.00\n  mgr-032: $969.00 / 1回 / 1回 $969.00\n  mgr-033: $968.00 / 1回 / 1回 $968.00\n  mgr-034: $967.00 / 1回 / 1回 $967.00\n  mgr-035: $966.00 / 1回 / 1回 $966.00\n  mgr-036: $965.00 / 1回 / 1回 $965.00\n  mgr-037: $964.00 / 1回 / 1回 $964.00\n  mgr-038: $963.00 / 1回 / 1回 $963.00\n  mgr-039: $962.00 / 1回 / 1回 $962.00\n  mgr-040: $961.00 / 1回 / 1回 $961.00\n  mgr-041: $960.00 / 1回 / 1回 $960.00\n  mgr-042: $959.00 / 1回 / 1回 $959.00\n  mgr-043: $958.00 / 1回 / 1回 $958.00\n  mgr-044: $957.00 / 1回 / 1回 $957.00\n  mgr-045: $956.00 / 1回 / 1回 $956.00\n  mgr-046: $955.00 / 1回 / 1回 $955.00\n  mgr-047: $954.00 / 1回 / 1回 $954.00\n  mgr-048: $953.00 / 1回 / 1回 $953.00\n  mgr-049: $952.00 / 1回 / 1回 $952.00\n  mgr-050: $951.00 / 1回 / 1回 $951.00\n  mgr-051: $950.00 / 1回 / 1回 $950.00\n  mgr-052: $949.00 / 1回 / 1回 $949.00\n  mgr-053: $948.00 / 1回 / 1回 $948.00\n  mgr-054: $947.00 / 1回 / 1回 $947.00\n  mgr-055: $946.00 / 1回 / 1回 $946.00\n  mgr-056: $945.00 / 1回 / 1回 $945.00\n  mgr-057: $944.00 / 1回 / 1回 $944.00\n  mgr-058: $943.00 / 1回 / 1回 $943.00\n  mgr-059: $942.00 / 1回 / 1回 $942.00\n  mgr-060: $941.00 / 1回 / 1回 $941.00\n  mgr-061: $940.00 / 1回 / 1回 $940.00\n  mgr-062: $939.00 / 1回 / 1回 $939.00\n  mgr-063: $938.00 / 1回 / 1回 $938.00\n  mgr-064: $937.00 / 1回 / 1回 $937.00\n  mgr-065: $936.00 / 1回 / 1回 $936.00\n  mgr-066: $935.00 / 1回 / 1回 $935.00\n  mgr-067: $934.00 / 1回 / 1回 $934.00\n  mgr-068: $933.00 / 1回 / 1回 $933.00\n  mgr-069: $932.00 / 1回 / 1回 $932.00\n  mgr-070: $931.00 / 1回 / 1回 $931.00\n  mgr-071: $930.00 / 1回 / 1回 $930.00\n  mgr-072: $929.00 / 1回 / 1回 $929.00\n  mgr-073: $928.00 / 1回 / 1回 $928.00\n  mgr-074: $927.00 / 1回 / 1回 $927.00\n  mgr-075: $926.00 / 1回 / 1回 $926.00\n  mgr-076: $925.00 / 1回 / 1回 $925.00\n  mgr-077: $924.00 / 1回 / 1回 $924.00\n  mgr-078: $923.00 / 1回 / 1回 $923.00\n  mgr-079: $922.00 / 1回 / 1回 $922.00\n  mgr-080: $921.00 / 1回 / 1回 $921.00\n  mgr-081: $920.00 / 1回 / 1回 $920.00\n  mgr-082: $919.00 / 1回 / 1回 $919.00\n  mgr-083: $918.00 / 1回 / 1回 $918.00\n  mgr-084: $917.00 / 1回 / 1回 $917.00\n  mgr-085: $916.00 / 1回 / 1回 $916.00\n  mgr-086: $915.00 / 1回 / 1回 $915.00\n  mgr-087: $914.00 / 1回 / 1回 $914.00\n  mgr-088: $913.00 / 1回 / 1回 $913.00\n  mgr-089: $912.00 / 1回 / 1回 $912.00\n  mgr-090: $911.00 / 1回 / 1回 $911.00\n  mgr-091: $910.00 / 1回 / 1回 $910.00\n  mgr-092: $909.00 / 1回 / 1回 $909.00\n  mgr-093: $908.00 / 1回 / 1回 $908.00\n  mgr-094: $907.00 / 1回 / 1回 $907.00\n  mgr-095: $906.00 / 1回 / 1回 $906.00\n  mgr-096: $905.00 / 1回 / 1回 $905.00\n  mgr-097: $904.00 / 1回 / 1回 $904.00\n  mgr-098: $903.00 / 1回 / 1回 $903.00\n  mgr-099: $902.00 / 1回 / 1回 $902.00\n  mgr-100: $901.00 / 1回 / 1回 $901.00\n  …（残り 30 件は出していない。axis=\"manager\", cursor=\"eyJheGlzIjoibWFuYWdlciIsImxhYmVsIjoibWdyLTEwMCIsImNvc3QiOjkwMSwiYXNPZiI6IjIwMjYtMTAtMjNUMTQ6MDk6MDAuMDAwWiIsInRpZWRBdEFzT2YiOltdfQ\" で続きが出る）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-risen#2": {
+      "output": {
+        "length": 1728,
+        "text": "マネージャー別（全 130 件）\n  mgr-101: $900.00 / 1回 / 1回 $900.00\n  mgr-102: $899.00 / 1回 / 1回 $899.00\n  mgr-103: $898.00 / 1回 / 1回 $898.00\n  mgr-104: $897.00 / 1回 / 1回 $897.00\n  mgr-105: $896.00 / 1回 / 1回 $896.00\n  mgr-106: $895.00 / 1回 / 1回 $895.00\n  mgr-107: $894.00 / 1回 / 1回 $894.00\n  mgr-108: $893.00 / 1回 / 1回 $893.00\n  mgr-109: $892.00 / 1回 / 1回 $892.00\n  mgr-110: $891.00 / 1回 / 1回 $891.00\n  mgr-111: $890.00 / 1回 / 1回 $890.00\n  mgr-112: $889.00 / 1回 / 1回 $889.00\n  mgr-113: $888.00 / 1回 / 1回 $888.00\n  mgr-114: $887.00 / 1回 / 1回 $887.00\n  mgr-115: $886.00 / 1回 / 1回 $886.00\n  mgr-116: $885.00 / 1回 / 1回 $885.00\n  mgr-117: $884.00 / 1回 / 1回 $884.00\n  mgr-118: $883.00 / 1回 / 1回 $883.00\n  mgr-119: $882.00 / 1回 / 1回 $882.00\n  mgr-120: $881.00 / 1回 / 1回 $881.00\n  mgr-121: $880.00 / 1回 / 1回 $880.00\n  mgr-122: $879.00 / 1回 / 1回 $879.00\n  mgr-123: $878.00 / 1回 / 1回 $878.00\n  mgr-124: $877.00 / 1回 / 1回 $877.00\n  mgr-125: $876.00 / 1回 / 1回 $876.00\n  mgr-126: $875.00 / 1回 / 1回 $875.00\n  mgr-127: $874.00 / 1回 / 1回 $874.00\n  mgr-128: $873.00 / 1回 / 1回 $873.00\n  mgr-129: $872.00 / 1回 / 1回 $872.00\n  mgr-130: $871.00 / 1回 / 1回 $871.00\n\n⚠ 順位が上がった、または既に見せた行が伸びた可能性がある行（前回の呼び出し以降に記録が増えたため。この頁の本体とは重複しない）:\n  mgr-001: $1005.00 / 2回 / 1回 $502.50\n  mgr-050: $956.00 / 2回 / 1回 $478.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=130 turnRows=130 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-refused#1": {
+      "output": {
+        "length": 96,
+        "text": "日別\ncursor が壊れている（この道具が返したものではないか、書き換えられている）。cursor を付けずに axis=\"date\" で usage_read を呼び直すと先頭から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-refused#2": {
+      "output": {
+        "length": 96,
+        "text": "日別\ncursor が壊れている（この道具が返したものではないか、書き換えられている）。cursor を付けずに axis=\"date\" で usage_read を呼び直すと先頭から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-refused#3": {
+      "output": {
+        "length": 96,
+        "text": "日別\ncursor が壊れている（この道具が返したものではないか、書き換えられている）。cursor を付けずに axis=\"date\" で usage_read を呼び直すと先頭から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-refused#4": {
+      "output": {
+        "length": 99,
+        "text": "モデル別\ncursor が壊れている（この道具が返したものではないか、書き換えられている）。cursor を付けずに axis=\"model\" で usage_read を呼び直すと先頭から読める。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-refused#5": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "axis-cursor-wrong-axis#1": {
+      "output": {
+        "length": 1693,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $210.00 / 20回 / 1回 $10.50\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $20.00 / 1回 / 1回 $20.00\n  2026-10-19: $19.00 / 1回 / 1回 $19.00\n  2026-10-18: $18.00 / 1回 / 1回 $18.00\n  2026-10-17: $17.00 / 1回 / 1回 $17.00\n  2026-10-16: $16.00 / 1回 / 1回 $16.00\n  2026-10-15: $15.00 / 1回 / 1回 $15.00\n  2026-10-14: $14.00 / 1回 / 1回 $14.00\n  2026-10-13: $13.00 / 1回 / 1回 $13.00\n  2026-10-12: $12.00 / 1回 / 1回 $12.00\n  2026-10-11: $11.00 / 1回 / 1回 $11.00\n  2026-10-10: $10.00 / 1回 / 1回 $10.00\n  2026-10-09: $9.00 / 1回 / 1回 $9.00\n  2026-10-08: $8.00 / 1回 / 1回 $8.00\n  2026-10-07: $7.00 / 1回 / 1回 $7.00\n  …（残り 6 件は出していない。axis=\"date\", cursor=\"eyJheGlzIjoiZGF0ZSIsImxhYmVsIjoiMjAyNi0xMC0wNyIsImNvc3QiOjcsImFzT2YiOiIyMDI2LTEwLTIzVDEyOjE5OjAwLjAwMFoiLCJ0aWVkQXRBc09mIjpbeyJsYWJlbCI6IjIwMjYtMTAtMjAiLCJjb3N0IjoyMH1dfQ\" で続きが出る）\n\nマネージャー別:\n  mgr-001: $210.00 / 20回 / 1回 $10.50\n\nモデル別:\n  opus: $210.00\n\n層別（誰が）:\n  manager: $210.00 / 20回 / 1回 $10.50\n\n場所別（どこで）:\n  session: $210.00 / 20回 / 1回 $10.50\n\n認証トークン別:\n  （トークンの帰属が無い分）: $210.00 / 20回 / 1回 $10.50\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "axis-cursor-wrong-axis#2": {
+      "output": {
+        "length": 88,
+        "text": "マネージャー別\ncursor が別の軸（または self_status）のものである。axis=\"manager\" の cursor をそのまま渡すこと（自分で組み立てない）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        }
+      ]
+    },
+    "axis-cursor-wrong-axis#3": {
+      "output": {
+        "length": 1693,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $210.00 / 20回 / 1回 $10.50\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-20: $20.00 / 1回 / 1回 $20.00\n  2026-10-19: $19.00 / 1回 / 1回 $19.00\n  2026-10-18: $18.00 / 1回 / 1回 $18.00\n  2026-10-17: $17.00 / 1回 / 1回 $17.00\n  2026-10-16: $16.00 / 1回 / 1回 $16.00\n  2026-10-15: $15.00 / 1回 / 1回 $15.00\n  2026-10-14: $14.00 / 1回 / 1回 $14.00\n  2026-10-13: $13.00 / 1回 / 1回 $13.00\n  2026-10-12: $12.00 / 1回 / 1回 $12.00\n  2026-10-11: $11.00 / 1回 / 1回 $11.00\n  2026-10-10: $10.00 / 1回 / 1回 $10.00\n  2026-10-09: $9.00 / 1回 / 1回 $9.00\n  2026-10-08: $8.00 / 1回 / 1回 $8.00\n  2026-10-07: $7.00 / 1回 / 1回 $7.00\n  …（残り 6 件は出していない。axis=\"date\", cursor=\"eyJheGlzIjoiZGF0ZSIsImxhYmVsIjoiMjAyNi0xMC0wNyIsImNvc3QiOjcsImFzT2YiOiIyMDI2LTEwLTIzVDEyOjE5OjAwLjAwMFoiLCJ0aWVkQXRBc09mIjpbeyJsYWJlbCI6IjIwMjYtMTAtMjAiLCJjb3N0IjoyMH1dfQ\" で続きが出る）\n\nマネージャー別:\n  mgr-001: $210.00 / 20回 / 1回 $10.50\n\nモデル別:\n  opus: $210.00\n\n層別（誰が）:\n  manager: $210.00 / 20回 / 1回 $10.50\n\n場所別（どこで）:\n  session: $210.00 / 20回 / 1回 $10.50\n\n認証トークン別:\n  （トークンの帰属が無い分）: $210.00 / 20回 / 1回 $10.50\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "axis-cursor-wrong-axis#4": {
+      "output": {
+        "length": 686,
+        "text": "日別（全 20 件）\n  2026-10-06: $6.00 / 1回 / 1回 $6.00\n  2026-10-05: $5.00 / 1回 / 1回 $5.00\n  2026-10-04: $4.00 / 1回 / 1回 $4.00\n  2026-10-03: $3.00 / 1回 / 1回 $3.00\n  2026-10-02: $2.00 / 1回 / 1回 $2.00\n  2026-10-01: $1.00 / 1回 / 1回 $1.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=20 turnRows=20 unmetered=0"
+        }
+      ]
+    },
+    "account-states#1": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "account-states#2": {
+      "output": {
+        "length": 1679,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: max / 組織: org-fake\n認証の出所（apiKeySource。判定には使っていない観測）: none（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）\n鍵の届き具合（tokenSource）: 値が届いている（内容はここに出さない）\n枠:\n  five_hour: 42% 使用 / あと 1時間30分でリセット\n  seven_day: 7% 使用 / あと 3日5時間でリセット\n  seven_day_opus: 0% 使用\n  seven_day_sonnet: 使用率は取れなかった / あと 0分でリセット\n支出上限: 12.5 USD / 100 USD（12.5% 使用）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "account-states#3": {
+      "output": {
+        "length": 1520,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （取れなかった）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "account-states#4": {
+      "output": {
+        "length": 1508,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: （欄はあるが空） / 組織: （欄はあるが空）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: この版はこの情報を出さない（daemon が未対応）\n枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）\n支出上限: 設定されていない\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "account-states#5": {
+      "output": {
+        "length": 1599,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: pro\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\n鍵の届き具合（tokenSource）: 取得できず（SDK がこの欄を返さなかった）\n枠:\n  five_hour: 99.5% 使用\n支出上限: 3（単位不明） / 取れなかった\n観測時刻: 2026-10-27T00:00:00.000Z\n**⚠️ 上の値は最後に取れたときのもの。2026-10-26T20:00:00.000Z から取り直しが失敗している（直近 2026-10-26T23:00:00.000Z: 更新に失敗した（テスト用））。いまの枠は分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "account-states#6": {
+      "output": {
+        "length": 1374,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\n取れなかった: 取りに行けなかった（テスト用）（2026-10-26T23:30:00.000Z）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=failed"
+        }
+      ]
+    },
+    "account-states#7": {
+      "output": {
+        "length": 1451,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\n枠が返ってこない: 枠が返らなかった（テスト用）（2026-10-26T23:30:00.000Z）\n認証の出所（apiKeySource。判定には使っていない観測）: ANTHROPIC_API_KEY\naccountInfo の応答が持っていた欄（名前だけ）: email, plan\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=unavailable"
+        }
+      ]
+    },
+    "account-states#8": {
+      "output": {
+        "length": 1439,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\n枠が返ってこない: 枠が返らなかった（テスト用・欄なし）（2026-10-26T23:30:00.000Z）\n認証の出所（apiKeySource。判定には使っていない観測）: （取れなかった）\naccountInfo の応答: 無かった（欄の名前も取れていない）\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=unavailable"
+        }
+      ]
+    },
+    "account-states#9": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=unknown"
+        }
+      ]
+    },
+    "account-with-axis#1": {
+      "output": {
+        "length": 573,
+        "text": "日別（全 3 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "account-with-axis#2": {
+      "output": {
+        "length": 496,
+        "text": "認証トークン別（全 1 件）\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-001"
+          },
+          "outcome": "ok rows=3 turnRows=2 unmetered=0"
+        }
+      ]
+    },
+    "unrecorded-managers#1": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 2 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "unrecorded-managers#2": {
+      "output": {
+        "length": 1483,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "unrecorded-managers#3": {
+      "output": {
+        "length": 1342,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "unrecorded-managers#4": {
+      "output": {
+        "length": 1337,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "unrecorded-managers#5": {
+      "output": {
+        "length": 1111,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $0.5000 / 1回 / 1回 $0.5000\n  入力 7 / 出力 7 / キャッシュ読み 0 / キャッシュ書き 0\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n日別:\n  2026-10-22: $0.5000 / 1回 / 1回 $0.5000\n\nマネージャー別:\n  mgr-001: $0.5000 / 1回 / 1回 $0.5000\n\nモデル別:\n  haiku: $0.5000\n\n層別（誰が）:\n  manager: $0.5000 / 1回 / 1回 $0.5000\n\n場所別（どこで）:\n  distill: $0.5000 / 1回 / 1回 $0.5000\n\n認証トークン別:\n  tk-a: $0.5000 / 1回 / 1回 $0.5000\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-22",
+            "managerId": "mgr-001"
+          },
+          "outcome": "ok rows=1 turnRows=1 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "unrecorded-managers#6": {
+      "output": {
+        "length": 754,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "managerId": "mgr-no-such"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "unrecorded-managers-axis#1": {
+      "output": {
+        "length": 567,
+        "text": "マネージャー別（全 3 件）\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "unrecorded-managers-axis#2": {
+      "output": {
+        "length": 535,
+        "text": "日別（全 2 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-21"
+          },
+          "outcome": "ok rows=4 turnRows=4 unmetered=0"
+        }
+      ]
+    },
+    "unrecorded-managers-empty-range": {
+      "output": {
+        "length": 492,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2027-01-01"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#1": {
+      "output": {
+        "length": 613,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "tokenId": "tk-no-such"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#2": {
+      "output": {
+        "length": 1018,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $2.00 / 2回 / 1回 $1.00\n  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $1.00 / 1回 / 1回 $1.00\n  2026-10-20: $1.00 / 1回 / 1回 $1.00\n\nマネージャー別:\n  mgr-001: $2.00 / 2回 / 1回 $1.00\n\nモデル別:\n  opus: $2.00\n\n層別（誰が）:\n  manager: $2.00 / 2回 / 1回 $1.00\n\n場所別（どこで）:\n  session: $2.00 / 2回 / 1回 $1.00\n\n認証トークン別:\n  （トークンの帰属が無い分）: $1.00 / 1回 / 1回 $1.00\n  tk-a: $1.00 / 1回 / 1回 $1.00\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-09-01"
+          },
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#3": {
+      "output": {
+        "length": 421,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-23"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#4": {
+      "output": {
+        "length": 351,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-24"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#5": {
+      "output": {
+        "length": 351,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\nその範囲には記録が無い。\n\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n回数の軸の始点: 2026-10-23T12:00:00.000Z\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-25"
+          },
+          "outcome": "ok rows=0 turnRows=0 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 1 ids"
+        }
+      ]
+    },
+    "ledger-axes-sources#6": {
+      "output": {
+        "length": 533,
+        "text": "認証トークン別（全 2 件）\n  （トークンの帰属が無い分）: $1.00 / 1回 / 1回 $1.00\n  tk-a: $1.00 / 1回 / 1回 $1.00\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-24T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=2 turnRows=2 unmetered=0"
+        }
+      ]
+    },
+    "value-forms#1": {
+      "output": {
+        "length": 1216,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nまだ取りに行っていない（起動直後）。**0 ではなく、分からない。**\n\n## alteroid が使った分（台帳）\n合計 $12348.68 / 5回 / 1回 $2469.74\n  入力 123,456,790 / 出力 1,000 / キャッシュ読み 0 / キャッシュ書き 0\n台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。\n\n日別:\n  2026-10-21: $2.00 / 2回 / 1回 $1.0000\n  2026-10-20: $12346.68 / 3回 / 1回 $4115.56\n\nマネージャー別:\n  mgr-003: $12345.68 / 1回 / 1回 $12345.68\n  mgr-001: $2.00 / 2回 / 1回 $1.00\n  作業者 一: $0.9999 / 1回 / 1回 $0.9999\n  mgr-002: $0.0001 / 1回 / 1回 $0.0001\n\nモデル別:\n  haiku: $12345.68\n  opus: $2.00\n  モデル 一: $0.9999\n  sonnet: $0.0001\n\n層別（誰が）:\n  manager: $12348.68 / 5回 / 1回 $2469.74\n\n場所別（どこで）:\n  session: $12348.68 / 5回 / 1回 $2469.74\n\n認証トークン別:\n  （トークンの帰属が無い分）: $12348.68 / 5回 / 1回 $2469.74\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=5 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 0 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 4 ids"
+        }
+      ]
+    },
+    "value-forms#2": {
+      "output": {
+        "length": 620,
+        "text": "マネージャー別（全 4 件）\n  mgr-003: $12345.68 / 1回 / 1回 $12345.68\n  mgr-001: $2.00 / 2回 / 1回 $1.00\n  作業者 一: $0.9999 / 1回 / 1回 $0.9999\n  mgr-002: $0.0001 / 1回 / 1回 $0.0001\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常である）。\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=5 turnRows=5 unmetered=0"
+        }
+      ]
+    },
+    "aggregate-throws#1": {
+      "output": {
+        "length": 13,
+        "text": "台帳が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "threw Error: 台帳が読めない（テスト用）"
+        }
+      ]
+    },
+    "aggregate-throws#2": {
+      "output": {
+        "length": 13,
+        "text": "台帳が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "threw Error: 台帳が読めない（テスト用）"
+        }
+      ]
+    },
+    "aggregate-throws#3": {
+      "output": {
+        "length": 13,
+        "text": "台帳が読めない（テスト用）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {
+            "from": "2026-10-20",
+            "managerId": "mgr-001"
+          },
+          "outcome": "threw Error: 台帳が読めない（テスト用）"
+        }
+      ]
+    },
+    "aggregate-throws#4": {
+      "output": {
+        "length": 89,
+        "text": "`from` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: \"bad\"）。形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "aggregate-throws#5": {
+      "output": {
+        "length": 23,
+        "text": "tokenId は使えない（1文字以上のみ）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": []
+    },
+    "aggregate-throws#6": {
+      "output": {
+        "length": 1820,
+        "text": "## アカウント全体の残り（claude.ai 側の値）\nプラン: max / 組織: org-fake\n認証の出所（apiKeySource。判定には使っていない観測）: none（API キーを使っていないという意味。claude.ai の OAuth ログイン等。「ログインしていない」ではない）\n鍵の届き具合（tokenSource）: 値が届いている（内容はここに出さない）\n枠:\n  five_hour: 42% 使用 / あと 1時間30分でリセット\n  seven_day: 7% 使用 / あと 3日5時間でリセット\n  seven_day_opus: 0% 使用\n  seven_day_sonnet: 使用率は取れなかった / あと 0分でリセット\n支出上限: 12.5 USD / 100 USD（12.5% 使用）\n観測時刻: 2026-10-27T00:00:00.000Z\n\n## alteroid が使った分（台帳）\n合計 $5.26 / 6回 / 1回 $0.8759\n  入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）\n⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。\n  mgr-904 [waiting_human]（起こした時刻: 2026-10-23T12:00:00.000Z）\n  mgr-902 [failed]（起こした時刻: 2026-10-24T00:00:00.000Z）\n  mgr-901 [running]（起こした時刻: 2026-10-25T00:00:00.000Z）\n\n日別:\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\nマネージャー別:\n  mgr-002: $3.00 / 1回 / 1回 $3.00\n  mgr-001: $2.25 / 3回 / 1回 $0.7500\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別:\n  opus: $4.50\n  haiku: $0.5000\n  sonnet: $0.2510\n\n層別（誰が）:\n  manager: $5.25 / 4回 / 1回 $1.31\n  clone: $0.0052 / 2回 / 1回 $0.0026\n\n場所別（どこで）:\n  peer: $3.00 / 1回 / 1回 $3.00\n  session: $1.75 / 3回 / 1回 $0.5847\n  distill: $0.5010 / 2回 / 1回 $0.2505\n\n認証トークン別:\n  tk-b: $3.00 / 1回 / 1回 $3.00\n  tk-a: $2.25 / 3回 / 1回 $0.7500\n  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026\n\nモデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        },
+        {
+          "op": "context.accountUsage",
+          "outcome": "state=ok"
+        }
+      ]
+    },
+    "recorded-or-managers-throws#1": {
+      "output": {
+        "length": 10,
+        "text": "委譲の一覧が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "threw Error: 委譲の一覧が読めない"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "ok 3 ids"
+        }
+      ]
+    },
+    "recorded-or-managers-throws#2": {
+      "output": {
+        "length": 10,
+        "text": "記録の一覧が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "ok 6 managers"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "threw Error: 記録の一覧が読めない"
+        }
+      ]
+    },
+    "recorded-or-managers-throws#3": {
+      "output": {
+        "length": 10,
+        "text": "委譲の一覧が読めない",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        },
+        {
+          "op": "managers.list",
+          "outcome": "threw Error: 委譲の一覧が読めない"
+        },
+        {
+          "op": "usage.recordedManagerIds",
+          "outcome": "threw Error: 記録の一覧が読めない"
+        }
+      ]
+    },
+    "recorded-or-managers-throws#4": {
+      "output": {
+        "length": 573,
+        "text": "日別（全 3 件）\n  2026-10-22: $0.5010 / 2回 / 1回 $0.2505\n  2026-10-21: $3.00 / 2回 / 1回 $1.50\n  2026-10-20: $1.75 / 2回 / 1回 $0.8750\n\n台帳の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は台帳の始点より前にかかっている。その分は **0 ではなく「記録が無い」**。\n層と場所の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は層と場所の軸の始点より前にかかっている。その分の層と場所は **既定値であって観測ではない**（クローンが使っていなかった、蒸留が起きていなかった、とは読まないこと）。\n認証トークンの軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は認証トークンの軸の始点より前にかかっている。その分に **トークンの帰属は無い**（0 でも既定値でもなく、取れていない）。\n回数の軸の始点: 2026-10-23T12:00:00.000Z\n照会した範囲は回数の軸の始点より前にかかっている。その分の回数は **0 ではなく「取れていない」**。\nSDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "writeCalls": [],
+      "calls": [
+        {
+          "op": "usage.aggregate",
+          "args": {},
+          "outcome": "ok rows=6 turnRows=5 unmetered=0"
+        }
+      ]
+    }
+  }
+}
