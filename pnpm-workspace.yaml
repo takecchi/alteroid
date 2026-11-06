@@ -196,7 +196,7 @@ catalog:
   #
   # **0.50.4 ではなく 0.50.3 を採る。** 0.50.4 は 2026-08-22T08:44:59Z 公開で、
   # このエントリを足した時点（2026-08-22T17:19Z 実測）で公開から約8.5時間しか
-  # 経っておらず、pnpm 11 既定の `minimumReleaseAge: 1440`（24時間）に引っかかる。
+  # 経っておらず、pnpm 11 以降の既定の `minimumReleaseAge: 1440`（24時間）に引っかかる。
   # **`minimumReleaseAgeExclude` に足して通すのは採らない** — あの除外リストは
   # Claude 本体（SDK）を遅らせないためのものであって、一般の依存の新しい版を
   # 素通しするための場所ではない（同ファイル末尾の注記）。上の `swr` が
@@ -214,7 +214,7 @@ catalog:
 
 # **Claude 本体（SDK）だけは、公開直後でも取りに行く。**
 #
-# pnpm 11 の既定は `minimumReleaseAge: 1440` — 公開から24時間経っていない版は
+# pnpm 11 以降の既定は `minimumReleaseAge: 1440` — 公開から24時間経っていない版は
 # 解決しない。一般の依存にはこの待ちが防御として効くが、SDK にかけると
 # 「人間の手元の Claude Code より古いものをクローンとマネージャーに配る」ことに
 # なり、その遅れがそのままデグレードになる（Dockerfile で `gh` の版を固定しない
@@ -247,10 +247,13 @@ minimumReleaseAgeExclude:
 #   クエリパーサを持つので `qs` を使わない。`pnpm why qs -r` で引き直せる。
 #
 # **置き場所はここ（`pnpm-workspace.yaml` の `overrides`）であって、root の
-# `package.json` の `"pnpm": { "overrides": ... }` ではない。** pnpm 11 では後者は
-# 読まれない（配布コード `pnpm.mjs` の `MIGRATED_PNPM_FIELD_KEYS` に `"overrides"`
+# `package.json` の `"pnpm": { "overrides": ... }` ではない。** pnpm 11 以降では後者は
+# 読まれない（pnpm 11 の配布コード `pnpm.mjs` の `MIGRATED_PNPM_FIELD_KEYS` に `"overrides"`
 # が入っており、書けば `The pnpm field in package.json is no longer read by pnpm`
-# の警告になるだけで何も上書きしない）。**移したくなっても移さないこと** —
+# の警告になるだけで何も上書きしない。pnpm 12.17.0 でも実測で同じ: `"pnpm": { "overrides": ... }` を
+# 書いた一時プロジェクトで `install` すると警告
+# `The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides".`
+# が出て、lockfile の版は上書きされなかった）。**移したくなっても移さないこと** —
 # `package.json` に `"pnpm"` フィールドは無いのが現状なので、新設もしないこと。
 #
 # **`js-yaml` は足した。`esbuild` はまだ足していない。**
