@@ -1,0 +1,3361 @@
+{
+  "lengths": {
+    "to-front#1": 16,
+    "to-front#2": 16,
+    "to-front#3": 16,
+    "to-back#1": 16,
+    "to-back#2": 16,
+    "to-back#3": 16,
+    "to-before#1": 19,
+    "to-before#2": 19,
+    "to-before#3": 19,
+    "to-before#4": 19,
+    "to-after#1": 19,
+    "to-after#2": 19,
+    "to-after#3": 19,
+    "to-after#4": 19,
+    "three-items#1": 16,
+    "three-items#2": 16,
+    "three-items#3": 19,
+    "three-items#4": 19,
+    "one-item#1": 19,
+    "one-item#2": 19,
+    "one-item#3": 35,
+    "one-item#4": 35,
+    "open-states#1": 18,
+    "open-states#2": 18,
+    "open-states#3": 23,
+    "open-states#4": 23,
+    "placement-invalid#1": 42,
+    "placement-invalid#2": 41,
+    "placement-invalid#3": 42,
+    "placement-invalid#4": 41,
+    "placement-invalid#5": 52,
+    "placement-invalid#6": 51,
+    "placement-invalid#7": 52,
+    "placement-invalid#8": 51,
+    "placement-invalid#9": 52,
+    "placement-invalid#10": 50,
+    "placement-invalid#11": 66,
+    "placement-invalid-before-lookup#1": 42,
+    "placement-invalid-before-lookup#2": 52,
+    "placement-invalid-before-lookup#3": 64,
+    "not-found#1": 53,
+    "not-found#2": 46,
+    "not-found#3": 47,
+    "not-found#4": 48,
+    "not-found#5": 53,
+    "not-found#6": 53,
+    "closed#1": 68,
+    "closed#2": 68,
+    "closed#3": 68,
+    "closed#4": 68,
+    "closed#5": 68,
+    "closed#6": 68,
+    "anchor-is-self#1": 35,
+    "anchor-is-self#2": 35,
+    "anchor-is-self#3": 35,
+    "anchor-not-found#1": 64,
+    "anchor-not-found#2": 60,
+    "anchor-not-found#3": 60,
+    "anchor-not-found#4": 59,
+    "anchor-not-found#5": 58,
+    "unreadable#1": 45,
+    "unreadable#2": 45,
+    "move-throws#1": 13,
+    "move-throws#2": 13,
+    "journal-fails#1": 185,
+    "journal-fails#2": 185,
+    "journal-fails#3": 16,
+    "id-forms#1": 215,
+    "id-forms#2": 17,
+    "id-forms#3": 227,
+    "id-forms#4": 24,
+    "id-forms#5": 24,
+    "id-forms#6": 29,
+    "id-forms#7": 247,
+    "id-forms#8": 258
+  },
+  "scenarios": {
+    "to-front#1": {
+      "output": {
+        "length": 16,
+        "text": "task c を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["c", "a", "b", "d", "e"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（c）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の並びを変えた（c）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "to-front#2": {
+      "output": {
+        "length": 16,
+        "text": "task e を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["e", "c", "a", "b", "d"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（e）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "to-front#3": {
+      "output": {
+        "length": 16,
+        "text": "task e を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["e", "c", "a", "b", "d"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（e）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "to-back#1": {
+      "output": {
+        "length": 16,
+        "text": "task a を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "c", "d", "e", "a"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（a）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の並びを変えた（a）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "to-back#2": {
+      "output": {
+        "length": 16,
+        "text": "task c を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "d", "e", "a", "c"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（c）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の並びを変えた（c）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "to-back#3": {
+      "output": {
+        "length": 16,
+        "text": "task c を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["b", "d", "e", "a", "c"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（c）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の並びを変えた（c）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "to-before#1": {
+      "output": {
+        "length": 19,
+        "text": "task e をa の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["e", "a", "b", "c", "d"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（e）: a の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: a の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "to-before#2": {
+      "output": {
+        "length": 19,
+        "text": "task e をa の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["e", "a", "b", "c", "d"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（e）: a の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: a の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "to-before#3": {
+      "output": {
+        "length": 19,
+        "text": "task e をc の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["a", "b", "e", "c", "d"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（e）: c の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "before",
+              "anchorId": "c"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: c の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "to-before#4": {
+      "output": {
+        "length": 19,
+        "text": "task a をb の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["a", "b", "e", "c", "d"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の並びを変えた（a）: b の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "b"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の並びを変えた（a）: b の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "to-after#1": {
+      "output": {
+        "length": 19,
+        "text": "task a をe の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "c", "d", "e", "a"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（a）: e の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "after",
+              "anchorId": "e"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の並びを変えた（a）: e の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "to-after#2": {
+      "output": {
+        "length": 19,
+        "text": "task a をe の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["b", "c", "d", "e", "a"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（a）: e の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "after",
+              "anchorId": "e"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の並びを変えた（a）: e の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "to-after#3": {
+      "output": {
+        "length": 19,
+        "text": "task e をb の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "e", "c", "d", "a"],
+      "moved": {
+        "id": "e",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 e",
+        "body": "本文 e"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（e）: b の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "e",
+            "placement": {
+              "kind": "after",
+              "anchorId": "b"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の並びを変えた（e）: b の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "to-after#4": {
+      "output": {
+        "length": 19,
+        "text": "task b をa の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["e", "c", "d", "a", "b"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の並びを変えた（b）: a の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "after",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の並びを変えた（b）: a の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "three-items#1": {
+      "output": {
+        "length": 16,
+        "text": "task b を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "a", "c"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（b）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の並びを変えた（b）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "three-items#2": {
+      "output": {
+        "length": 16,
+        "text": "task b を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["a", "c", "b"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（b）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の並びを変えた（b）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "three-items#3": {
+      "output": {
+        "length": 19,
+        "text": "task b をa の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["b", "a", "c"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（b）: a の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の並びを変えた（b）: a の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "three-items#4": {
+      "output": {
+        "length": 19,
+        "text": "task b をc の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["a", "c", "b"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の並びを変えた（b）: c の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "after",
+              "anchorId": "c"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の並びを変えた（b）: c の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "one-item#1": {
+      "output": {
+        "length": 19,
+        "text": "task only を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["only"],
+      "moved": {
+        "id": "only",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 only",
+        "body": "本文 only"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（only）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "only"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "only",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "only"
+            },
+            "decision": "task の並びを変えた（only）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "one-item#2": {
+      "output": {
+        "length": 19,
+        "text": "task only を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": ["only"],
+      "moved": {
+        "id": "only",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 only",
+        "body": "本文 only"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（only）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "only"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "only",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "only"
+            },
+            "decision": "task の並びを変えた（only）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "one-item#3": {
+      "output": {
+        "length": 35,
+        "text": "anchorId に動かす task 自身は指せない。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["only"],
+      "moved": {
+        "id": "only",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 only",
+        "body": "本文 only"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "only",
+            "placement": {
+              "kind": "before",
+              "anchorId": "only"
+            }
+          },
+          "outcome": "anchor-is-self"
+        }
+      ]
+    },
+    "one-item#4": {
+      "output": {
+        "length": 35,
+        "text": "anchorId に動かす task 自身は指せない。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["only"],
+      "moved": {
+        "id": "only",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 only",
+        "body": "本文 only"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "only",
+            "placement": {
+              "kind": "after",
+              "anchorId": "only"
+            }
+          },
+          "outcome": "anchor-is-self"
+        }
+      ]
+    },
+    "open-states#1": {
+      "output": {
+        "length": 18,
+        "text": "task w-1 を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["w-1", "q-1", "n-1", "q-2"],
+      "moved": {
+        "id": "w-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "waiting",
+        "origin": "external",
+        "title": "仕事 w-1",
+        "body": "本文 w-1"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（w-1）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "w-1",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の並びを変えた（w-1）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "open-states#2": {
+      "output": {
+        "length": 18,
+        "text": "task n-1 を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["w-1", "q-1", "q-2", "n-1"],
+      "moved": {
+        "id": "n-1",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-02T00:00:00.000Z",
+        "status": "needs_decision",
+        "origin": "external",
+        "title": "仕事 n-1",
+        "body": "本文 n-1"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（n-1）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "n-1",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の並びを変えた（n-1）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "open-states#3": {
+      "output": {
+        "length": 23,
+        "text": "task q-2 をw-1 の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["q-2", "w-1", "q-1", "n-1"],
+      "moved": {
+        "id": "q-2",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 q-2",
+        "body": "本文 q-2"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（q-2）: w-1 の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "q-2"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "q-2",
+            "placement": {
+              "kind": "before",
+              "anchorId": "w-1"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-2"
+            },
+            "decision": "task の並びを変えた（q-2）: w-1 の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "open-states#4": {
+      "output": {
+        "length": 23,
+        "text": "task q-1 をn-1 の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["q-2", "w-1", "n-1", "q-1"],
+      "moved": {
+        "id": "q-1",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 q-1",
+        "body": "本文 q-1"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の並びを変えた（q-1）: n-1 の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "q-1",
+            "placement": {
+              "kind": "after",
+              "anchorId": "n-1"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の並びを変えた（q-1）: n-1 の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "placement-invalid#1": {
+      "output": {
+        "length": 42,
+        "text": "to=before には anchorId（基準にする task の id）が要る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#2": {
+      "output": {
+        "length": 41,
+        "text": "to=after には anchorId（基準にする task の id）が要る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#3": {
+      "output": {
+        "length": 42,
+        "text": "to=before には anchorId（基準にする task の id）が要る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#4": {
+      "output": {
+        "length": 41,
+        "text": "to=after には anchorId（基準にする task の id）が要る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#5": {
+      "output": {
+        "length": 52,
+        "text": "to=front に anchorId は付けられない（before / after のときだけ使う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#6": {
+      "output": {
+        "length": 51,
+        "text": "to=back に anchorId は付けられない（before / after のときだけ使う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#7": {
+      "output": {
+        "length": 52,
+        "text": "to=front に anchorId は付けられない（before / after のときだけ使う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#8": {
+      "output": {
+        "length": 51,
+        "text": "to=back に anchorId は付けられない（before / after のときだけ使う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#9": {
+      "output": {
+        "length": 52,
+        "text": "Cannot read properties of undefined (reading 'kind')",
+        "isError": true,
+        "thrown": true,
+        "errorName": "TypeError"
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a"
+          },
+          "outcome": "threw Error: Cannot read properties of undefined (reading 'kind')"
+        }
+      ]
+    },
+    "placement-invalid#10": {
+      "output": {
+        "length": 50,
+        "text": "anchorId だけでは置き場所が決まらない。to に before か after を渡すこと。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid#11": {
+      "output": {
+        "length": 66,
+        "text": "anchorId undefined は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "middle"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "placement-invalid-before-lookup#1": {
+      "output": {
+        "length": 42,
+        "text": "to=before には anchorId（基準にする task の id）が要る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid-before-lookup#2": {
+      "output": {
+        "length": 52,
+        "text": "to=front に anchorId は付けられない（before / after のときだけ使う）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a"],
+      "moved": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "placement-invalid-before-lookup#3": {
+      "output": {
+        "length": 64,
+        "text": "anchorId no-such は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "no-such"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "not-found#1": {
+      "output": {
+        "length": 53,
+        "text": "task no-such は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "no-such",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#2": {
+      "output": {
+        "length": 46,
+        "text": "task  は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#3": {
+      "output": {
+        "length": 47,
+        "text": "task A は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "A",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#4": {
+      "output": {
+        "length": 48,
+        "text": "task  a は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": " a",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#5": {
+      "output": {
+        "length": 53,
+        "text": "task no-such は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "no-such",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "not-found#6": {
+      "output": {
+        "length": 53,
+        "text": "task no-such は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "no-such",
+            "placement": {
+              "kind": "before",
+              "anchorId": "no-anchor"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "closed#1": {
+      "output": {
+        "length": 68,
+        "text": "task d-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "d-1",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "closed#2": {
+      "output": {
+        "length": 68,
+        "text": "task x-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "x-1",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "cancelled",
+        "origin": "external",
+        "title": "仕事 x-1",
+        "body": "本文 x-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "x-1",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "closed#3": {
+      "output": {
+        "length": 68,
+        "text": "task d-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "d-1",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "closed#4": {
+      "output": {
+        "length": 68,
+        "text": "task x-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "x-1",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "cancelled",
+        "origin": "external",
+        "title": "仕事 x-1",
+        "body": "本文 x-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "x-1",
+            "placement": {
+              "kind": "after",
+              "anchorId": "b"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "closed#5": {
+      "output": {
+        "length": 68,
+        "text": "task d-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "d-1",
+            "placement": {
+              "kind": "before",
+              "anchorId": "no-anchor"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "closed#6": {
+      "output": {
+        "length": 68,
+        "text": "task d-1 は閉じている（並びに載っていない）ので動かせない。戻すなら task_set_status で queued にする。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "d-1",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-03T00:00:00.000Z",
+        "status": "done",
+        "origin": "external",
+        "title": "仕事 d-1",
+        "body": "本文 d-1",
+        "closedAt": "2026-10-03T00:00:00.000Z",
+        "closedBy": "human",
+        "closedReason": "先に閉じた"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "d-1",
+            "placement": {
+              "kind": "before",
+              "anchorId": "d-1"
+            }
+          },
+          "outcome": "closed"
+        }
+      ]
+    },
+    "anchor-is-self#1": {
+      "output": {
+        "length": 35,
+        "text": "anchorId に動かす task 自身は指せない。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "anchor-is-self"
+        }
+      ]
+    },
+    "anchor-is-self#2": {
+      "output": {
+        "length": 35,
+        "text": "anchorId に動かす task 自身は指せない。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "after",
+              "anchorId": "b"
+            }
+          },
+          "outcome": "anchor-is-self"
+        }
+      ]
+    },
+    "anchor-is-self#3": {
+      "output": {
+        "length": 35,
+        "text": "anchorId に動かす task 自身は指せない。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "before",
+              "anchorId": "c"
+            }
+          },
+          "outcome": "anchor-is-self"
+        }
+      ]
+    },
+    "anchor-not-found#1": {
+      "output": {
+        "length": 64,
+        "text": "anchorId no-such は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "no-such"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "anchor-not-found#2": {
+      "output": {
+        "length": 60,
+        "text": "anchorId d-1 は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "after",
+              "anchorId": "d-1"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "anchor-not-found#3": {
+      "output": {
+        "length": 60,
+        "text": "anchorId x-1 は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "before",
+              "anchorId": "x-1"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "anchor-not-found#4": {
+      "output": {
+        "length": 59,
+        "text": "anchorId  b は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "after",
+              "anchorId": " b"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "anchor-not-found#5": {
+      "output": {
+        "length": 58,
+        "text": "anchorId B は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "B"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    },
+    "unreadable#1": {
+      "output": {
+        "length": 45,
+        "text": "task a は読めない形で入っている。読めない形のまま書き直さないので、動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "unreadable#2": {
+      "output": {
+        "length": 45,
+        "text": "task b は読めない形で入っている。読めない形のまま書き直さないので、動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "b",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 b",
+        "body": "本文 b"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "b",
+            "placement": {
+              "kind": "before",
+              "anchorId": "a"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "move-throws#1": {
+      "output": {
+        "length": 13,
+        "text": "ストアが落ちた（move）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（move）"
+        }
+      ]
+    },
+    "move-throws#2": {
+      "output": {
+        "length": 13,
+        "text": "ストアが落ちた（move）",
+        "isError": true,
+        "thrown": true,
+        "errorName": "Error"
+      },
+      "wrote": "none",
+      "openOrder": ["a", "b", "c"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "before",
+              "anchorId": "b"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（move）"
+        }
+      ]
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 185,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_move は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=20 grounds.chars=16\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "task",
+      "openOrder": ["c", "a", "b"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=20 grounds.chars=16）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の並びを変えた（c）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 185,
+        "text": "⚠⚠ 完了済み・未記録・やり直し禁止\ntask_move は完了した（副作用は済んでいる）が、日誌へ記録できなかった。\n記録できなかったエントリ: decision decision.chars=20 grounds.chars=16\n理由: Error: 日誌が落ちた\nやり直さないこと（同じ副作用がもう一度起きる）。journal_write で記録を書き直すこと。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "openOrder": ["c", "a", "b"],
+      "moved": {
+        "id": "c",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 c",
+        "body": "本文 c"
+      },
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 日誌を記録できませんでした（decision decision.chars=20 grounds.chars=16）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "c",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の並びを変えた（c）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#3": {
+      "output": {
+        "length": 16,
+        "text": "task a を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": ["c", "b", "a"],
+      "moved": {
+        "id": "a",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a",
+        "body": "本文 a"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（a）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の並びを変えた（a）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "id-forms#1": {
+      "output": {
+        "length": 215,
+        "text": "task longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long を末尾へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": [
+        "仕事",
+        "with space",
+        "a/b:c",
+        "12345",
+        "😀",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "createdAt": "2026-10-01T00:01:00.000Z",
+        "updatedAt": "2026-10-01T00:01:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+        "body": "本文 longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の並びを変えた（longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long）: 末尾へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long",
+            "placement": {
+              "kind": "back"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+            },
+            "decision": "task の並びを変えた（longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long）: 末尾へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "id-forms#2": {
+      "output": {
+        "length": 17,
+        "text": "task 仕事 を先頭へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": [
+        "仕事",
+        "with space",
+        "a/b:c",
+        "12345",
+        "😀",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "仕事",
+        "createdAt": "2026-10-01T00:02:00.000Z",
+        "updatedAt": "2026-10-01T00:02:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 仕事",
+        "body": "本文 仕事"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の並びを変えた（仕事）: 先頭へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "仕事"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "仕事",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "仕事"
+            },
+            "decision": "task の並びを変えた（仕事）: 先頭へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "id-forms#3": {
+      "output": {
+        "length": 227,
+        "text": "task with space をlongid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "😀",
+        "with space",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "with space",
+        "createdAt": "2026-10-01T00:03:00.000Z",
+        "updatedAt": "2026-10-01T00:03:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 with space",
+        "body": "本文 with space"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の並びを変えた（with space）: longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "with space"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "with space",
+            "placement": {
+              "kind": "before",
+              "anchorId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "with space"
+            },
+            "decision": "task の並びを変えた（with space）: longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "id-forms#4": {
+      "output": {
+        "length": 24,
+        "text": "task a/b:c を仕事 の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "😀",
+        "with space",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "a/b:c",
+        "createdAt": "2026-10-01T00:04:00.000Z",
+        "updatedAt": "2026-10-01T00:04:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a/b:c",
+        "body": "本文 a/b:c"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の並びを変えた（a/b:c）: 仕事 の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "a/b:c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a/b:c",
+            "placement": {
+              "kind": "after",
+              "anchorId": "仕事"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a/b:c"
+            },
+            "decision": "task の並びを変えた（a/b:c）: 仕事 の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "id-forms#5": {
+      "output": {
+        "length": 24,
+        "text": "task 12345 を😀 の直前へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "😀",
+        "with space",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "12345",
+        "createdAt": "2026-10-01T00:05:00.000Z",
+        "updatedAt": "2026-10-01T00:05:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 12345",
+        "body": "本文 12345"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の並びを変えた（12345）: 😀 の直前へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "12345"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "12345",
+            "placement": {
+              "kind": "before",
+              "anchorId": "😀"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "12345"
+            },
+            "decision": "task の並びを変えた（12345）: 😀 の直前へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "id-forms#6": {
+      "output": {
+        "length": 29,
+        "text": "task 😀 をwith space の直後へ動かした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "with space",
+        "😀",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "😀",
+        "createdAt": "2026-10-01T00:06:00.000Z",
+        "updatedAt": "2026-10-01T00:06:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 😀",
+        "body": "本文 😀"
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "task の並びを変えた（😀）: with space の直後へ",
+          "grounds": "自分で task_move した",
+          "target": {
+            "kind": "task",
+            "id": "😀"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "😀",
+            "placement": {
+              "kind": "after",
+              "anchorId": "with space"
+            }
+          },
+          "outcome": "moved"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "😀"
+            },
+            "decision": "task の並びを変えた（😀）: with space の直後へ",
+            "grounds": "自分で task_move した"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "id-forms#7": {
+      "output": {
+        "length": 247,
+        "text": "task longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long! は無い（task_list で実在する id を確かめること）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "with space",
+        "😀",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": null,
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long!",
+            "placement": {
+              "kind": "front"
+            }
+          },
+          "outcome": "not-found"
+        }
+      ]
+    },
+    "id-forms#8": {
+      "output": {
+        "length": 258,
+        "text": "anchorId longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long! は開いている task に無い（閉じた件・無い id は基準にできない）。何も動かしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "openOrder": [
+        "仕事",
+        "a/b:c",
+        "12345",
+        "with space",
+        "😀",
+        "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long"
+      ],
+      "moved": {
+        "id": "a/b:c",
+        "createdAt": "2026-10-01T00:04:00.000Z",
+        "updatedAt": "2026-10-01T00:04:00.000Z",
+        "status": "queued",
+        "origin": "external",
+        "title": "仕事 a/b:c",
+        "body": "本文 a/b:c"
+      },
+      "journal": [],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "tasks.move",
+          "args": {
+            "taskId": "a/b:c",
+            "placement": {
+              "kind": "before",
+              "anchorId": "longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid longid long!"
+            }
+          },
+          "outcome": "anchor-not-found"
+        }
+      ]
+    }
+  }
+}
