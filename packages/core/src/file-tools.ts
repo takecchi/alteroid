@@ -11,6 +11,7 @@ import {
   type AttachmentUsage,
 } from './attachment.js';
 import { removeAttachmentCopy } from './attachment-fetch.js';
+import { reasonOf } from './dropped-record.js';
 import { integrationKeyUsageView } from './attachment-usage-keys.js';
 import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
 
@@ -198,6 +199,22 @@ export function describeAttachmentAlreadyGoneRetraction(
   };
 }
 
+/**
+ * 「消す」の行を書いた後で、`remove` が置き場の断り以外の例外で落ちた回に足す打ち消しの行の文言。
+ * 置き場によっては途中まで消えている（中身を消した後に行を消す・`rm` が途中で落ちる）ので、「消せなかった」と言い切らない。
+ * `file_delete` と `DELETE /attachments/:id` で同じ文言にする。`actor` は grounds の先頭に付ける（無ければ付けない）。
+ */
+export function describeAttachmentRemoveFailedRetraction(
+  meta: AttachmentMeta,
+  reason: string,
+  actor?: string,
+): { readonly decision: string; readonly grounds: string } {
+  return {
+    decision: `直前の添付の削除は途中で失敗した（消し終えたか確かめられない）: ${meta.name}（id=${meta.id}）`,
+    grounds: `${actor === undefined ? '' : `${actor}。`}理由: ${reason}。中身や控えの一部が残っているかもしれない。もう一度消すと再試行する。`,
+  };
+}
+
 export async function deleteFile(
   stores: { readonly attachments: AttachmentStore },
   copiesDir: string,
@@ -210,6 +227,10 @@ export async function deleteFile(
   // `beforeRemove` が「消す」と書いた後で、`remove` が false（控えを読んだ後に添付が無くなっていた）のとき、
   // 「消す」の行は効いていないと日誌へ足す口。meta が在るときだけ呼ぶ。落ちても「無い」の結果は変えないこと
   afterAlreadyGone?: (meta: AttachmentMeta) => Promise<void>,
+  // `beforeRemove` が「消す」と書いた後で、`remove` が置き場の断り以外の例外で落ちたとき、
+  // 「消す」の行は途中で失敗したと日誌へ足す口（置き場によっては途中まで消えている）。meta が在るときだけ呼ぶ。
+  // reason は `reasonOf`（伏せ済み）。落ちても元の例外を投げ直すこと
+  afterFailed?: (meta: AttachmentMeta, reason: string) => Promise<void>,
 ): Promise<string> {
   const meta = await stores.attachments.getMeta(id);
   if (meta !== undefined && beforeRemove !== undefined) await beforeRemove(meta);
@@ -217,7 +238,13 @@ export async function deleteFile(
   try {
     removed = await stores.attachments.remove(id);
   } catch (error) {
-    if (!(error instanceof AttachmentContentRemoveError)) throw error;
+    if (!(error instanceof AttachmentContentRemoveError)) {
+      // 「消す」の行を書いた回だけ、途中で失敗したと日誌へ足す。口が落ちても元の例外を投げる
+      if (meta !== undefined && beforeRemove !== undefined && afterFailed !== undefined) {
+        await afterFailed(meta, reasonOf(error)).catch(() => undefined);
+      }
+      throw error;
+    }
     await afterRefused?.(meta, error.reason);
     // 写しも消さない: 消していないので、取り出した写しも残す
     return (
