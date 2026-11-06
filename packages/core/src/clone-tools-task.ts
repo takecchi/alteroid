@@ -1494,6 +1494,30 @@ function renderTaskMoveDone(taskId: string, placement: TaskMovePlacement): strin
   return `task ${taskId} を${describeTaskPlacement(placement)}へ動かした。`;
 }
 
+type TaskKeepOutcome = Awaited<ReturnType<TaskStore['setKeep']>>;
+
+function renderTaskKeepUnreadable(taskId: string): string {
+  return `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。`;
+}
+
+// setKeep の結果が断り（印を変えなかった: changed 以外）のとき、その文を返す。
+// 呼び側が `result.kind !== 'changed'` で絞ってから呼ぶ: null を返す形にすると、呼び側で `result.task` の型が絞れないため
+function describeTaskKeepRefusal(args: {
+  result: Exclude<TaskKeepOutcome, { kind: 'changed' }>;
+  taskId: string;
+  keep: boolean;
+}): string {
+  const { result, taskId, keep } = args;
+  if (result.kind === 'not-found') {
+    return `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`;
+  }
+  return `task ${taskId} は既に${keep ? '「続く」の印つき' : '印なし'}。何もしていない。`;
+}
+
+function renderTaskKeepDone(taskId: string, keep: boolean): string {
+  return `task ${taskId} の「続く」の印を${keep ? '立てた。返答しても器は自動では done にしない' : '外した'}。`;
+}
+
 export function taskTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getWorkConversationId } = shared;
   return [
@@ -1720,22 +1744,11 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         try {
           result = await stores.tasks.setKeep(taskId, keep);
         } catch (error) {
-          if (error instanceof UnreadableTaskError) {
-            return text(
-              `task ${taskId} は読めない形で入っている。読めない形のまま書き直さないので、印を変えていない。`,
-            );
-          }
+          if (error instanceof UnreadableTaskError) return text(renderTaskKeepUnreadable(taskId));
           throw error;
         }
-        if (result.kind === 'not-found') {
-          return text(
-            `task ${taskId} は無い（task_list で実在する id を確かめること）。何もしていない。`,
-          );
-        }
-        if (result.kind === 'unchanged') {
-          return text(
-            `task ${taskId} は既に${keep ? '「続く」の印つき' : '印なし'}。何もしていない。`,
-          );
+        if (result.kind !== 'changed') {
+          return text(describeTaskKeepRefusal({ result, taskId, keep }));
         }
         await appendJournalOrThrow(
           'task_keep',
@@ -1743,9 +1756,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
           taskKeepChangeEntry(taskId, result.task, keep),
           'act-completed',
         );
-        return text(
-          `task ${taskId} の「続く」の印を${keep ? '立てた。返答しても器は自動では done にしない' : '外した'}。`,
-        );
+        return text(renderTaskKeepDone(taskId, keep));
       },
     ),
 
