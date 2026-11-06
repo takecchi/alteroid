@@ -15,7 +15,6 @@ interface RunnerMcpConfigSweepOptions {
   // 今の runner が起こしていて、まだ終わっていない委譲のディレクトリ（絶対パス）
   liveDirs: ReadonlySet<string>;
   now: number;
-  minAgeMs?: number;
   rmFn?: (target: string) => Promise<void>;
 }
 
@@ -29,7 +28,6 @@ interface McpConfigDirSweep {
   tmpRoot: string;
   prefix: string;
   now: number;
-  minAgeMs?: number;
   rmFn?: (target: string) => Promise<void>;
   // true なら消さない。投げた場合は failed に入る
   keep: (name: string, target: string) => boolean;
@@ -40,7 +38,6 @@ export async function sweepMcpConfigDirs(
   options: McpConfigDirSweep,
 ): Promise<RunnerMcpConfigSweepResult> {
   const result: RunnerMcpConfigSweepResult = { removed: [], failed: [] };
-  const minAgeMs = options.minAgeMs ?? RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS;
   const removeFn = options.rmFn ?? ((target) => rm(target, { recursive: true, force: true }));
   let names: string[];
   try {
@@ -57,7 +54,7 @@ export async function sweepMcpConfigDirs(
       const info = await lstat(target);
       // symlink は辿らない: 付け替えられた先を特権（root・デーモンの権限）で再帰削除しないため
       if (!info.isDirectory()) continue;
-      if (options.now - info.mtimeMs < minAgeMs) continue;
+      if (options.now - info.mtimeMs < RUNNER_MCP_CONFIG_SWEEP_MIN_AGE_MS) continue;
       await removeFn(target);
       result.removed.push(name);
     } catch (error) {
