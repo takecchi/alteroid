@@ -912,6 +912,33 @@ function describeCoverageHead(
     : [];
 }
 
+// 省いた回は日誌の本文で名乗り `self_dropped` にも跡を残す: 道具は成功しているので、ここで残さないと「根拠が届かなかった」がどこにも出ないため
+function noteGroundsNotDelivered(decision: string, grounds: string | undefined): void {
+  if (grounds === undefined) {
+    noteDroppedRecord(
+      '判断の根拠（journal_write の grounds）',
+      `decision.chars=${decision.length}`,
+      new Error('呼び出しに grounds が届かなかった'),
+    );
+  }
+}
+
+function buildDecisionLine(
+  decision: string,
+  grounds: string | undefined,
+): { type: 'decision'; decision: string; grounds: string } {
+  return { type: 'decision', decision, grounds: grounds ?? GROUNDS_NOT_DELIVERED };
+}
+
+function describeJournalWritten(entryId: string, grounds: string | undefined): string {
+  return grounds === undefined
+    ? `日誌に記録した（${entryId}）。⚠ grounds が呼び出しに届かなかったので、` +
+        '根拠は「届かなかった」として残してある（あなたが「根拠なし」と' +
+        '書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで' +
+        '呼べば別の行として残る。'
+    : `日誌に記録した（${entryId}）。`;
+}
+
 export function journalTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -938,31 +965,17 @@ export function journalTools(context: ToolContext, shared: CloneToolsShared) {
       async ({ decision, grounds, closes }) => {
         const closesError = describeClosesViolation(closes);
         if (closesError !== null) return text(closesError);
-        // 省いた回は日誌の本文で名乗り `self_dropped` にも跡を残す: 道具は成功しているので、ここで残さないと「根拠が届かなかった」がどこにも出ないため
-        if (grounds === undefined) {
-          noteDroppedRecord(
-            '判断の根拠（journal_write の grounds）',
-            `decision.chars=${decision.length}`,
-            new Error('呼び出しに grounds が届かなかった'),
-          );
-        }
+        noteGroundsNotDelivered(decision, grounds);
         // 書き込みが落ちて投げたときは、ここから先へ進まない（1行も閉じない）
         const entry = await appendJournalOrThrow(
           'journal_write',
           stores.journal,
-          { type: 'decision', decision, grounds: grounds ?? GROUNDS_NOT_DELIVERED },
+          buildDecisionLine(decision, grounds),
           'act-not-performed',
         );
         return finishWithCloses(
           stores,
-          text(
-            grounds === undefined
-              ? `日誌に記録した（${entry.id}）。⚠ grounds が呼び出しに届かなかったので、` +
-                  '根拠は「届かなかった」として残してある（あなたが「根拠なし」と' +
-                  '書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで' +
-                  '呼べば別の行として残る。'
-              : `日誌に記録した（${entry.id}）。`,
-          ),
+          text(describeJournalWritten(entry.id, grounds)),
           closes,
           true,
           'journal_write',
