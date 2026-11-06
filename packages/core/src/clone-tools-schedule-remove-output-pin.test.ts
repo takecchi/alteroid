@@ -219,7 +219,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'timers-failures',
     covers:
-      '未読のタイマーを消す所で落ちる（いまの振る舞いのまま）: peekPending・removeMany・dropQueuedInboxEvents のどれが落ちても `dropUnreadTimersOfKind` が握って跡だけ残し、応答は「外した」のまま（isError ではない）。行は消えている。落ちた先は仕事が残る: peek が落ちればタイマーは残る・removeMany が落ちても残る・drop が落ちたときは受信箱からは消えている',
+      '未読のタイマーを消す所で落ちる: peekPending・removeMany・dropQueuedInboxEvents のどれが落ちても `dropUnreadTimersOfKind` が握って跡を残し、応答は「外した」に「未読の起動を消しきれなかった」を添える（#6544。外すこと自体は済んでいるので isError ではない）。行は消えている。落ちた先は仕事が残る: peek が落ちればタイマーは残る・removeMany が落ちても残る・drop が落ちたときは受信箱からは消えている（配達の止めが掛からない）',
     seed: [row('p', '依頼 p'), row('r', '依頼 r'), row('d', '依頼 d')],
     inbox: [timer('t-p', 'p'), timer('t-r', 'r'), timer('t-d', 'd')],
     steps: [
@@ -816,7 +816,13 @@ describe('schedule_remove の出力と呼んだあとの状態の固定（場面
       expect(step(key).dropped, key).toHaveLength(1);
       expect(step(key).dropped[0], key).toContain('取り消した定期の依頼の未読の起動の消し込み');
     }
-    expect(text('timers-failures#1')).toBe('p を外した。');
+    // 消しそこねたら応答でそう言う（#6544）: 外すこと自体は済んでいるので isError にはしない
+    const notCleared = (kind: string): string =>
+      `${kind} を外した。ただし、この依頼の未読の起動を受信箱から消しきれなかった` +
+      '（取り消した依頼の起動が、本文なしのターンで走りうる）。';
+    expect(text('timers-failures#1')).toBe(notCleared('p'));
+    expect(text('timers-failures#2')).toBe(notCleared('r'));
+    expect(text('timers-failures#3')).toBe(notCleared('d'));
     expect(step('timers-failures#1').inbox.map((e) => e.id)).toEqual(['t-p', 't-r', 't-d']);
     expect(step('timers-failures#3').inbox.map((e) => e.id)).toEqual(['t-p', 't-r']);
 
