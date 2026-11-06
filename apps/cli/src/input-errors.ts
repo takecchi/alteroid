@@ -87,7 +87,7 @@ export function describeEditorFailure(
 // 引用符で包む: `shell: true` は引数を引用符なしで連結するので、パスに空白・記号が入るとエディタが別のファイルを開くため
 export function quoteForShell(path: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') return `"${path}"`;
-  return `'${path.replaceAll("'", "'\\''")}'`;
+  return shellQuote(path);
 }
 
 // 空・空白だけは未設定として次へ進む: `??` は空文字を素通しし、`spawn('')` が一時ファイルのパスそのものを実行してしまうため

@@ -319,10 +319,6 @@ export async function uploadAttachment(
   return (await response.json()) as UploadedAttachment;
 }
 
-export class AttachmentMissingError extends Error {
-  override readonly name = 'AttachmentMissingError';
-}
-
 export function attachmentMissingMessageOf(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null;
   const { code, error } = body as { code?: unknown; error?: unknown };
