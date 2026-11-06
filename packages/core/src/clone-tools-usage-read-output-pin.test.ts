@@ -454,7 +454,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'zero-vs-unreadable',
     covers:
-      '「取れなかった」と 0 の区別: 全部 0 で読めた行は合計 $0.0000 で「取れなかった」の行が出ない。取れなかった欄が在る行（unreadable）は「⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: …）」が付き、欄ごとの回数が出る。Web検索が 0 のときは欄を作らない（2 回なら「Web検索 2回（費用は合計に含む）」）',
+      '「取れなかった」と 0 の区別: 全部 0 で読めた記録は台帳に行を作らないので「その範囲には記録が無い」になり（合計 $0 とは出ない。いまの振る舞い）、「取れなかった」の行も出ない。取れなかった欄が在る行（unreadable）は 0 円でも行が残り「$0.0000」と出て、「⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: …）」が付き、欄ごとの回数が出る。Web検索が 0 のときは欄を作らない（2 回なら「Web検索 2回（費用は合計に含む）」）',
     seed: [],
     account: 'absent',
     managers: [],
@@ -1303,9 +1303,347 @@ describe('usage_read の出力の固定（場面ごとの全文と字数・読�
   });
 
   it('場面が狙った分岐を通っている（固定値が別の分岐へ流れていないことの目印）', () => {
-    // 出力を見てから書く（下の MARKERS）
-    expect(MARKERS_PLACEHOLDER).toBe(true);
+    const step = (key: string): PinnedStep => {
+      const found = actual[key];
+      if (found === undefined) throw new Error(`${key} が無い`);
+      return found;
+    };
+    const text = (key: string): string => step(key).output.text;
+    const ops = (key: string): string[] => step(key).calls.map((entry) => entry.op);
+    const aggregateArgs = (key: string): unknown =>
+      step(key).calls.find((entry) => entry.op === 'usage.aggregate')?.args;
+    const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
+    const linesOf = (key: string, prefix: string): string[] =>
+      text(key)
+        .split('\n')
+        .filter((line) => line.startsWith(prefix));
+    const HEAD_ACCOUNT = '## アカウント全体の残り（claude.ai 側の値）';
+    const HEAD_LEDGER = '## alteroid が使った分（台帳）';
+    const EMPTY_LEDGER = '台帳にはまだ1件も記録が無い。';
+    const UNREC_ZERO = '台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。';
+    const UNREC_UNKNOWN =
+      '⚠ 台帳に1行も記録が無い委譲: 確かめられなかった（この場ではマネージャーの一覧が読めない。0 件ではない）。';
+    const BEFORE = 'にかかっている。';
+    const RISEN = '⚠ 順位が上がった、または既に見せた行が伸びた可能性がある行';
+    const FULL_OPS = [
+      'usage.aggregate',
+      'managers.list',
+      'usage.recordedManagerIds',
+      'context.accountUsage',
+    ];
+
+    // tokenId の断り
+    for (const n of [1, 2, 3]) {
+      expect(text(`tokenid-refused#${String(n)}`)).toBe('tokenId は使えない（1文字以上のみ）。');
+      expect(ops(`tokenid-refused#${String(n)}`)).toEqual([]);
+    }
+    expect(text('tokenid-refused#4')).toContain('日別（全 2 件）');
+    expect(aggregateArgs('tokenid-refused#4')).toEqual({ tokenId: 'tk-a' });
+
+    // from / to の断り
+    const refusedDates: [number, string, string][] = [
+      [1, 'from', '2026-2-3'],
+      [2, 'from', '20261020'],
+      [3, 'from', 'abc'],
+      [4, 'from', ''],
+      [5, 'from', ' 2026-10-20'],
+      [6, 'from', '2026-10-20 '],
+      [7, 'from', '2026-00-10'],
+      [8, 'from', '2026-13-01'],
+      [9, 'from', '2026-01-00'],
+      [10, 'from', '2026-02-30'],
+      [11, 'from', '2026-04-31'],
+      [12, 'from', '2025-02-29'],
+      [13, 'from', '2100-02-29'],
+      [14, 'to', '2026-02-30'],
+      [15, 'to', 'x'],
+      [16, 'from', 'bad-from'],
+      [17, 'to', '2026-02-30'],
+      [18, 'from', '2026-02-30'],
+    ];
+    for (const [n, name, value] of refusedDates) {
+      const key = `date-refused#${String(n)}`;
+      expect(text(key), key).toBe(
+        `\`${name}\` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: ${JSON.stringify(value)}）。` +
+          '形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。',
+      );
+      expect(ops(key), key).toEqual([]);
+      expect(step(key).output.isError, key).toBe(false);
+    }
+    const accepted: [number, Record<string, string>][] = [
+      [1, { from: '2024-02-29' }],
+      [2, { to: '2000-02-29' }],
+      [3, { from: '2026-01-31', to: '2026-04-30' }],
+      [4, { from: '2026-12-31', to: '2026-12-31' }],
+      [5, { from: '2026-02-28', to: '2026-02-28' }],
+      [6, { from: '0001-01-01', to: '9999-12-31' }],
+    ];
+    for (const [n, query] of accepted) {
+      const key = `date-leap-accepted#${String(n)}`;
+      expect(text(key), key).not.toContain('実在する日付');
+      expect(aggregateArgs(key), key).toEqual(query);
+    }
+
+    // 台帳が空
+    expect(text('ledger-empty#1').startsWith(HEAD_ACCOUNT)).toBe(true);
+    expect(text('ledger-empty#1')).toContain(`${HEAD_LEDGER}\n${EMPTY_LEDGER}\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n\n${UNREC_UNKNOWN}`);
+    expect(text('ledger-empty#2')).toContain(UNREC_ZERO);
+    expect(text('ledger-empty#3')).toContain('⚠ 台帳に1行も記録が無い委譲: 6件。上の合計にはまだ入っていない。');
+    for (const key of ['ledger-empty#4', 'ledger-empty#5']) {
+      expect(text(key), key).toBe(
+        `${EMPTY_LEDGER}\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）`,
+      );
+      expect(ops(key), key).toEqual(['usage.aggregate']);
+    }
+    expect(aggregateArgs('ledger-empty#6')).toEqual({ managerId: 'mgr-001', from: '2026-10-01', to: '2026-10-31' });
+    expect(text('ledger-empty#7').startsWith('to（2026-10-01）が from（2026-10-31）より前なので、この範囲には1日も入らない\n## アカウント')).toBe(true);
+
+    // まとめ表示
+    const basic = text('summary-basic');
+    expect(ops('summary-basic')).toEqual(FULL_OPS);
+    expect(basic.indexOf(HEAD_ACCOUNT)).toBe(0);
+    expect(basic.indexOf(HEAD_ACCOUNT)).toBeLessThan(basic.indexOf(HEAD_LEDGER));
+    expect(basic).toContain('合計 $5.26 / 6回 / 1回 $0.8759');
+    expect(basic).toContain(
+      '入力 1,000,123 / 出力 2,727 / キャッシュ読み 50 / キャッシュ書き 10 / Web検索 2回（費用は合計に含む）',
+    );
+    for (const title of ['日別:', 'マネージャー別:', 'モデル別:', '層別（誰が）:', '場所別（どこで）:', '認証トークン別:']) {
+      expect(basic, title).toContain(`\n${title}\n`);
+    }
+    expect(basic).toContain('  （トークンの帰属が無い分）: $0.0052 / 2回 / 1回 $0.0026');
+    expect(basic).toContain('  opus: $4.50\n');
+    expect(basic).toContain('モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。');
+    expect(basic.endsWith('SDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。')).toBe(true);
+    expect(linesOf('summary-tied-costs#2', '  mgr-').map((line) => line.slice(0, 10))).toEqual(['  mgr-001:', '  mgr-002:', '  mgr-003:']);
+    // accountUsage の無い器では context.accountUsage を呼ばず、unknown として描く
+    expect(ops('summary-tied-costs#1')).toEqual(['usage.aggregate', 'managers.list', 'usage.recordedManagerIds']);
+
+    // 各軸
+    const axisHeads = [
+      '日別（全 3 件）\n  2026-10-22: ',
+      'マネージャー別（全 3 件）\n  mgr-002: ',
+      'モデル別（全 3 件）\n  opus: ',
+      '層別（誰が）（全 2 件）\n  manager: ',
+      '場所別（どこで）（全 3 件）\n  peer: ',
+      '認証トークン別（全 3 件）\n  tk-b: ',
+    ];
+    for (const [index, head] of axisHeads.entries()) {
+      const key = `axes#${String(index + 1)}`;
+      expect(text(key).startsWith(head), key).toBe(true);
+      expect(text(key), key).not.toContain(HEAD_ACCOUNT);
+      expect(text(key), key).not.toContain('合計 $');
+      expect(text(key), key).toContain('\n台帳の始点: 2026-10-23T12:00:00.000Z');
+      expect(ops(key), key).toEqual(['usage.aggregate']);
+    }
+    expect(text('axes#3')).not.toContain('回 / 1回');
+
+    // 取れなかったと 0
+    // 全部 0 で読めた記録は台帳に行を作らない（`fold.delta` が空）: 「合計 $0.0000」ではなく「その範囲には記録が無い」になる。いまの振る舞い
+    expect(text('zero-vs-unreadable#1')).toContain('その範囲には記録が無い。');
+    expect(text('zero-vs-unreadable#1')).not.toContain('合計 $');
+    expect(text('zero-vs-unreadable#1')).not.toContain('⚠ 一部の区切り');
+    expect(text('zero-vs-unreadable#2')).toContain('  mgr-001: $0.0000 / 1回 / 1回 $0.0000');
+    expect(text('zero-vs-unreadable#2')).toContain('⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: ');
+    expect(text('zero-vs-unreadable#2')).toContain('入力 1回');
+    expect(text('zero-vs-unreadable#2')).toContain('費用 2回');
+    expect(text('zero-vs-unreadable#2')).toContain('Web検索 2回（費用は合計に含む）');
+
+    // 無報告・読めない行
+    expect(text('unmetered-and-unreadable-rows#1')).toContain(
+      '⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: aaa・manager層 1ターン / codex・clone層 1ターン / codex・manager層 2ターン）。',
+    );
+    expect(text('unmetered-and-unreadable-rows#2')).toContain('⚠ 消費を報告しない provider');
+    expect(text('unmetered-and-unreadable-rows#3')).toContain('その範囲には記録が無い。');
+    expect(text('unmetered-and-unreadable-rows#4')).toContain(
+      '⚠ 読めない使用量の行が 7 行あり、合計に入っていない（読めない行の値は足していない。合計はその分少ない。内訳: 消費量の行 6 行 / 回数の行 1 行。日付: 2026-10-15, 2026-10-16, 2026-10-17, 2026-10-18, 2026-10-19 ほか 1 日）。',
+    );
+    expect(text('unmetered-and-unreadable-rows#5')).toContain('内訳: 回数の行 1 行）。');
+    expect(text('unmetered-only#1')).toContain(`${EMPTY_LEDGER}\n（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）\n⚠ 消費を報告しない provider のターンがある`);
+    expect(text('unmetered-only#2')).toContain('⚠ 読めない使用量の行が 1 行あり');
+
+    // 絞り込み
+    const filters: [number, Record<string, string>][] = [
+      [1, { managerId: 'mgr-001' }],
+      [2, { managerId: 'clone' }],
+      [3, { layer: 'clone' }],
+      [4, { layer: 'manager' }],
+      [5, { site: 'peer' }],
+      [6, { site: 'distill' }],
+      [7, { tokenId: 'tk-a' }],
+      [8, { tokenId: 'tk-b' }],
+      [9, { from: '2026-10-21' }],
+      [10, { to: '2026-10-21' }],
+      [11, { from: '2026-10-21' }],
+    ];
+    for (const [n, query] of filters) {
+      expect(aggregateArgs(`filters-single#${String(n)}`), `filters-single#${String(n)}`).toEqual(query);
+    }
+    expect(aggregateArgs('filters-combined#1')).toEqual({
+      managerId: 'mgr-001',
+      layer: 'manager',
+      site: 'session',
+      tokenId: 'tk-a',
+      from: '2026-10-20',
+      to: '2026-10-20',
+    });
+    expect(aggregateArgs('filters-combined#2')).toEqual({ from: '2026-10-21', to: '2026-10-21' });
+    expect(aggregateArgs('filters-combined#4')).toEqual({ layer: 'clone', from: '2026-10-22' });
+    expect(count(text('filters-combined#5'), BEFORE)).toBe(4);
+    // 台帳の行の日付（10-20〜22）は台帳の始点（10-23）より前なので、from を渡すとどの場面でも 4 つの「始点より前にかかっている」が付く
+    expect(count(text('filters-combined#1'), BEFORE)).toBe(4);
+    expect(text('filters-single#2')).toContain('マネージャー別:\n  clone: $0.0052');
+    expect(text('filters-no-match#1')).toContain('その範囲には記録が無い。');
+    expect(text('filters-no-match#1')).toContain('⚠ 台帳に1行も記録が無い委譲: 3件');
+    expect(text('filters-no-match#2')).toContain('マネージャー別（全 0 件）\n  （その軸には記録が無い）');
+    expect(text('filters-no-match#5')).toContain('日別（全 0 件）\n  （その軸には記録が無い）');
+
+    // 期間の逆
+    const ORDER = (to: string, from: string): string =>
+      `to（${to}）が from（${from}）より前なので、この範囲には1日も入らない\n`;
+    expect(text('date-order-notice#1').startsWith(`${ORDER('2026-10-20', '2026-10-22')}${HEAD_ACCOUNT}`)).toBe(true);
+    expect(text('date-order-notice#2').startsWith(`${ORDER('2026-10-20', '2026-10-22')}日別（全 0 件）`)).toBe(true);
+    for (const n of [3, 4, 5, 6]) {
+      expect(text(`date-order-notice#${String(n)}`), `#${String(n)}`).not.toContain('より前なので、この範囲には1日も入らない');
+    }
+    expect(text('date-order-notice-empty').startsWith(`${ORDER('2026-10-20', '2026-10-22')}${HEAD_ACCOUNT}`)).toBe(true);
+    expect(text('date-order-notice-empty')).toContain(EMPTY_LEDGER);
+
+    // 打ち切りと cursor
+    expect(linesOf('summary-cut-and-follow#1', '  2026-10-').length).toBe(14 + 0);
+    expect(text('summary-cut-and-follow#1')).toContain('…（残り 6 件は出していない。axis="date", cursor="');
+    expect(text('summary-cut-and-follow#1')).not.toContain('axis="manager"');
+    expect(text('summary-cut-and-follow#2').startsWith('日別（全 20 件）\n  2026-10-06: ')).toBe(true);
+    expect(linesOf('summary-cut-and-follow#2', '  2026-10-')).toHaveLength(6);
+    expect(text('summary-cut-and-follow#2')).not.toContain('残り');
+    expect(text('summary-cut-and-follow#2')).not.toContain(HEAD_ACCOUNT);
+
+    expect(linesOf('axis-page-and-follow#1', '  mgr-')).toHaveLength(100);
+    expect(text('axis-page-and-follow#1')).toContain('…（残り 30 件は出していない。axis="manager", cursor="');
+    expect(linesOf('axis-page-and-follow#2', '  mgr-')).toHaveLength(30);
+    expect(text('axis-page-and-follow#2')).toContain('  mgr-101: ');
+    expect(text('axis-page-and-follow#2')).not.toContain('  mgr-100: ');
+    expect(text('axis-page-and-follow#2')).not.toContain('残り');
+    expect(text('axis-page-and-follow#3')).toContain('マネージャー別（全 130 件）\n  （cursor より後ろは無い。これが最後の頁）');
+
+    expect(linesOf('axis-cursor-chain#1', '  mgr-')).toHaveLength(14);
+    expect(text('axis-cursor-chain#1')).toContain('…（残り 116 件は出していない。axis="manager", cursor="');
+    expect(linesOf('axis-cursor-chain#2', '  mgr-')).toHaveLength(100);
+    expect(text('axis-cursor-chain#2')).toContain('  mgr-015: ');
+    expect(text('axis-cursor-chain#2')).toContain('  mgr-114: ');
+    expect(linesOf('axis-cursor-chain#3', '  mgr-')).toHaveLength(16);
+    expect(text('axis-cursor-chain#3')).toContain('  mgr-115: ');
+    expect(text('axis-cursor-chain#3')).toContain('  mgr-130: ');
+    expect(text('axis-cursor-chain#4')).toContain('（cursor より後ろは無い。これが最後の頁）');
+
+    expect(text('axis-cursor-risen#1')).not.toContain(RISEN);
+    const risenBody = text('axis-cursor-risen#2').split(RISEN)[0] ?? '';
+    expect(text('axis-cursor-risen#2')).toContain(RISEN);
+    expect(risenBody).not.toContain('  mgr-001: ');
+    expect(risenBody).not.toContain('  mgr-050: ');
+    expect(text('axis-cursor-risen#2')).toContain('  mgr-001: $1005.00 / 2回 / 1回 $502.50');
+    expect(text('axis-cursor-risen#2')).toContain('  mgr-050: $956.00 / 2回 / 1回 $478.00');
+
+    // cursor の断り
+    for (const n of [1, 2, 3, 4]) {
+      const key = `axis-cursor-refused#${String(n)}`;
+      const title = n === 4 ? 'モデル別' : '日別';
+      const axis = n === 4 ? 'model' : 'date';
+      expect(text(key), key).toBe(
+        `${title}\ncursor が壊れている（この道具が返したものではないか、書き換えられている）。cursor を付けずに axis="${axis}" で usage_read を呼び直すと先頭から読める。`,
+      );
+    }
+    expect(text('axis-cursor-refused#5')).toContain(HEAD_LEDGER);
+    expect(text('axis-cursor-wrong-axis#2')).toBe(
+      'マネージャー別\ncursor が別の軸（または self_status）のものである。axis="manager" の cursor をそのまま渡すこと（自分で組み立てない）。',
+    );
+    expect(text('axis-cursor-wrong-axis#4')).toContain('日別（全 20 件）');
+
+    // アカウント全体の残り
+    expect(text('account-states#1')).toContain('まだ取りに行っていない（起動直後）。**0 ではなく、分からない。**');
+    expect(ops('account-states#1')).not.toContain('context.accountUsage');
+    expect(text('account-states#2')).toContain('プラン: max / 組織: org-fake');
+    expect(text('account-states#2')).toContain('  five_hour: 42% 使用 / あと 1時間30分でリセット');
+    expect(text('account-states#2')).toContain('  seven_day: 7% 使用 / あと 3日5時間でリセット');
+    expect(text('account-states#2')).toContain('  seven_day_opus: 0% 使用\n');
+    expect(text('account-states#2')).toContain('  seven_day_sonnet: 使用率は取れなかった / あと 0分でリセット');
+    expect(text('account-states#2')).toContain('支出上限: 12.5 USD / 100 USD（12.5% 使用）');
+    expect(text('account-states#3')).toContain('枠: 取れなかった（向こうが枠を返さなかった。**0% ではない**）');
+    expect(text('account-states#3')).toContain('支出上限: 取れなかった（**0 ではない**。この情報が無いと残額は分からない）');
+    expect(text('account-states#4')).toContain('プラン: （欄はあるが空） / 組織: （欄はあるが空）');
+    expect(text('account-states#4')).toContain('支出上限: 設定されていない');
+    expect(text('account-states#5')).toContain('**⚠️ 上の値は最後に取れたときのもの。2026-10-26T20:00:00.000Z から取り直しが失敗している');
+    expect(text('account-states#5')).toContain('  five_hour: 99.5% 使用');
+    expect(text('account-states#5')).toContain('支出上限: 3（単位不明） / 取れなかった');
+    expect(text('account-states#6')).toContain('取れなかった: 取りに行けなかった（テスト用）（2026-10-26T23:30:00.000Z）。**0 ではなく、分からない。**');
+    expect(text('account-states#7')).toContain('枠が返ってこない: 枠が返らなかった（テスト用）（2026-10-26T23:30:00.000Z）');
+    expect(text('account-states#7')).toContain('accountInfo の応答が持っていた欄（名前だけ）: email, plan');
+    expect(text('account-states#8')).toContain('accountInfo の応答: 無かった（欄の名前も取れていない）');
+    expect(text('account-states#9')).toContain('まだ取りに行っていない（起動直後）');
+    for (let n = 2; n <= 9; n += 1) expect(ops(`account-states#${String(n)}`)).toContain('context.accountUsage');
+    for (const n of [1, 2]) {
+      expect(ops(`account-with-axis#${String(n)}`)).toEqual(['usage.aggregate']);
+      expect(text(`account-with-axis#${String(n)}`)).not.toContain(HEAD_ACCOUNT);
+    }
+
+    // 記録の無い委譲
+    expect(text('unrecorded-managers#1')).toContain(UNREC_ZERO);
+    const unrec = text('unrecorded-managers#2');
+    expect(unrec).toContain('⚠ 台帳に1行も記録が無い委譲: 3件。上の合計にはまだ入っていない。');
+    expect(unrec.indexOf('mgr-904 [waiting_human]')).toBeLessThan(unrec.indexOf('mgr-902 [failed]'));
+    expect(unrec.indexOf('mgr-902 [failed]')).toBeLessThan(unrec.indexOf('mgr-901 [running]'));
+    expect(unrec).not.toContain('mgr-903');
+    expect(text('unrecorded-managers#3')).toContain(UNREC_ZERO);
+    expect(text('unrecorded-managers#4')).toContain(UNREC_UNKNOWN);
+    expect(ops('unrecorded-managers#4')).not.toContain('managers.list');
+    expect(aggregateArgs('unrecorded-managers#5')).toEqual({ managerId: 'mgr-001', from: '2026-10-22' });
+    expect(text('unrecorded-managers#5')).toContain('⚠ 台帳に1行も記録が無い委譲: 3件');
+    expect(text('unrecorded-managers#6')).toContain('その範囲には記録が無い。');
+    for (const key of ['unrecorded-managers-axis#1', 'unrecorded-managers-axis#2']) {
+      expect(ops(key), key).toEqual(['usage.aggregate']);
+      expect(text(key), key).not.toContain('台帳に1行も記録が無い委譲');
+    }
+    expect(text('unrecorded-managers-empty-range')).toContain('その範囲には記録が無い。\n\n⚠ 台帳に1行も記録が無い委譲: 3件');
+
+    // 始点の脚注
+    expect(text('ledger-axes-sources#1')).toContain('その範囲には記録が無い。');
+    expect(text('ledger-axes-sources#2')).toContain('認証トークンの軸の始点: 2026-10-24T12:00:00.000Z');
+    expect(text('ledger-axes-sources#2')).toContain('層と場所の軸の始点: 2026-10-23T12:00:00.000Z');
+    expect(count(text('ledger-axes-sources#2'), BEFORE)).toBe(4);
+    expect(count(text('ledger-axes-sources#3'), BEFORE)).toBe(1);
+    expect(text('ledger-axes-sources#3')).toContain('認証トークンの軸の始点より前にかかっている。');
+    expect(count(text('ledger-axes-sources#4'), BEFORE)).toBe(0);
+    expect(count(text('ledger-axes-sources#5'), BEFORE)).toBe(0);
+    expect(text('ledger-axes-sources#6').startsWith('認証トークン別（全 2 件）')).toBe(true);
+
+    // 値の形
+    expect(text('value-forms#1')).toContain('$12345.68');
+    expect(text('value-forms#1')).toContain('$0.0001');
+    expect(text('value-forms#1')).toContain('  作業者 一: $0.9999');
+    expect(text('value-forms#1')).toContain('  モデル 一: $0.9999');
+    expect(text('value-forms#1')).toContain('入力 123,456,790 / ');
+    expect(text('value-forms#2')).toContain('マネージャー別（全 4 件）\n  mgr-003: $12345.68');
+
+    // ストアが投げる
+    for (const key of ['aggregate-throws#1', 'aggregate-throws#2', 'aggregate-throws#3']) {
+      expect(step(key).output.thrown, key).toBe(true);
+      expect(step(key).output.errorName, key).toBe('Error');
+      expect(text(key), key).toBe(AGGREGATE_FAILS);
+      expect(ops(key), key).toEqual(['usage.aggregate']);
+      expect(step(key).calls[0]?.outcome, key).toBe(`threw Error: ${AGGREGATE_FAILS}`);
+    }
+    expect(step('aggregate-throws#4').output.thrown).toBe(false);
+    expect(ops('aggregate-throws#4')).toEqual([]);
+    expect(step('aggregate-throws#5').output.thrown).toBe(false);
+    expect(ops('aggregate-throws#5')).toEqual([]);
+    expect(ops('aggregate-throws#6')).toEqual(FULL_OPS);
+    expect(step('recorded-or-managers-throws#1').output.thrown).toBe(true);
+    expect(text('recorded-or-managers-throws#1')).toBe('委譲の一覧が読めない');
+    expect(ops('recorded-or-managers-throws#1')).toEqual(['usage.aggregate', 'managers.list', 'usage.recordedManagerIds']);
+    expect(step('recorded-or-managers-throws#2').output.thrown).toBe(true);
+    expect(text('recorded-or-managers-throws#2')).toBe('記録の一覧が読めない');
+    expect(step('recorded-or-managers-throws#3').output.thrown).toBe(true);
+    expect(ops('recorded-or-managers-throws#3')).toEqual(['usage.aggregate', 'managers.list', 'usage.recordedManagerIds']);
+    expect(step('recorded-or-managers-throws#4').output.thrown).toBe(false);
+    expect(ops('recorded-or-managers-throws#4')).toEqual(['usage.aggregate']);
   });
 });
-
-const MARKERS_PLACEHOLDER = true;
