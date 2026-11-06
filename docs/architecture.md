@@ -622,7 +622,7 @@ packages/storage-pg  クラウド用ドライバ（PostgreSQL / drizzle）
 apps/daemon          alteroidd = core をホストする常駐プロセス + HTTP API（hono）
 apps/runner          alteroid-runner = manager-runner。SDK を隔離して走らせる
 apps/cli             alteroid = daemon への薄いクライアント（hono/client で型共有）
-apps/web             公式の画面。React Router v7 の SPA。packages/swr（→ api-client）
+apps/web             公式の画面。React Router v8 の SPA。packages/swr（→ api-client）
                      経由でデーモンの API だけを見る（独自の経路を持たない）
 packages/api-client  生成 spec から起こした外部向けクライアント。packages/swr が最初の消費者
 packages/logic       Web UI の純ロジック（表示の整形・接続先と資格情報の置き場・日誌の窓・
@@ -800,7 +800,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 | M3 | 自律 — スケジューラ、外部イベント、クローンの発意、承認待ちキュー |
 | M4 | クラウド — pg ドライバ、SessionStore、**daemon / manager-runner の分離**、Dockerfile + compose（3コンテナ）、setup-token |
 | M5 | 複数 manager-runner と水平スケール — runner の登録・生存判定・配置、runner 障害時の再開 |
-| M6 | Web UI — React Router v7 の SPA（`apps/web`）。CLI と等価な入口を API の上に用意する |
+| M6 | Web UI — React Router v8 の SPA（`apps/web`）。CLI と等価な入口を API の上に用意する |
 
 **未完のフェーズ**の成果物・受け入れ基準・地雷は **Issue が持つ**（M5 は #485、M7 は #486）。実装はそちらに従う。**上の表はスコープの索引であって、受け入れ基準を持たない。**
 

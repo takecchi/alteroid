@@ -69,7 +69,7 @@ catalog:
   '@aws-sdk/lib-storage': ^3.1140.0
   # S3 クライアントのテスト用の差し替え（本物の S3 も MinIO も使わない）
   aws-sdk-client-mock: ^4.1.0
-  # Web UI（apps/web）。React Router v7 を SPA モード（ssr: false）で使う。
+  # Web UI（apps/web）。React Router v8 を SPA モード（ssr: false）で使う。
   #
   # **SSR を採らないのは配置の自由のため。** デーモンをどこに置き、画面をどこに置くかは
   # 人によって違う（同一ホスト / api.example.com + www.example.com / 静的ホスティング）。
