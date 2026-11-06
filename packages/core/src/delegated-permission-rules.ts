@@ -118,7 +118,7 @@ export interface PermissionRulesRunnerResult {
 // インスタンスは1つだけ作って全経路へ渡す（`McpServerService` と同じ）: 名乗りの降ろし直しと許可の足し引きの配布を同じ列で直列化し、古い一覧が新しい一覧を上書きしないため。
 export interface DelegatedPermissionRuleService {
   /**
-   * runner が名乗ったときに一覧を降ろす。口を持たない偽物へは `null`。失敗は投げる（日誌と挑み直しは `ManagerPool` が持つ）。
+   * runner が名乗ったときに一覧を降ろす。失敗は投げる（日誌と挑み直しは `ManagerPool` が持つ）。
    * 一覧が変わった runner にだけ「配った」を日誌に残す: 名乗り直しのたびに同じ行が積まれないため。
    */
   syncRunner(runner: RunnerClient): Promise<RunnerPermissionRulesResult | null>;

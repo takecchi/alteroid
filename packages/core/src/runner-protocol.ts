@@ -1511,7 +1511,7 @@ export interface RunnerClient {
   stagesSince?(sinceMs: number): RunnerRequestStages;
   /**
    * `ping` に相乗りさせない: `ping` は本文を読み捨てる設計で、読む物を1つ足すと読んではいけない物も読む口になるため。
-   * 採るのは資源だけで、`runnerId` / `workspacePath` は採らない。省略した実装は名簿が「報告しない器」として扱い、`select` で不利にしない。
+   * 採るのは資源だけで、`runnerId` / `workspacePath` は採らない。`undefined` を返した器は名簿が「報告しない器」として扱い、`select` で不利にしない。
    * `signal` は配置の期限で、返らない1台が配置全体を止めないために使う。
    * 報告しない器は `undefined` を返す。試験の偽の既定（`fakeRunnerClient`）も `undefined`。
    */
@@ -2478,7 +2478,7 @@ class Registry implements RunnerRegistry {
           };
         } catch {
           // 資源を聞けなくても失敗の記憶は落とさない: 名簿が自分で持つ値で、捨てると答えない器ほど落とした事実が消える。
-          // `unreachable: true` は「口が無い／`undefined` を返した」成功経路とは別の観測（probe が返っていない）で、`chooseByResources` が別の値として扱う。
+          // `unreachable: true` は「`undefined` を返した」成功経路とは別の観測（probe が返っていない）で、`chooseByResources` が別の値として扱う。
           return {
             client,
             resources: undefined,
@@ -3067,7 +3067,7 @@ function chooseByResources(
     resources: RunnerPlacementResources | undefined;
     /** 窓の内側で、その器が `failed` で落とした本数。渡さない呼び出しは 0。 */
     recentFailures?: number;
-    /** `resources()` が throw したか期限切れで reject した場合だけ `true`（「口が無い／`undefined` を返した」とは別）。渡さない呼び出しは `false`。 */
+    /** `resources()` が throw したか期限切れで reject した場合だけ `true`（「`undefined` を返した」とは別）。渡さない呼び出しは `false`。 */
     unreachable?: boolean;
     /** {@link pidsSaturationFrom} と判定された器か。渡さない呼び出しは `false`。 */
     pidsSaturated?: boolean;

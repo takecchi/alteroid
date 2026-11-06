@@ -41,7 +41,7 @@ function pluginFingerprintEntryOf(plugin: RunnerPluginPush): RunnerPluginFingerp
  * Codex の認証の口は、`setCodexAuth` が何もせず、`takeCodexAuthWriteBack` が書き戻し無し（`null`）。
  * 読む・探る口は、`resources` が資源を報告せず（`undefined`）、`transcriptTail` が末尾無し（`null`）、`unpushedWork` が確かめられない（`undefined`）。
  * 置く・消す口は、`stageAttachment` が受け取れず投げ（呼び手は理由つきで断る）、`deleteRescueRef` が消せなかった（`failed`・`other`）、`setPermissionRules` が何も置かない（`count: 0`・`changed: false`）。
- * 置くと「口が無いとき」の道を通っていた試験の道が変わるため（持たない偽は、呼ぶ側がその口が無い場合の道へ倒す）。
+ * 省略可能な口の既定を置かないのは、置くと「口が無いとき」の道を通っていた試験の道が変わるため（持たない偽は、呼ぶ側がその口が無い場合の道へ倒す）。
  * クラスの偽は {@link FakeRunnerClientBase} を継ぐ（既定は同じ）。
  */
 export function fakeRunnerClient(overrides: Partial<RunnerClient> = {}): RunnerClient {
