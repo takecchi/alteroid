@@ -1,3 +1,4 @@
+import { fakeCloneHost } from '@alteroid/core';
 import type { CloneHost } from '@alteroid/core';
 import { createPgStoresFromDb, type Db, type PgStores } from '@alteroid/storage-pg';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -15,21 +16,9 @@ let stores: PgStores;
 let app: ReturnType<typeof createApp>;
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 const badSlug = 'Not_Valid_SLUG!';

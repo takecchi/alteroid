@@ -3,6 +3,7 @@ import {
   createMemoryStores,
   createProfileService,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
 } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
@@ -13,23 +14,9 @@ const AUTH = { authorization: 'Bearer test-token' };
 const JSON_AUTH = { ...AUTH, 'content-type': 'application/json' };
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function setup() {

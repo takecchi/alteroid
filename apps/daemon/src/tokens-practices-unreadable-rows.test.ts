@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { captureStderr, createCloneTools, createTokenPoolService } from '@alteroid/core';
+import {
+  captureStderr,
+  createCloneTools,
+  createTokenPoolService,
+  fakeCloneHost,
+} from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
@@ -98,21 +103,9 @@ async function seedPg(): Promise<Seeded> {
 }
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function getJson(stores: Stores, path: string): Promise<Record<string, unknown>> {

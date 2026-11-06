@@ -7,6 +7,7 @@ import {
   createTokenPoolService,
   createTokenRotator,
   describeUnreadableTokens,
+  fakeCloneHost,
 } from '@alteroid/core';
 import type { CloneHost, Stores, TokenProbePort, TokenSpreadPort } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -31,21 +32,9 @@ const NOID_TOKEN_RAW = { label: 'no-id-label', value: NOID_TOKEN_VALUE, order: '
 const AUTH = { authorization: 'Bearer test-token' };
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function seed(options: { withNoIdRow?: boolean } = {}) {

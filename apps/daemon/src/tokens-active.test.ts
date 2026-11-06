@@ -1,4 +1,4 @@
-import { createTokenPoolService, UnreadableActiveTokenError } from '@alteroid/core';
+import { createTokenPoolService, fakeCloneHost, UnreadableActiveTokenError } from '@alteroid/core';
 import type { CloneHost } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { describe, expect, it } from 'vitest';
@@ -12,21 +12,9 @@ const DUMMY_VALUE = 'dummy-token-value-never-respond';
 const REASON = 'generation が数値でない（テスト用）';
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function seed() {

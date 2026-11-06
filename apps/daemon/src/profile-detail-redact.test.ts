@@ -7,6 +7,7 @@ import {
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
+  fakeCloneHost as fakeCloneHostBase,
 } from '@alteroid/core';
 import type { CloneHost, ProfileApplier, Stores } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,23 +19,9 @@ import { createApp } from './app.js';
 const FAKE_VALUE = 'FAKE_SECRET_VALUE_2429';
 
 function fakeCloneHost(stores: Stores): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  return fakeCloneHostBase({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
 }
 
 function appWith(stores: Stores, applier: ProfileApplier) {

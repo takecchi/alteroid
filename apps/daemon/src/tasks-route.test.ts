@@ -1,27 +1,18 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
-import type { CloneHost, Stores, Task } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  fakeCloneHost,
+} from '@alteroid/core';
+import type { Stores, Task } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
 function setup(stores: Stores = createMemoryStores()) {
-  const clone: CloneHost = {
-    postPersisted: async () => 'persisted',
-    post: () => {},
-    recycleSessionForToken: () => {},
-    subscribe: () => () => {},
-    async endConversation() {},
-    async answerApproval() {},
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
+  const clone = fakeCloneHost({
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async stop() {},
-  };
+  });
   const app = createApp({ clone, stores, token: 'test-token', shutdown: () => {} });
   const get = (path: string) =>
     app.request(path, { method: 'GET', headers: { authorization: 'Bearer test-token' } });

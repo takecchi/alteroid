@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net';
 
 import { serve, type ServerType } from '@hono/node-server';
-import type { ChatStreamEvent, CloneHost, ManagerPool, Stores } from '@alteroid/core';
-import { createMemoryStores, fakeManagerPool } from '@alteroid/core';
+import type { ChatStreamEvent, ManagerPool, Stores } from '@alteroid/core';
+import { createMemoryStores, fakeCloneHost, fakeManagerPool } from '@alteroid/core';
 import { createApp, createJournalBus } from '@alteroid/daemon';
 import createClient from 'openapi-fetch';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -74,21 +74,13 @@ function fakeClone(stores: Stores) {
     async stop() {},
   });
 
-  const clone: CloneHost = {
+  const clone = fakeCloneHost({
     // `post` と同じく返事を流す: `/chat` の人間の発言はこちらを通る（#4679）
     async postPersisted(event) {
       clone.post(event);
       return 'persisted';
     },
     managers,
-    recycleSessionForToken() {},
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    async dropQueuedInboxEvents() {
-      return 0;
-    },
     post(event) {
       if (event.type !== 'human_message') return;
       const conversationId = event.conversationId;
@@ -131,7 +123,6 @@ function fakeClone(stores: Stores) {
         unsubscribe: () => set.delete(listener),
       };
     },
-    async endConversation() {},
     async answerApproval(id, answer) {
       answered.push({ id, answer });
       const approval = await stores.jobs.getApproval(id);
@@ -143,8 +134,7 @@ function fakeClone(stores: Stores) {
         });
       }
     },
-    async stop() {},
-  };
+  });
 
   return { clone, answered, inProgress, emit, listeners };
 }

@@ -1,3 +1,4 @@
+import { fakeCloneHost } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
@@ -38,21 +39,9 @@ async function seedPg(): Promise<Stores> {
 }
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: { list: async () => [] } as unknown as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function getUsage(stores: Stores): Promise<Record<string, unknown>> {

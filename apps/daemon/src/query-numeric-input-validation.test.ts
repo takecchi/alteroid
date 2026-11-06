@@ -1,5 +1,5 @@
 import type { CloneHost, ManagerPool } from '@alteroid/core';
-import { createMemoryStores, fakeManagerPool } from '@alteroid/core';
+import { createMemoryStores, fakeCloneHost, fakeManagerPool } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -64,21 +64,9 @@ function stubManagerPool(): ManagerPool {
 }
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: stubManagerPool(),
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 let app: ReturnType<typeof createApp>;

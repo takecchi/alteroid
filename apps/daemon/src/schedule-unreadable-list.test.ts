@@ -6,6 +6,7 @@ import {
   captureStderr,
   createCloneTools,
   createScheduler,
+  fakeCloneHost,
 } from '@alteroid/core';
 import type { CloneHost, ScheduledRequest, Scheduler, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -78,21 +79,9 @@ async function seedPg(): Promise<Seeded> {
 }
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function getSchedule(stores: Stores): Promise<Record<string, unknown>> {

@@ -1,4 +1,4 @@
-import { createTokenPoolService, captureStderr } from '@alteroid/core';
+import { createTokenPoolService, captureStderr, fakeCloneHost } from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { describe, expect, it } from 'vitest';
@@ -15,21 +15,9 @@ const V_NEW = 'dummy-token-value-NEW-never-journal';
 const ALL_VALUES = [V_A, V_B, V_C, V_NEW];
 
 function stubCloneHost(): CloneHost {
-  return {
-    postPersisted: async () => 'persisted',
-    post: () => undefined,
-    dropQueuedInboxEvents: async () => 0,
-    subscribe: () => () => undefined,
-    endConversation: async () => undefined,
-    answerApproval: async () => undefined,
+  return fakeCloneHost({
     managers: {} as CloneHost['managers'],
-    usageBlocked: false,
-    usageReleasePending: false,
-    usageBlockedResetsAt: undefined,
-    usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
-    stop: async () => undefined,
-  };
+  });
 }
 
 async function seed(options: { journalDown?: boolean } = {}) {
