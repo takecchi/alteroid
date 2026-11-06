@@ -253,11 +253,18 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
         .describe(
           'この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると' +
             '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。' +
-            '人間の依頼の task のために委譲するときは渡すこと。渡さないと task に結び付かず、起点の会話へ返答した時点で、器が task を自動で done にする。',
+            '人間の依頼を1件だけ読んだターンでは、省略すると器がその task に結ぶ。2件以上読んだターンや、報告を読むターン・tick のターンでは、省略すると task に結び付かない（その task のために委譲するなら渡すこと）。',
         ),
     },
     async (rawArgs) => {
-      const { request, cwd, runnerId, attachments, supersedes, taskId } = rawArgs as unknown as {
+      const {
+        request,
+        cwd,
+        runnerId,
+        attachments,
+        supersedes,
+        taskId: explicitTaskId,
+      } = rawArgs as unknown as {
         request: string;
         supersedes?: string | undefined;
         cwd?: string | undefined;
@@ -270,9 +277,19 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
       if (requestViolation !== null) return text(requestViolation);
       // `start` と日誌の3行には、検めたのと同じ NUL を除いた値を渡す: 素の値を渡すと、ストアが NUL を落とす日誌と委譲に渡る依頼文が1字違うため（#6411）
       const requestText = stripNul(request);
+      let taskId = explicitTaskId;
       if (taskId !== undefined) {
         const taskViolation = await describeManagerStartTaskViolation(stores, taskId);
         if (taskViolation !== null) return text(taskViolation);
+      } else {
+        // 明示が無いときは、器が決めた既定の task（そのターンで読んだ人間の task が1件のとき）に結ぶ。その task が閉じている・走っている委譲があるなど、明示のときなら断られる条件に当たるときは、断らず結ばずに起こす
+        const candidate = await context.defaultDelegationTaskId?.();
+        if (
+          candidate !== undefined &&
+          (await describeManagerStartTaskViolation(stores, candidate)) === null
+        ) {
+          taskId = candidate;
+        }
       }
       // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
       // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため

@@ -299,24 +299,6 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
     await s.clone.stop();
   });
 
-  it('taskId を渡さない委譲（manager_start）は task に結び付かないので、同じ会話の task も閉じる', async () => {
-    const started: ManagerStartInput[] = [];
-    const s = boot(
-      (_turn, _input, tool) => [
-        ...say('委譲した'),
-        { run: () => tool('manager_start')({ request: '重い調査' }) },
-      ],
-      { managers: stubPool(started) },
-    );
-    s.clone.post(human('evt-nt', '重い調査を頼みたい'));
-    await waitForTerminal(s.events);
-
-    expect(started[0]?.conversationId).toBe('conv-1');
-    expect(started[0]?.taskId).toBeUndefined();
-    expect(await statusOf(s.stores, 'evt-nt')).toBe('done');
-    await s.clone.stop();
-  });
-
   it('task_keep で印を立てた task は閉じない。外した後の返答では閉じる', async () => {
     // 発言の id と task の id を同じにして、ターンがその発言を読むようにする（読んだ発言の task だけが閉じる）
     const stores = createMemoryStores();

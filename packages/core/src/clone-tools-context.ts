@@ -42,6 +42,11 @@ export interface ToolContext {
    */
   noteDelegationStarted?: (taskId: string | undefined) => void;
   /**
+   * `manager_start` が `taskId` なしで呼ばれたときの既定の結び先の task の id（そのターンが読んだ人間の task が1件だけのとき。無ければ `undefined`）。
+   * 決めるのは器（clone.ts）。結んだら `taskId` を明示したときと同じ扱いにする。無い器（テスト・蒸留）は結ばない。
+   */
+  defaultDelegationTaskId?: () => Promise<string | undefined>;
+  /**
    * `ask_human` / `request_permission` が人間への問いを積んだ（その問いの会話 id。無ければ `undefined`）。
    * そのターンでは、その会話の task を自動 done にしない（人間の答え待ちになるため。#5469 P5）。無い器は何もしない。
    * 前のターンで出した未回答の問いは、器が閉じる直前に承認待ちの台帳（pendingOnly）から引くので、ここで控えるのは「このターンで出した問い」だけ（台帳に書けない回の保険を兼ねる）。

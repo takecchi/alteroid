@@ -1731,7 +1731,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         '人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。',
         '返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。',
         '印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。',
-        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。',
+        '自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときの taskId は、人間の依頼を1件だけ読んだターンでは省略してよい。2件以上読んだターンなどで渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。',
       ].join(' '),
       {
         taskId: z

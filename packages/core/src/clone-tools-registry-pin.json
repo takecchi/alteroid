@@ -764,7 +764,7 @@
   },
   {
     "name": "task_keep",
-    "description": "task に「続く」の印を立てる（keep=true）／外す（keep=false）。 人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。 返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。 印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。 自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときは taskId を渡すこと。渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。",
+    "description": "task に「続く」の印を立てる（keep=true）／外す（keep=false）。 人間の発言の task は、その発言を読んで返答したターンの終わりに、queued であれば器が自動で done にする（理由と閉じた主体 daemon が残り、日誌にも書かれる）。 返答したあとも続ける仕事（返答は途中経過で、まだ終わっていない）は、返答する前にこの印を立てておくと、自動では閉じない。 印は状態・並びを動かさない。印を立てた task を終えるときは task_set_status で done にすること。 自動 done が閉じない場合はほかにもある: waiting / needs_decision（待ち・判断待ち）、その会話に答えの無い問い（ask_human・request_permission。前のターンのものを含む。不要になった問いは approval_withdraw で取り下げると対象に戻る）が残っているとき、その task に結び付いた委譲（manager_start の taskId。Job.taskId）が走っている（running / waiting_human。前のターンで起こしたものを含む）か、このターンで manager_send で頼んだとき（委譲を起こすときの taskId は、人間の依頼を1件だけ読んだターンでは省略してよい。2件以上読んだターンなどで渡さない委譲は task に結び付かず、この判定に数えられない）、まだ読んでいない発言の task、起点の会話が無い task。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -1327,7 +1327,7 @@
           "type": "string"
         },
         "taskId": {
-          "description": "この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。人間の依頼の task のために委譲するときは渡すこと。渡さないと task に結び付かず、起点の会話へ返答した時点で、器が task を自動で done にする。",
+          "description": "この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。人間の依頼を1件だけ読んだターンでは、省略すると器がその task に結ぶ。2件以上読んだターンや、報告を読むターン・tick のターンでは、省略すると task に結び付かない（その task のために委譲するなら渡すこと）。",
           "type": "string"
         }
       },

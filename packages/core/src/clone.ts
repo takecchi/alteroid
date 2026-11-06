@@ -188,6 +188,7 @@ import {
 } from './quota-recovery-notice.js';
 import { autoCloseRepliedTasks, opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
 import type { TurnReplyVia } from './task-auto-done.js';
+import { isTaskClosed } from './task.js';
 import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
@@ -6152,6 +6153,7 @@ class Clone implements CloneHost {
       noteDelegationStarted: (taskId) => {
         if (taskId !== undefined) this.#turnReplies.delegated.add(taskId);
       },
+      defaultDelegationTaskId: () => this.#defaultDelegationTaskId(),
       noteQuestionAsked: (conversationId) => {
         if (conversationId !== undefined) this.#turnReplies.asked.add(conversationId);
       },
@@ -7663,6 +7665,25 @@ class Clone implements CloneHost {
         : { approvalId: turn.approvalId }),
       ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
     });
+  }
+
+  /**
+   * `manager_start` を `taskId` なしで呼んだときの既定の結び先。**このターンが読んだ人間の発言が1件だけで、その task が人間起点・開いているとき**だけ、その task の id。
+   * 読んだ発言の id は task の id と同じ（`taskFromHumanIntake`）。0件（報告・timer・tick・回答のターン）・2件以上（どの task の委譲か決められない）・読めない・無い・閉じている task は `undefined`（結ばない）。
+   * 走っている委譲が既にある task を断る判定は道具の側（`describeManagerStartTaskViolation`）に在り、既定の結び先ではそれに当たったとき断らず結ばずに起こす。
+   */
+  async #defaultDelegationTaskId(): Promise<string | undefined> {
+    const ids = [...this.#turnReplies.readSignalIds];
+    const [id] = ids;
+    if (ids.length !== 1 || id === undefined) return undefined;
+    try {
+      const task = await this.#stores.tasks.get(id);
+      return task !== null && task.origin === 'human' && !isTaskClosed(task.status)
+        ? id
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
