@@ -502,6 +502,34 @@ describe('summarizeJournalEntry — 添付の控え（#4017）', () => {
     );
   });
 
+  it('名前の数の境目: ちょうど3件は「ほか」を付けず、4件で「ほか 1 件」。受け取れなかった側も同じ規則で、空の配列は何も足さない', () => {
+    const exchange = (
+      attachments: ReturnType<typeof ref>[],
+      rejectedAttachments?: { name: string; reason: string }[],
+    ): JournalEntry => ({
+      type: 'exchange',
+      id: 'x-7',
+      at: '2026-10-07T00:00:00.000Z',
+      with: 'human',
+      role: 'inbound',
+      text: 'やあ',
+      attachments,
+      ...(rejectedAttachments === undefined ? {} : { rejectedAttachments }),
+    });
+    const names = (list: string[]) => list.map((n) => ref(n, `${n}.txt`));
+    expect(summarizeJournalEntry(exchange(names(['a', 'b', 'c'])))).toBe(
+      'human ← やあ［添付 3件: a.txt、b.txt、c.txt］',
+    );
+    expect(summarizeJournalEntry(exchange(names(['a', 'b', 'c', 'd'])))).toBe(
+      'human ← やあ［添付 4件: a.txt、b.txt、c.txt、ほか 1 件］',
+    );
+    expect(summarizeJournalEntry(exchange([]))).toBe('human ← やあ');
+    const rejected = ['p', 'q', 'r', 's'].map((n) => ({ name: `${n}.bin`, reason: '大きすぎる' }));
+    expect(summarizeJournalEntry(exchange(names(['a']), rejected))).toBe(
+      'human ← やあ［添付 1件: a.txt］［受け取れず 4件: p.bin、q.bin、r.bin、ほか 1 件］',
+    );
+  });
+
   it('受け取れなかったファイルだけの報告も、空に見えない', () => {
     const entry: JournalEntry = {
       type: 'exchange',
