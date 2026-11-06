@@ -3,7 +3,11 @@
 
 import { z } from 'zod';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
-import { ATTACHMENT_FROM_CLASSES, readAttachmentLimits } from './attachment.js';
+import {
+  ATTACHMENT_FROM_CLASSES,
+  readAttachmentLimits,
+  type AttachmentMeta,
+} from './attachment.js';
 import { putLocalFile } from './file-put.js';
 import {
   deleteFile,
@@ -52,8 +56,8 @@ import {
   renderListing,
   renderListingFromEnd,
 } from './excerpt.js';
-import type { Task, JournalEntry } from './schema.js';
-import { UnreadableJournalEntryError, UnreadableTaskError } from './store.js';
+import type { Task, JournalEntry, JournalEntryInput } from './schema.js';
+import { UnreadableJournalEntryError, UnreadableTaskError, type Stores } from './store.js';
 import {
   describeIntRangeViolation,
   describeStringLengthViolation,
@@ -325,6 +329,65 @@ function renderTaskSaySaid(
   );
 }
 
+// 消す前に書く先の行（消した後では名前も大きさも辿れないので、控えの要約を先に残す）
+function buildFileDeleteEntry(meta: AttachmentMeta): JournalEntryInput {
+  return {
+    type: 'decision',
+    decision: `添付の中身と控えを消す: ${meta.name}（id=${meta.id}）`,
+    grounds: `消す前の控え: ${describeAttachmentForJournal(meta)}`,
+  };
+}
+
+// 置き場から消せずに断ったときの行（控えが読めていなければ `id=` の形）
+function buildFileDeleteRefusedEntry(args: {
+  id: string;
+  meta: AttachmentMeta | undefined;
+  reason: string;
+}): JournalEntryInput {
+  const { id, meta, reason } = args;
+  return {
+    type: 'decision',
+    decision: `添付の中身を置き場から消せなかったので、消していない（控えも残した）: ${meta === undefined ? `id=${id}` : `${meta.name}（id=${meta.id}）`}`,
+    grounds: `理由: ${reason}。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。`,
+  };
+}
+
+function renderFileDeleteFailed(id: string, error: unknown): string {
+  return `添付 ${id} を消せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`;
+}
+
+// 消す前の日誌。書けなければ投げて、何も消さない（`act-not-performed`）
+async function journalFileDeleteBefore(stores: Stores, meta: AttachmentMeta): Promise<void> {
+  await appendJournalOrThrow(
+    'file_delete',
+    stores.journal,
+    buildFileDeleteEntry(meta),
+    'act-not-performed',
+  );
+}
+
+// 断った後に足す行: 先に書いた「消す」の行だけでは、日誌が消したように読める。書けなくても断りの結果は変えない
+async function journalFileDeleteRefused(
+  stores: Stores,
+  id: string,
+  meta: AttachmentMeta | undefined,
+  reason: string,
+): Promise<void> {
+  await appendJournalOrDrop(
+    'file_delete',
+    stores.journal,
+    buildFileDeleteRefusedEntry({ id, meta, reason }),
+  );
+}
+
+// 控えを読んだ後に別の手で消えていた回: 先に書いた「消す」の行はこの呼びでは実行されていない。書けなくても「無い」の結果は変えない
+async function journalFileDeleteAlreadyGone(stores: Stores, meta: AttachmentMeta): Promise<void> {
+  await appendJournalOrDrop('file_delete', stores.journal, {
+    type: 'decision',
+    ...describeAttachmentAlreadyGoneRetraction(meta),
+  });
+}
+
 export function attachTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId } = shared;
   return [
@@ -541,41 +604,14 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
               stores,
               context.attachmentCopiesDir ?? fallbackAttachmentCopiesDir(),
               id,
-              async (meta) => {
-                // 消した後では名前も大きさも辿れないので、先に書く。書けなければ投げて、何も消さない（`act-not-performed`）
-                await appendJournalOrThrow(
-                  'file_delete',
-                  stores.journal,
-                  {
-                    type: 'decision',
-                    decision: `添付の中身と控えを消す: ${meta.name}（id=${meta.id}）`,
-                    grounds: `消す前の控え: ${describeAttachmentForJournal(meta)}`,
-                  },
-                  'act-not-performed',
-                );
-              },
-              async (meta, reason) => {
-                // 断った後に足す行: 先に書いた「消す」の行だけでは、日誌が消したように読める。書けなくても断りの結果は変えない
-                await appendJournalOrDrop('file_delete', stores.journal, {
-                  type: 'decision',
-                  decision: `添付の中身を置き場から消せなかったので、消していない（控えも残した）: ${meta === undefined ? `id=${id}` : `${meta.name}（id=${meta.id}）`}`,
-                  grounds: `理由: ${reason}。直前の「消す」の行は実行されていない。もう一度 file_delete で再試行できる。`,
-                });
-              },
-              async (meta) => {
-                // 控えを読んだ後に別の手で消えていた回: 先に書いた「消す」の行はこの呼びでは実行されていない。書けなくても「無い」の結果は変えない
-                await appendJournalOrDrop('file_delete', stores.journal, {
-                  type: 'decision',
-                  ...describeAttachmentAlreadyGoneRetraction(meta),
-                });
-              },
+              (meta) => journalFileDeleteBefore(stores, meta),
+              (meta, reason) => journalFileDeleteRefused(stores, id, meta, reason),
+              (meta) => journalFileDeleteAlreadyGone(stores, meta),
             ),
           );
         } catch (error) {
           if (error instanceof JournalNotRecordedError) throw error;
-          return text(
-            `添付 ${id} を消せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
-          );
+          return text(renderFileDeleteFailed(id, error));
         }
       },
     ),
