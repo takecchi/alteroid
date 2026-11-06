@@ -185,6 +185,61 @@ describe('DELETE /schedule/:kind は日誌を先に書く（#5234）', () => {
     const left = await stores.inbox.peekPending();
     expect(left.entries.map(({ event }) => event.id)).toEqual(['kept']);
   });
+
+  it('未読の起動を消しきれなかったら、200 のまま外した行にその旨が添わる（#6544）', async () => {
+    const at = '2026-10-02T00:00:00.000Z';
+    await stores.inbox.put({ type: 'timer', id: 'gone', at, kind: KIND }, at);
+    const clone = {
+      ...stubClone(),
+      dropQueuedInboxEvents: () => Promise.reject(new Error('配達の止めが落ちた（test）')),
+    } as unknown as CloneHost;
+
+    let response: Response | undefined;
+    const stderr = await captureStderr(async () => {
+      response = await createApp({
+        clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+      }).request(`/schedule/${KIND}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    expect(response?.status).toBe(200);
+    expect(stderr.join('')).toContain('取り消した定期の依頼の未読の起動の消し込み');
+    const rows = await decisions(stores);
+    expect(rows[1]?.humanAction?.kind).toBe('schedule_remove');
+    expect(rows[1]?.decision).toBe(
+      `人間が定期の依頼を外した: ${KIND}: 人間が見た本文` +
+        '（ただし、この依頼の未読の起動を受信箱から消しきれなかった。取り消した依頼の起動が、本文なしのターンで走りうる）',
+    );
+    expect(await stores.schedules.get(KIND)).toBeNull();
+  });
+
+  it('未読の起動を消しきれた回は、外した行に何も添えない', async () => {
+    const at = '2026-10-02T00:00:00.000Z';
+    await stores.inbox.put({ type: 'timer', id: 'gone', at, kind: KIND }, at);
+    const clone = {
+      ...stubClone(),
+      dropQueuedInboxEvents: (ids: readonly string[]) => Promise.resolve(ids.length),
+    } as unknown as CloneHost;
+
+    const response = await createApp({
+      clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    }).request(`/schedule/${KIND}`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const rows = await decisions(stores);
+    expect(rows[1]?.decision).toBe(`人間が定期の依頼を外した: ${KIND}: 人間が見た本文`);
+  });
 });
 
 async function app404(stores: Stores): Promise<Response> {

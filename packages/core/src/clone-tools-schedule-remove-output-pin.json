@@ -15,9 +15,9 @@
     "timers-none#2": 7,
     "timers-none#3": 7,
     "no-drop-port": 19,
-    "timers-failures#1": 7,
-    "timers-failures#2": 7,
-    "timers-failures#3": 7,
+    "timers-failures#1": 63,
+    "timers-failures#2": 63,
+    "timers-failures#3": 63,
     "not-found#1": 17,
     "not-found#2": 13,
     "not-found#3": 19,
@@ -1091,8 +1091,8 @@
     },
     "timers-failures#1": {
       "output": {
-        "length": 7,
-        "text": "p を外した。",
+        "length": 63,
+        "text": "p を外した。ただし、この依頼の未読の起動を受信箱から消しきれなかった（取り消した依頼の起動が、本文なしのターンで走りうる）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1183,8 +1183,8 @@
     },
     "timers-failures#2": {
       "output": {
-        "length": 7,
-        "text": "r を外した。",
+        "length": 63,
+        "text": "r を外した。ただし、この依頼の未読の起動を受信箱から消しきれなかった（取り消した依頼の起動が、本文なしのターンで走りうる）。",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1272,8 +1272,8 @@
     },
     "timers-failures#3": {
       "output": {
-        "length": 7,
-        "text": "d を外した。",
+        "length": 63,
+        "text": "d を外した。ただし、この依頼の未読の起動を受信箱から消しきれなかった（取り消した依頼の起動が、本文なしのターンで走りうる）。",
         "isError": false,
         "thrown": false,
         "errorName": null
