@@ -401,6 +401,32 @@ async function journalFileDeleteFailed(
   });
 }
 
+function renderReplyAttachNoConversation(): string {
+  return (
+    'いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。' +
+    '人間へ渡すなら task_say の attachments に id を渡す。'
+  );
+}
+
+function renderReplyAttachNoSlot(): string {
+  return 'この器では返信に添付を添えられない（何も添えていない）。';
+}
+
+function renderReplyAttachAlready(): string {
+  return '指された添付はすでにこの返信に添えてある。';
+}
+
+function renderReplyAttachAdded(
+  refs: Extract<OutboundAttachmentResult, { ok: true }>['refs'],
+  total: number,
+): string {
+  return (
+    `この返信に添付 ${refs.length} 件を添えた: ` +
+    refs.map((ref) => `${ref.name}（id=${ref.id}）`).join(', ') +
+    `。このターンの返信には合計 ${total} 件ついている。`
+  );
+}
+
 export function attachTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId } = shared;
   return [
@@ -650,20 +676,11 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
       async ({ ids }) => {
         const conversationId = getConversationId();
         if (conversationId === undefined) {
-          return {
-            ...text(
-              'いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。' +
-                '人間へ渡すなら task_say の attachments に id を渡す。',
-            ),
-            isError: true,
-          };
+          return { ...text(renderReplyAttachNoConversation()), isError: true };
         }
         const slot = context.replyAttachments;
         if (slot === undefined) {
-          return {
-            ...text('この器では返信に添付を添えられない（何も添えていない）。'),
-            isError: true,
-          };
+          return { ...text(renderReplyAttachNoSlot()), isError: true };
         }
         const attached = await checkAndBindOutboundAttachments(stores, ids, {
           conversationId,
@@ -675,14 +692,10 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
           return { ...text(attached.message), isError: true };
         }
         if (attached.refs.length === 0) {
-          return text('指された添付はすでにこの返信に添えてある。');
+          return text(renderReplyAttachAlready());
         }
         slot.add(attached.refs);
-        return text(
-          `この返信に添付 ${attached.refs.length} 件を添えた: ` +
-            attached.refs.map((ref) => `${ref.name}（id=${ref.id}）`).join(', ') +
-            `。このターンの返信には合計 ${slot.current().length} 件ついている。`,
-        );
+        return text(renderReplyAttachAdded(attached.refs, slot.current().length));
       },
     ),
 
