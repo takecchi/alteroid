@@ -146,6 +146,17 @@
       matchPackageNames: ['/^@anthropic-ai\\/claude-agent-sdk/'],
       enabled: false,
     },
+
+    // Codex（`@openai/codex`）は手で上げる。上げるときは catalog（`pnpm-workspace.yaml`）・
+    // `Dockerfile` の `ARG CODEX_VERSION`・`CODEX_PROTOCOL_VERSION`（`packages/core/src/codex-protocol.ts`）・
+    // 生成スキーマ（`packages/core/codex-schema/<版>/`。`pnpm codex:schema`）の4か所を揃え、
+    // スキーマの差分を読む必要があり、Renovate はこれを1つの PR で保証しない。
+    // 実例（#6558）: catalog の版だけが上がって他の3か所が動かず、
+    // `scripts/codex-version-sync.test.ts` と `codex-protocol.test.ts` が落ちて CI が赤になった。
+    {
+      matchPackageNames: ['@openai/codex'],
+      enabled: false,
+    },
     // **`pnpm-workspace.yaml` の `overrides` はメジャーを上げない。** あそこに在るのは
     // 推移的依存を脆弱性の修正版へ寄せるための上書きで、**上書きは親の宣言範囲の
     // 内側に留める**（`pnpm-workspace.yaml` の `overrides` の上のコメント。
