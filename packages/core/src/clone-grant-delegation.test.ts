@@ -21,6 +21,7 @@ function fakeService(behavior: 'ok' | 'reject' = 'ok') {
       if (behavior === 'reject') throw new Error('配れない（テスト）');
       return [];
     },
+    onPushed: () => () => undefined,
   };
   return { service, triggers };
 }

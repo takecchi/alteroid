@@ -183,7 +183,7 @@ describe('配るサービス（#4952）', () => {
       runners: createRunnerRegistry([ok, broken]),
     });
     const pushed: unknown[] = [];
-    service.onPushed?.((results) => pushed.push(results));
+    service.onPushed((results) => pushed.push(results));
 
     const results = await service.pushAll('許可 g1 が取り消された');
 

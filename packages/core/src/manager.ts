@@ -1237,7 +1237,7 @@ export interface ManagerPoolOptions {
    * これが無いと、回転で1度だけ撒き損ねた runner は、繋ぎ直すかデーモンを起こし直すまで、冷却中の古い鍵のまま担当を起こし続ける。
    */
   agentTokenPushes?: {
-    onPushed?(
+    onPushed(
       listener: (results: readonly { runnerId: string; ok: boolean; error?: string }[]) => void,
     ): () => void;
   };
@@ -2064,7 +2064,7 @@ class Pool implements ManagerPool {
       ['plugins', plugins],
       ['agentToken', agentTokenPushes],
     ] as const) {
-      const unsubscribe = source?.onPushed?.((results, scope?: { unnamed: true }) =>
+      const unsubscribe = source?.onPushed((results, scope?: { unnamed: true }) =>
         this.#pushLedger.recordDirectPushResults(
           kind,
           // 名指せなかった失敗は、この manager が知っている runner（帳面に載っている runner）全部の失敗として記録する。

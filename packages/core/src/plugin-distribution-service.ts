@@ -20,7 +20,7 @@ export interface PluginDistributionService {
   apply(): Promise<ApplyPluginsResult>;
   /** 同じ版が載っていれば `null`。 */
   syncRunner(runner: RunnerClient): Promise<{ plugins?: RunnerPluginsFingerprint } | null>;
-  onPushed?(listener: (results: readonly PluginsRunnerResult[]) => void): () => void;
+  onPushed(listener: (results: readonly PluginsRunnerResult[]) => void): () => void;
 }
 
 interface PluginDistributionServiceOptions {
