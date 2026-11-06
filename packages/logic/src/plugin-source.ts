@@ -1,7 +1,10 @@
 import type { PluginPreviewRequest } from './types.js';
 
 // 形の検査の正本はデーモン（pluginRepoUrlSchema ほか）。ここは CLI（apps/cli/src/plugin.ts）と同じ
-// 「何も送らずに弾く」手前の検査だけを持つ。@alteroid/core の値は Web から import できないため写してある。
+// 「何も送らずに弾く」手前の検査（種類ごとの欄の組み合わせ・https で始まるか・sha の桁）だけを持つ。
+// 欄ごとの細かい規則（名前の字種・URL・path・ref・SHA）は、ここを通った後に web が
+// apps/web/app/lib/plugin-source-check.ts で core の `@alteroid/core/plugin-source-input`（軽い口）を使って見る。
+// ここの sha・https の見方はその手前の粗い写しで、文言が違うため一本にしていない。
 
 export interface PluginSourceForm {
   kind: 'marketplace' | 'url';
