@@ -165,5 +165,14 @@
       matchUpdateTypes: ['major'],
       enabled: false,
     },
+
+    // `@standard-community/standard-json` は 0.4 未満に留める。`@standard-community/standard-openapi`
+    // 0.2.11 の peer が `^0.3.5` で、0.4 は宣言の外になり、lockfile に standard-json が 0.3 と 0.4 の
+    // 2つ入る（#6558。`/docs` の出力は変わらなかったが、宣言の外の組み合わせを黙って抱えることになる）。
+    // standard-openapi が 0.4 を受けるようになったら、この規則と `pnpm-workspace.yaml` の注記を外して上げる。
+    {
+      matchPackageNames: ['@standard-community/standard-json'],
+      allowedVersions: '<0.4.0',
+    },
   ],
 }
