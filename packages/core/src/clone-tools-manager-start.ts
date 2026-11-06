@@ -253,7 +253,7 @@ export function managerStartTool(context: ToolContext, shared: CloneToolsShared)
         .describe(
           'この委譲を結び付ける task の id（task_list）。渡すと task は待ちになり、委譲が終わる・失敗する・lost になると' +
             '判断待ち（needs_decision）に戻って、報告にもこの id が付く。閉じた task と、走っている委譲が既にある task は断られる（1つの task に走らせる委譲は同時に1本まで）。' +
-            '人間の依頼を1件だけ読んだターンでは、省略すると器がその task に結ぶ。2件以上読んだターンや、報告を読むターン・tick のターンでは、省略すると task に結び付かない（その task のために委譲するなら渡すこと）。',
+            '省略すると、そのターンで読んだ人間の依頼が1件だけのときはその task に結び、それ以外は結び付かない。',
         ),
     },
     async (rawArgs) => {

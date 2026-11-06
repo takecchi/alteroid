@@ -54,9 +54,9 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
 // request の説明に「1文字以上。空白だけは断る」を足した版（#5076）: 引数の並びと provider 引数を持たないことは変えていない。
 // taskId を足した版（#5469 P3）: 引数の並びの末尾に足しただけで、provider 引数を持たないことは変えていない。
 // taskId の説明に「渡さないと返答で自動 done になる」を足した版（#5469 P5）: 説明文だけの変更で、provider 引数を持たないことは変えていない。
-// taskId の説明の「渡さないと…自動 done」を、「1件だけ読んだターンでは省略すれば器が結ぶ」に直した版（R2-1）: 説明文だけの変更。
+// taskId の説明の「渡さないと…自動 done」を、「省略すると、読んだ人間の依頼が1件だけのときはその task に結ぶ」に直した版: 説明文だけの変更。
 // 前の値は c3c72f675a5704f301510d99570121026756216aaa02f1c80da18ff1253d30e9（その前は 45404ad261f30d4974ae8cba692fbee201603704d624f79eacad359543865427）
-const BASELINE = 'ef109660a42873a8241304262f35b68e192b42ae2c6808040f70e92bfc29c38a';
+const BASELINE = '972aaa33e9db6c1ab62f5c7253a8902f19cc9db949edd180899251530b571ed6';
 
 describe('manager_start の provider 引数（撤去済み）', () => {
   it('provider 引数を持たず、スキーマと説明文は PEERS が閉じていたときと同一', () => {
