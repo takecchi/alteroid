@@ -1,0 +1,972 @@
+{
+  "counts": {
+    "memory/unchanged-existing": 1,
+    "memory/changed-existing": 2,
+    "memory/new-created": 2,
+    "memory/new-template-closed": 1,
+    "memory/new-emptied": 1,
+    "memory/emptied": 1,
+    "memory/whitespace-only": 1,
+    "memory/editor-exit-after-edit": 1,
+    "memory/editor-exit-unchanged": 1,
+    "memory/editor-missing": 1,
+    "memory/conflict-409": 2,
+    "memory/conflict-409-current-null": 2,
+    "memory/save-500": 2,
+    "memory/read-500": 1,
+    "memory/invalid-slug": 0,
+    "practice/unchanged-existing": 1,
+    "practice/changed-existing": 2,
+    "practice/title-only-changed": 2,
+    "practice/kind-and-title-same-as-current": 1,
+    "practice/new-created": 2,
+    "practice/new-template-closed": 1,
+    "practice/new-missing-kind-title": 1,
+    "practice/emptied": 1,
+    "practice/editor-exit-after-edit": 1,
+    "practice/editor-exit-unchanged": 1,
+    "practice/editor-missing": 1,
+    "practice/conflict-409": 2,
+    "practice/conflict-409-current-null": 2,
+    "practice/save-500": 2,
+    "practice/read-500": 1,
+    "practice/invalid-slug": 0,
+    "practice/unreadable-with-kind-title": 2,
+    "practice/unreadable-missing-kind-title": 1
+  },
+  "scenarios": {
+    "memory/unchanged-existing": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "memory/changed-existing": {
+      "stdout": "書き換えました: values\n（次の会話からクローンの判断に入ります）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": {
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "memory/new-created": {
+      "stdout": "書き換えました: fresh\n（次の会話からクローンの判断に入ります）\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/fresh",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/memory/fresh",
+          "body": {
+            "content": "人間の編集\n",
+            "ifMatch": null
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/fresh.md",
+        "initial": "# fresh\n\n（ここにクローンへ渡したい根拠を書きます。価値観・判断の基準・背景など）\n\n- 記憶は次の会話からクローンの判断に入ります\n- 鍵やトークンは書かないでください（記憶はシステムプロンプトに載ります。\n  それは実行環境プロファイル: alteroid profile edit の仕事です）\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "memory/new-template-closed": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/fresh",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/fresh.md",
+        "initial": "# fresh\n\n（ここにクローンへ渡したい根拠を書きます。価値観・判断の基準・背景など）\n\n- 記憶は次の会話からクローンの判断に入ります\n- 鍵やトークンは書かないでください（記憶はシステムプロンプトに載ります。\n  それは実行環境プロファイル: alteroid profile edit の仕事です）\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "memory/new-emptied": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-memory-<RAND>/fresh.md\n  直したら `alteroid memory set fresh --file '<TMPDIR>/alteroid-memory-<RAND>/fresh.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-memory-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/fresh",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/fresh.md",
+        "initial": "# fresh\n\n（ここにクローンへ渡したい根拠を書きます。価値観・判断の基準・背景など）\n\n- 記憶は次の会話からクローンの判断に入ります\n- 鍵やトークンは書かないでください（記憶はシステムプロンプトに載ります。\n  それは実行環境プロファイル: alteroid profile edit の仕事です）\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶 fresh: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set fresh --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/fresh.md'",
+        "failureLine": "alteroid: 記憶 fresh: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set fresh --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/fresh.md'"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/fresh.md",
+          "content": ""
+        }
+      ]
+    },
+    "memory/emptied": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  直したら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-memory-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶 values: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set values --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'",
+        "failureLine": "alteroid: 記憶 values: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set values --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": ""
+        }
+      ]
+    },
+    "memory/whitespace-only": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  直したら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-memory-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶 values: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set values --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'",
+        "failureLine": "alteroid: 記憶 values: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid memory set values --allow-empty --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": " \n\t\n"
+        }
+      ]
+    },
+    "memory/editor-exit-after-edit": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  直したら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-memory-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid memory set <slug> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid memory set <slug> --file <path>"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "memory/editor-exit-unchanged": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid memory set <slug> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid memory set <slug> --file <path>"
+      },
+      "drafts": []
+    },
+    "memory/editor-missing": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid memory set <slug> --file <path> で渡す",
+        "failureLine": "alteroid: エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid memory set <slug> --file <path> で渡す"
+      },
+      "drafts": []
+    },
+    "memory/conflict-409": {
+      "stdout": "書き換えていません: values は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。\n  あなたの編集（残してあります）: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  いまの記憶: <TMPDIR>/alteroid-memory-<RAND>/values.current.md\n  見比べる: diff -u '<TMPDIR>/alteroid-memory-<RAND>/values.current.md' '<TMPDIR>/alteroid-memory-<RAND>/values.md'\n  取り込んだら `alteroid memory edit values` で開き直して直してください。\n  そのまま置き換えてよいなら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'`（クローンの書き込みを消します）。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": {
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶が読んだ後に変わっていたので書き換えませんでした: values",
+        "failureLine": "alteroid: 記憶が読んだ後に変わっていたので書き換えませんでした: values"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.current.md",
+          "content": "# 価値観\n\nクローンの判断\n"
+        },
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "memory/conflict-409-current-null": {
+      "stdout": "書き換えていません: values は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。\n  あなたの編集（残してあります）: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  いまの記憶: 無い（消されています）\n  取り込んだら `alteroid memory edit values` で開き直して直してください。\n  そのまま置き換えてよいなら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'`（クローンの書き込みを消します）。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": {
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶が読んだ後に変わっていたので書き換えませんでした: values",
+        "failureLine": "alteroid: 記憶が読んだ後に変わっていたので書き換えませんでした: values"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "memory/save-500": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-memory-<RAND>/values.md\n  直したら `alteroid memory set values --file '<TMPDIR>/alteroid-memory-<RAND>/values.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-memory-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": {
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-memory-<RAND>/values.md",
+        "initial": "# 価値観\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "書き換えられませんでした: values（HTTP 500）: boom",
+        "failureLine": "alteroid: 書き換えられませんでした: values（HTTP 500）: boom"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-memory-<RAND>/values.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "memory/read-500": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/memory/values",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶を読めませんでした: values（HTTP 500）: 記憶が読めない（pin 用）",
+        "failureLine": "alteroid: 記憶を読めませんでした: values（HTTP 500）: 記憶が読めない（pin 用）"
+      },
+      "drafts": []
+    },
+    "memory/invalid-slug": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "記憶の名前が不正です: slug は英小文字・数字・. _ - のみ（先頭は英小文字か数字、1〜128文字。渡されたのは \"../../outside\"）",
+        "failureLine": "alteroid: 記憶の名前が不正です: slug は英小文字・数字・. _ - のみ（先頭は英小文字か数字、1〜128文字。渡されたのは \"../../outside\"）"
+      },
+      "drafts": []
+    },
+    "practice/unchanged-existing": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/changed-existing": {
+      "stdout": "書き換えました: review\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": {
+            "kind": "レビュー",
+            "title": "レビューの進め方",
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/title-only-changed": {
+      "stdout": "書き換えました: review\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": {
+            "kind": "レビュー",
+            "title": "別の題",
+            "content": "# レビュー\n\n差分より先に Issue を読む。\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/kind-and-title-same-as-current": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/new-created": {
+      "stdout": "書き換えました: fresh\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/fresh",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/fresh",
+          "body": {
+            "kind": "調査",
+            "title": "調べもの",
+            "content": "人間の編集\n",
+            "ifMatch": null
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/fresh.md",
+        "initial": "# fresh\n\n（ここに仕事のやり方を書きます。これは実行される定義ではなく、読んで\n従うかどうかはそのときのクローンが決めます）\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/new-template-closed": {
+      "stdout": "変更はありません。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/fresh",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/fresh.md",
+        "initial": "# fresh\n\n（ここに仕事のやり方を書きます。これは実行される定義ではなく、読んで\n従うかどうかはそのときのクローンが決めます）\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/new-missing-kind-title": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/fresh",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "新しいやり方には --kind と --title が両方必要です: alteroid practice edit <slug> --kind <種類> --title <題>",
+        "failureLine": "alteroid: 新しいやり方には --kind と --title が両方必要です: alteroid practice edit <slug> --kind <種類> --title <題>"
+      },
+      "drafts": []
+    },
+    "practice/emptied": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-practice-<RAND>/review.md\n  直したら `alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md' --title '別の題'` で渡し直せます。いらなければ <TMPDIR>/alteroid-practice-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方 review: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md' --title '別の題' --allow-empty",
+        "failureLine": "alteroid: やり方 review: 本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ: alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md' --title '別の題' --allow-empty"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-practice-<RAND>/review.md",
+          "content": ""
+        }
+      ]
+    },
+    "practice/editor-exit-after-edit": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-practice-<RAND>/review.md\n  直したら `alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-practice-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid practice set <slug> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid practice set <slug> --file <path>"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-practice-<RAND>/review.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "practice/editor-exit-unchanged": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid practice set <slug> --file <path>",
+        "failureLine": "alteroid: エディタ「sh '<ROOT>/editor.sh'」が終了コード 3 で終わったので、反映していない。使うエディタは 環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定する。エディタを使わないなら alteroid practice set <slug> --file <path>"
+      },
+      "drafts": []
+    },
+    "practice/editor-missing": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid practice set <slug> --file <path> で渡す",
+        "failureLine": "alteroid: エディタ「alteroid-no-such-editor-pin」を起動できない（見つからない）。環境変数 VISUAL か EDITOR に、使うエディタのコマンドを設定するか、エディタを使わずに alteroid practice set <slug> --file <path> で渡す"
+      },
+      "drafts": []
+    },
+    "practice/conflict-409": {
+      "stdout": "書き換えていません: review は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。\n  あなたの編集（残してあります）: <TMPDIR>/alteroid-practice-<RAND>/review.md\n  いまのやり方: <TMPDIR>/alteroid-practice-<RAND>/review.current.md\n  見比べる: diff -u '<TMPDIR>/alteroid-practice-<RAND>/review.current.md' '<TMPDIR>/alteroid-practice-<RAND>/review.md'\n  取り込んだら `alteroid practice edit review` で開き直して直してください。\n  そのまま置き換えてよいなら `alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md'`（先の書き込みを消します）。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": {
+            "kind": "レビュー",
+            "title": "レビューの進め方",
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方が読んだ後に変わっていたので書き換えませんでした: review",
+        "failureLine": "alteroid: やり方が読んだ後に変わっていたので書き換えませんでした: review"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-practice-<RAND>/review.current.md",
+          "content": "クローンの書き直し\n"
+        },
+        {
+          "path": "alteroid-practice-<RAND>/review.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "practice/conflict-409-current-null": {
+      "stdout": "書き換えていません: review は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。\n  あなたの編集（残してあります）: <TMPDIR>/alteroid-practice-<RAND>/review.md\n  いまのやり方: 無い（消されています）\n  取り込んだら `alteroid practice edit review` で開き直して直してください。\n  そのまま置き換えてよいなら `alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md'`（先の書き込みを消します）。\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": {
+            "kind": "レビュー",
+            "title": "レビューの進め方",
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方が読んだ後に変わっていたので書き換えませんでした: review",
+        "failureLine": "alteroid: やり方が読んだ後に変わっていたので書き換えませんでした: review"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-practice-<RAND>/review.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "practice/save-500": {
+      "stdout": "",
+      "stderr": "あなたの編集を残してあります: <TMPDIR>/alteroid-practice-<RAND>/review.md\n  直したら `alteroid practice set review --file '<TMPDIR>/alteroid-practice-<RAND>/review.md'` で渡し直せます。いらなければ <TMPDIR>/alteroid-practice-<RAND> ごと消してください。\n",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": {
+            "kind": "レビュー",
+            "title": "レビューの進め方",
+            "content": "人間の編集\n",
+            "ifMatch": "v-read"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/review.md",
+        "initial": "# レビュー\n\n差分より先に Issue を読む。\n"
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "書き換えられませんでした: review（HTTP 500）: boom",
+        "failureLine": "alteroid: 書き換えられませんでした: review（HTTP 500）: boom"
+      },
+      "drafts": [
+        {
+          "path": "alteroid-practice-<RAND>/review.md",
+          "content": "人間の編集\n"
+        }
+      ]
+    },
+    "practice/read-500": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/review",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方を読めませんでした: review（HTTP 500）: やり方が読めない（pin 用）",
+        "failureLine": "alteroid: やり方を読めませんでした: review（HTTP 500）: やり方が読めない（pin 用）"
+      },
+      "drafts": []
+    },
+    "practice/invalid-slug": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方の名前が不正です: slug は英小文字・数字・. _ - のみ（先頭は英小文字か数字、1〜128文字。渡されたのは \"../../outside\"）",
+        "failureLine": "alteroid: やり方の名前が不正です: slug は英小文字・数字・. _ - のみ（先頭は英小文字か数字、1〜128文字。渡されたのは \"../../outside\"）"
+      },
+      "drafts": []
+    },
+    "practice/unreadable-with-kind-title": {
+      "stdout": "broken は読めない形で入っているので、いまの本文は開けません。雛形から書き直します（保存すると読めない前の内容は置き換わります）。\n書き換えました: broken\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/broken",
+          "body": null
+        },
+        {
+          "method": "PUT",
+          "url": "http://127.0.0.1:4517/practices/broken",
+          "body": {
+            "kind": "調査",
+            "title": "調べもの",
+            "content": "人間の編集\n"
+          }
+        }
+      ],
+      "editor": {
+        "launched": true,
+        "argc": "1",
+        "file": "<TMPDIR>/alteroid-practice-<RAND>/broken.md",
+        "initial": "# broken\n\n（ここに仕事のやり方を書きます。これは実行される定義ではなく、読んで\n従うかどうかはそのときのクローンが決めます）\n"
+      },
+      "out": {
+        "returned": true,
+        "exitCode": 0
+      },
+      "drafts": []
+    },
+    "practice/unreadable-missing-kind-title": {
+      "stdout": "",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:4517/practices/broken",
+          "body": null
+        }
+      ],
+      "editor": {
+        "launched": false
+      },
+      "out": {
+        "returned": false,
+        "exitCode": 1,
+        "name": "Error",
+        "message": "やり方 broken は読めない形で入っていて、いまの種類と題を引き継げません。書き直すには --kind と --title を両方指定してください（読めない前の内容は残りません）: alteroid practice edit <slug> --kind <種類> --title <題>",
+        "failureLine": "alteroid: やり方 broken は読めない形で入っていて、いまの種類と題を引き継げません。書き直すには --kind と --title を両方指定してください（読めない前の内容は残りません）: alteroid practice edit <slug> --kind <種類> --title <題>"
+      },
+      "drafts": []
+    }
+  }
+}
