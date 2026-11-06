@@ -69,11 +69,11 @@
     "body-multibyte#5": 255,
     "body-multibyte#6": 8389,
     "body-offset-in-pair#1": 228,
-    "body-offset-in-pair#2": 237,
+    "body-offset-in-pair#2": 228,
     "body-offset-in-pair#3": 236,
-    "body-offset-in-pair#4": 235,
+    "body-offset-in-pair#4": 236,
     "body-offset-in-pair#5": 261,
-    "body-offset-in-pair#6": 252,
+    "body-offset-in-pair#6": 253,
     "version-vary#1": 237,
     "version-vary#2": 237,
     "version-vary#3": 240,
@@ -1210,8 +1210,8 @@
     },
     "body-offset-in-pair#2": {
       "output": {
-        "length": 237,
-        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 2〜4 文字目 / 全 4 文字）\n\ude00😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "length": 228,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 全 4 文字）\n😀😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1244,8 +1244,8 @@
     },
     "body-offset-in-pair#4": {
       "output": {
-        "length": 235,
-        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 4〜4 文字目 / 全 4 文字）\n\ude00\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "length": 236,
+        "text": "（行 pair / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 3〜4 文字目 / 全 4 文字）\n😀\n（版 base_version=b8a10574b91113eb002ea35140a5c53089b4ea9de76b8bf46ece65b8e24d4576 ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
         "isError": false,
         "thrown": false,
         "errorName": null
@@ -1278,8 +1278,8 @@
     },
     "body-offset-in-pair#6": {
       "output": {
-        "length": 252,
-        "text": "（行 pair-edge / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,001〜8,001 文字目 / 全 8,001 文字）\n\ude00\n（版 base_version=90bf0cc976860ab3bb03bda7ecf98145092717b96ed2bdf965d3e740b69480bc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
+        "length": 253,
+        "text": "（行 pair-edge / 撒く先 all / 最終更新 2026-10-01T00:00:00.000Z / 8,000〜8,001 文字目 / 全 8,001 文字）\n😀\n（版 base_version=90bf0cc976860ab3bb03bda7ecf98145092717b96ed2bdf965d3e740b69480bc ——この行を書き直す profile_write と、外す profile_remove に渡せば、読んだ後に人間や別のターンが変えていたとき何も変えずに断られる）",
         "isError": false,
         "thrown": false,
         "errorName": null

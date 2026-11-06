@@ -64,7 +64,7 @@
     "id-page-three#4": 147,
     "id-page-astral#1": 8168,
     "id-page-astral#2": 133,
-    "id-page-astral#3": 132,
+    "id-page-astral#3": 133,
     "id-page-closed#1": 8198,
     "id-page-closed#2": 220,
     "id-page-closed#3": 222,
@@ -799,8 +799,8 @@
     },
     "id-page-astral#3": {
       "output": {
-        "length": 132,
-        "text": "a-1 仕事 a-1\n[人間の依頼]\n作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n状態: queued（待ち行列）（8,001〜8,005 文字目 / 全 8,005 文字）\n\n\ude00tail",
+        "length": 133,
+        "text": "a-1 仕事 a-1\n[人間の依頼]\n作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n状態: queued（待ち行列）（8,000〜8,005 文字目 / 全 8,005 文字）\n\n😀tail",
         "isError": false,
         "thrown": false
       },

@@ -443,7 +443,7 @@ const SCENARIOS: Scenario[] = [
     name: 'body-offset-in-pair',
     group: '本文（多バイト文字）',
     covers:
-      'offset がサロゲートペアの真ん中（後半の位置）に当たる: 開始は寄せず、後半の単独のサロゲートから出る（固定値の側では \\udXXX の形）。これは道具のいまの振る舞いで、固定する。ペアの手前・後ろの offset も並べる',
+      'offset がサロゲートペアの真ん中（後半の位置）に当たる: その文字の頭（前半）へ寄せて、文字を丸ごと出す（単独のサロゲートから始めない。頁の範囲もその頭から数える）。ペアの手前・後ろの offset も並べる',
     seed: [row('pair', '😀😀'), row('pair-edge', SURROGATE_AT_EDGE)],
     steps: [
       r({ name: 'pair', offset: 0 }),
@@ -1065,15 +1065,13 @@ describe('profile_read の出力の固定（場面ごとの全文と字数・読
     expect(text('body-multibyte#6')).toContain('😀\n…（ここで切れている。続きは');
     expect(text('body-multibyte#6')).toContain(`${CUT}m-pair-ends offset=8000。`);
     expect(text('body-offset-in-pair#1')).toContain('全 4 文字）\n😀😀\n');
-    // 後半の単独のサロゲート（U+DE00）から出る: 本文の行は「後半 ＋ 絵文字」の 3 字
-    const lone = text('body-offset-in-pair#2').split('\n')[1] ?? '';
-    expect(lone.length).toBe(3);
-    expect(lone.charCodeAt(0)).toBe(0xde00);
-    expect(lone.slice(1)).toBe('😀');
-    expect(text('body-offset-in-pair#2')).toContain('2〜4 文字目 / 全 4 文字）\n');
-    expect((text('body-offset-in-pair#4').split('\n')[1] ?? '').charCodeAt(0)).toBe(0xde00);
+    // offset がペアの後半に当たったら、その文字の頭から出す（単独の低サロゲートから始めない）: 本文の行は絵文字2つ（4 コード単位）
+    const fromPairHead = text('body-offset-in-pair#2').split('\n')[1] ?? '';
+    expect(fromPairHead).toBe('😀😀');
+    expect(text('body-offset-in-pair#2')).toContain('/ 全 4 文字）\n😀😀\n');
+    expect(text('body-offset-in-pair#4').split('\n')[1] ?? '').toBe('😀');
     expect(text('body-offset-in-pair#3')).toContain('3〜4 文字目 / 全 4 文字）\n😀\n');
-    expect(text('body-offset-in-pair#4')).toContain('4〜4 文字目 / 全 4 文字）\n');
+    expect(text('body-offset-in-pair#4')).toContain('3〜4 文字目 / 全 4 文字）\n');
     expect(text('body-offset-in-pair#5')).toContain('末尾を越えている');
 
     // 版
