@@ -241,6 +241,33 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
     const part = page('😀X', 0, 1);
     expect(part.to).toBe(1);
   });
+
+  it('🔴 page: offset がサロゲートペアの後半に当たったら、その文字の頭から読む（単独の低サロゲートから始めない）', () => {
+    const text = 'A😀B';
+    const part = page(text, 2, 10);
+    expect(part.from).toBe(1);
+    expect(part.body).toBe('😀B');
+    expect(describePage(part)).toBe('2〜4 文字目 / 全 4 文字');
+  });
+
+  it('page: offset が境目に乗っていれば、今までどおりその位置から読む', () => {
+    const text = 'A😀B';
+    expect(page(text, 1, 10).body).toBe('😀B');
+    expect(page(text, 3, 10).body).toBe('B');
+  });
+
+  it('page: limit が1なら頭へ戻さない（戻すと同じ位置へ戻り続けて先へ進めないため）', () => {
+    const text = '😀X';
+    let offset = 0;
+    const seen: number[] = [];
+    for (let i = 0; i < 5 && offset < text.length; i += 1) {
+      const part = page(text, offset, 1);
+      expect(part.to).toBeGreaterThan(offset);
+      seen.push(part.to);
+      offset = part.to;
+    }
+    expect(seen).toEqual([1, 2, 3]);
+  });
 });
 
 describe('tailByCodePoints（末尾をコードポイント数で切る。issue #1829）', () => {
