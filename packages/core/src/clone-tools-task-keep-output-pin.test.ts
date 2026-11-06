@@ -35,7 +35,8 @@ import { createCloneTools } from './tools.js';
 //
 // 秘密: task の題・本文は作りもの（`仕事 <id>` / `本文 <id>` ほか）だけ。json の全文に鍵らしい形が無いことを確かめる。
 // 固定値の json に長い `[A-Za-z0-9_./@-]` の連続を作らない（`scripts/agents-md-references.test.ts` の走査が二乗の時間になる）。
-// 長い id・題は 10 字ごとに空白を挟む（`spaced`）。
+// 長い id・題は「語＋空白」の繰り返しにして、語の長さごとに空白を挟む（`spaced`）。間隔は語の長さ＋1 字で、
+// 長い id（`LONG_ID`）は語 `longid` なので 7 字ごと、長い題は語 `title` なので 6 字ごと（語を省くと既定の `abcdefghi` で 10 字ごと）。
 
 type Args = Record<string, unknown>;
 
@@ -103,7 +104,7 @@ function t(
   return { id, minute, ...extra };
 }
 
-/** 長さ len の、10 字ごとに空白を挟んだ文字列（末尾は空白にしない） */
+/** 長さ len の、語（既定は 9 字の `abcdefghi`）と空白を繰り返した文字列。空白は語の長さ＋1 字ごと（既定で 10 字ごと）。末尾は空白にしない */
 function spaced(len: number, word = 'abcdefghi'): string {
   let out = '';
   while (out.length < len) out += `${word} `;
