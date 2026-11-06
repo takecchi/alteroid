@@ -1,0 +1,4213 @@
+{
+  "lengths": {
+    "grounds#1": 14,
+    "grounds#2": 121,
+    "grounds#3": 14,
+    "grounds-empty-and-null#1": 14,
+    "grounds-empty-and-null#2": 14,
+    "grounds-empty-and-null#3": 121,
+    "decision-forms#1": 14,
+    "decision-forms#2": 14,
+    "decision-forms#3": 14,
+    "decision-forms#4": 14,
+    "decision-forms#5": 14,
+    "decision-forms#6": 14,
+    "decision-forms#7": 14,
+    "decision-forms#8": 121,
+    "decision-forms#9": 121,
+    "grounds-forms#1": 14,
+    "grounds-forms#2": 14,
+    "grounds-forms#3": 14,
+    "grounds-forms#4": 14,
+    "value-in-text#1": 14,
+    "value-in-text#2": 121,
+    "closes-none#1": 14,
+    "closes-none#2": 14,
+    "closes-none#3": 14,
+    "closes-none#4": 121,
+    "closes-open#1": 42,
+    "closes-open#2": 42,
+    "closes-open#3": 42,
+    "closes-many#1": 86,
+    "closes-many#2": 92,
+    "closes-five": 134,
+    "closes-states#1": 72,
+    "closes-states#2": 90,
+    "closes-states#3": 100,
+    "closes-states#4": 186,
+    "closes-forms#1": 38,
+    "closes-forms#2": 38,
+    "closes-forms#3": 38,
+    "closes-forms#4": 38,
+    "closes-forms#5": 764,
+    "closes-grounds-omitted": 145,
+    "closes-violation#1": 27,
+    "closes-violation#2": 40,
+    "closes-violation#3": 52,
+    "closes-violation#4": 40,
+    "closes-violation#5": 52,
+    "journal-fails#1": 228,
+    "journal-fails#2": 228,
+    "journal-fails#3": 228,
+    "journal-fails#4": 38,
+    "closes-failures#1": 69,
+    "closes-failures#2": 84,
+    "closes-failures#3": 69,
+    "closes-failures#4": 90,
+    "closes-failures#5": 108,
+    "closes-races#1": 63,
+    "closes-races#2": 36,
+    "closes-races#3": 85,
+    "closes-journal-fails#1": 121,
+    "closes-journal-fails#2": 148
+  },
+  "scenarios": {
+    "grounds#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "grounds#2": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-2）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=10）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "grounds#3": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-3）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "根拠なし"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "根拠なし"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "grounds-empty-and-null#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": ""
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": ""
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "grounds-empty-and-null#2": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-2）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "   "
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "   "
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "grounds-empty-and-null#3": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-3）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:03:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=10）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "decision-forms#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "decision-forms#2": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-2）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "一行目\n二行目\n\n四行目",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "一行目\n二行目\n\n四行目",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "decision-forms#3": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-3）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "日本語😀の判断 é",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "日本語😀の判断 é",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "decision-forms#4": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-4）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "あ",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "あ",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "decision-forms#5": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-5）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-5"
+        }
+      ]
+    },
+    "decision-forms#6": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-6）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:06:00.000Z",
+          "decision": "   ",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "   ",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "decision-forms#7": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-7）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-7",
+          "at": "2026-10-29T00:07:00.000Z",
+          "decision": "  前後に空白  ",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "  前後に空白  ",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-7"
+        }
+      ]
+    },
+    "decision-forms#8": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-8）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-8",
+          "at": "2026-10-29T00:08:00.000Z",
+          "decision": "日本語😀の判断 é",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:08:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=10）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "日本語😀の判断 é",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-8"
+        }
+      ]
+    },
+    "decision-forms#9": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-9）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-9",
+          "at": "2026-10-29T00:09:00.000Z",
+          "decision": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:09:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=3000）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-9"
+        }
+      ]
+    },
+    "grounds-forms#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "grounds-forms#2": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-2）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "一行目\n二行目"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "一行目\n二行目"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "grounds-forms#3": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-3）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "日本語😀の根拠 é"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "日本語😀の根拠 é"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "grounds-forms#4": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-4）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "あ"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "あ"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "value-in-text#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を設定した",
+          "grounds": "id=FAKE_NOT_A_REAL_VALUE_0123456789"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を設定した",
+            "grounds": "id=FAKE_NOT_A_REAL_VALUE_0123456789"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "value-in-text#2": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-2）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を設定した",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=51）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "export TOKEN=FAKE_NOT_A_REAL_VALUE_0123456789 を設定した",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-none#1": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-1）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        }
+      ]
+    },
+    "closes-none#2": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-2）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-none#3": {
+      "output": {
+        "length": 14,
+        "text": "日誌に記録した（id-3）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        }
+      ]
+    },
+    "closes-none#4": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-4）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "判断",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:04:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=2）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "判断",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "closes-open#1": {
+      "output": {
+        "length": 42,
+        "text": "日誌に記録した（id-1）。\ncloses q-1: q-1 を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "waiting",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1"
+        },
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "もう済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（q-1）: queued → done（もう済んだ）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "q-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "q-1"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "q-1",
+            "status": "done",
+            "options": {
+              "reason": "もう済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "q-1"
+            },
+            "decision": "task の状態を変えた（q-1）: queued → done（もう済んだ）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-open#2": {
+      "output": {
+        "length": 42,
+        "text": "日誌に記録した（id-3）。\ncloses w-1: w-1 を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "needs_decision",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "返事が来た"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "もう済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（w-1）: waiting → done（返事が来た）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "w-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "w-1"
+          },
+          "outcome": "waiting"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "w-1",
+            "status": "done",
+            "options": {
+              "reason": "返事が来た",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "w-1"
+            },
+            "decision": "task の状態を変えた（w-1）: waiting → done（返事が来た）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "closes-open#3": {
+      "output": {
+        "length": 42,
+        "text": "日誌に記録した（id-5）。\ncloses n-1: n-1 を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "n-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 n-1",
+          "body": "本文 n-1",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "人間が決めた"
+        },
+        {
+          "id": "w-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 w-1",
+          "body": "本文 w-1",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "返事が来た"
+        },
+        {
+          "id": "q-1",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 q-1",
+          "body": "本文 q-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "もう済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の状態を変えた（n-1）: needs_decision → done（人間が決めた）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "n-1"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "n-1"
+          },
+          "outcome": "needs_decision"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "n-1",
+            "status": "done",
+            "options": {
+              "reason": "人間が決めた",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "n-1"
+            },
+            "decision": "task の状態を変えた（n-1）: needs_decision → done（人間が決めた）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "closes-many#1": {
+      "output": {
+        "length": 86,
+        "text": "日誌に記録した（id-1）。\ncloses a: a を done にした。\ncloses b: b を done にした。\ncloses c: c を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        },
+        {
+          "id": "e",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 e",
+          "body": "本文 e"
+        },
+        {
+          "id": "f",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 f",
+          "body": "本文 f"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 c"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（a）: queued → done（理由 a）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（b）: queued → done（理由 b）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（c）: queued → done（理由 c）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "理由 a",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（理由 a）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "理由 b",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の状態を変えた（b）: queued → done（理由 b）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c",
+            "status": "done",
+            "options": {
+              "reason": "理由 c",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の状態を変えた（c）: queued → done（理由 c）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "closes-many#2": {
+      "output": {
+        "length": 92,
+        "text": "日誌に記録した（id-5）。\ncloses d: d を done にした。\ncloses d: d は既に 2026-10-29T00:02:00.000Z に閉じてある（一回目）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "e",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 e",
+          "body": "本文 e"
+        },
+        {
+          "id": "f",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 f",
+          "body": "本文 f"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一回目"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 c"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（d）: queued → done（一回目）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "d"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d",
+            "status": "done",
+            "options": {
+              "reason": "一回目",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d"
+            },
+            "decision": "task の状態を変えた（d）: queued → done（一回目）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-6"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d"
+          },
+          "outcome": "done"
+        }
+      ]
+    },
+    "closes-five": {
+      "output": {
+        "length": 134,
+        "text": "日誌に記録した（id-1）。\ncloses a: a を done にした。\ncloses b: b を done にした。\ncloses c: c を done にした。\ncloses d: d を done にした。\ncloses e: e を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 d"
+        },
+        {
+          "id": "e",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 e",
+          "body": "本文 e",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "理由 e"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（a）: queued → done（理由 a）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（b）: queued → done（理由 b）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（c）: queued → done（理由 c）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（d）: queued → done（理由 d）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "d"
+          }
+        },
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（e）: queued → done（理由 e）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "e"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "理由 a",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（理由 a）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "理由 b",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の状態を変えた（b）: queued → done（理由 b）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c",
+            "status": "done",
+            "options": {
+              "reason": "理由 c",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の状態を変えた（c）: queued → done（理由 c）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d",
+            "status": "done",
+            "options": {
+              "reason": "理由 d",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d"
+            },
+            "decision": "task の状態を変えた（d）: queued → done（理由 d）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "e"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "e",
+            "status": "done",
+            "options": {
+              "reason": "理由 e",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "e"
+            },
+            "decision": "task の状態を変えた（e）: queued → done（理由 e）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "closes-states#1": {
+      "output": {
+        "length": 72,
+        "text": "日誌に記録した（id-1）。\ncloses ghost: task ghost は無い（task_list で実在する id を確かめること）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "open-one",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 open-one",
+          "body": "本文 open-one"
+        },
+        {
+          "id": "closed-cancelled",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 closed-cancelled",
+          "body": "本文 closed-cancelled",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "closed-done",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 closed-done",
+          "body": "本文 closed-done",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "ghost"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "closes-states#2": {
+      "output": {
+        "length": 90,
+        "text": "日誌に記録した（id-2）。\ncloses closed-done: closed-done は既に 2026-10-02T00:00:00.000Z に閉じてある（先に閉じた）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "open-one",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 open-one",
+          "body": "本文 open-one"
+        },
+        {
+          "id": "closed-cancelled",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 closed-cancelled",
+          "body": "本文 closed-cancelled",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "closed-done",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 closed-done",
+          "body": "本文 closed-done",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "closed-done"
+          },
+          "outcome": "done"
+        }
+      ]
+    },
+    "closes-states#3": {
+      "output": {
+        "length": 100,
+        "text": "日誌に記録した（id-3）。\ncloses closed-cancelled: closed-cancelled は既に 2026-10-02T00:00:00.000Z に閉じてある（先に閉じた）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "open-one",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 open-one",
+          "body": "本文 open-one"
+        },
+        {
+          "id": "closed-cancelled",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 closed-cancelled",
+          "body": "本文 closed-cancelled",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "closed-done",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 closed-done",
+          "body": "本文 closed-done",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "closed-cancelled"
+          },
+          "outcome": "cancelled"
+        }
+      ]
+    },
+    "closes-states#4": {
+      "output": {
+        "length": 186,
+        "text": "日誌に記録した（id-4）。\ncloses ghost: task ghost は無い（task_list で実在する id を確かめること）。\ncloses open-one: open-one を done にした。\ncloses closed-done: closed-done は既に 2026-10-02T00:00:00.000Z に閉じてある（先に閉じた）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "open-one",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 open-one",
+          "body": "本文 open-one",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "閉じる"
+        },
+        {
+          "id": "closed-cancelled",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "cancelled",
+          "origin": "external",
+          "title": "仕事 closed-cancelled",
+          "body": "本文 closed-cancelled",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        },
+        {
+          "id": "closed-done",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-02T00:00:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 closed-done",
+          "body": "本文 closed-done",
+          "closedAt": "2026-10-02T00:00:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の状態を変えた（open-one）: queued → done（閉じる）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "open-one"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "ghost"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "open-one"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "open-one",
+            "status": "done",
+            "options": {
+              "reason": "閉じる",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "open-one"
+            },
+            "decision": "task の状態を変えた（open-one）: queued → done（閉じる）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "closed-done"
+          },
+          "outcome": "done"
+        }
+      ]
+    },
+    "closes-forms#1": {
+      "output": {
+        "length": 38,
+        "text": "日誌に記録した（id-1）。\ncloses a: a を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（a）: queued → done（long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-forms#2": {
+      "output": {
+        "length": 38,
+        "text": "日誌に記録した（id-3）。\ncloses b: b を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一行目\n二行目"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task の状態を変えた（b）: queued → done（一行目\n二行目）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "b"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "一行目\n二行目",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "b"
+            },
+            "decision": "task の状態を変えた（b）: queued → done（一行目\n二行目）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-4"
+        }
+      ]
+    },
+    "closes-forms#3": {
+      "output": {
+        "length": 38,
+        "text": "日誌に記録した（id-5）。\ncloses c: c を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "日本語😀の理由 é"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一行目\n二行目"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task の状態を変えた（c）: queued → done（日本語😀の理由 é）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c",
+            "status": "done",
+            "options": {
+              "reason": "日本語😀の理由 é",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の状態を変えた（c）: queued → done（日本語😀の理由 é）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-6"
+        }
+      ]
+    },
+    "closes-forms#4": {
+      "output": {
+        "length": 38,
+        "text": "日誌に記録した（id-7）。\ncloses d: d を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "  前後に空白  "
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "日本語😀の理由 é"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一行目\n二行目"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-7",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-8",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の状態を変えた（d）: queued → done（  前後に空白  ）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "d"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-7"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "d",
+            "status": "done",
+            "options": {
+              "reason": "  前後に空白  ",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "d"
+            },
+            "decision": "task の状態を変えた（d）: queued → done（  前後に空白  ）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-8"
+        }
+      ]
+    },
+    "closes-forms#5": {
+      "output": {
+        "length": 764,
+        "text": "日誌に記録した（id-9）。\ncloses : task  は無い（task_list で実在する id を確かめること）。\ncloses a\u0000b: task a\u0000b は無い（task_list で実在する id を確かめること）。\ncloses xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx: task xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx は無い（task_list で実在する id を確かめること）。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "  前後に空白  "
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "日本語😀の理由 é"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "一行目\n二行目"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long long longx"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-9",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-9"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": ""
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a\u0000b"
+          },
+          "outcome": "null"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          "outcome": "null"
+        }
+      ]
+    },
+    "closes-grounds-omitted": {
+      "output": {
+        "length": 145,
+        "text": "日誌に記録した（id-1）。⚠ grounds が呼び出しに届かなかったので、根拠は「届かなかった」として残してある（あなたが「根拠なし」と書いた場合とは区別してある）。根拠が在るなら、もう一度 grounds 付きで呼べば別の行として残る。\ncloses a: a を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "判断",
+          "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task の状態を変えた（a）: queued → done（済んだ）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=2）: Error: 呼び出しに grounds が届かなかった\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "判断",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（済んだ）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-violation#1": {
+      "output": {
+        "length": 27,
+        "text": "closes は使えない（5件以下）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "closes-violation#2": {
+      "output": {
+        "length": 40,
+        "text": "closes[0].reason は使えない（1文字以上のみ）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "closes-violation#3": {
+      "output": {
+        "length": 52,
+        "text": "closes[0].reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "closes-violation#4": {
+      "output": {
+        "length": 40,
+        "text": "closes[1].reason は使えない（1文字以上のみ）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "closes-violation#5": {
+      "output": {
+        "length": 52,
+        "text": "closes[0].reason は使えない（空白だけの値は空と同じ。1文字以上のみ）。何もしていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [],
+      "calls": []
+    },
+    "journal-fails#1": {
+      "output": {
+        "length": 228,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\njournal_write は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=10 grounds.chars=5\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=10 grounds.chars=5）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#2": {
+      "output": {
+        "length": 228,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\njournal_write は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=2 grounds.chars=59\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:02:00.000Z 判断の根拠（journal_write の grounds）を記録できませんでした（decision.chars=2）: Error: 呼び出しに grounds が届かなかった\n",
+        "alteroid: 2026-10-29T00:02:00.000Z 日誌を記録できませんでした（decision decision.chars=2 grounds.chars=59）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "判断",
+            "grounds": "（根拠は記録されていない —— 呼び出しに grounds が届かなかった。クローンが「根拠なし」と書いたのではない）"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#3": {
+      "output": {
+        "length": 228,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\njournal_write は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: decision decision.chars=10 grounds.chars=5\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "isError": true,
+        "thrown": true,
+        "errorName": "JournalNotRecordedError"
+      },
+      "wrote": "none",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        }
+      ],
+      "journal": [],
+      "dropped": [
+        "alteroid: 2026-10-29T00:03:00.000Z 日誌を記録できませんでした（decision decision.chars=10 grounds.chars=5）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "journal-fails#4": {
+      "output": {
+        "length": 38,
+        "text": "日誌に記録した（id-1）。\ncloses a: a を done にした。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task の状態を変えた（a）: queued → done（済んだ）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "a"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（済んだ）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-2"
+        }
+      ]
+    },
+    "closes-failures#1": {
+      "output": {
+        "length": 69,
+        "text": "日誌に記録した（id-1）。\ncloses a: task a は読めない形で入っている。読めない形のまま書き直さないので、閉じていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "closes-failures#2": {
+      "output": {
+        "length": 84,
+        "text": "日誌に記録した（id-2）。\ncloses a: 閉じる処理が失敗した（Error: ストアが落ちた（get））。閉じたかどうかは task_list で確かめること。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "threw Error: ストアが落ちた（get）"
+        }
+      ]
+    },
+    "closes-failures#3": {
+      "output": {
+        "length": 69,
+        "text": "日誌に記録した（id-3）。\ncloses b: task b は読めない形で入っている。読めない形のまま書き直さないので、閉じていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "threw UnreadableTaskError: 読めない行（テスト用）"
+        }
+      ]
+    },
+    "closes-failures#4": {
+      "output": {
+        "length": 90,
+        "text": "日誌に記録した（id-4）。\ncloses b: 閉じる処理が失敗した（Error: ストアが落ちた（setStatus））。閉じたかどうかは task_list で確かめること。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-4"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:04:00.000Z"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（setStatus）"
+        }
+      ]
+    },
+    "closes-failures#5": {
+      "output": {
+        "length": 108,
+        "text": "日誌に記録した（id-5）。\ncloses c: c を done にした。\ncloses d: 閉じる処理が失敗した（Error: ストアが落ちた（get））。閉じたかどうかは task_list で確かめること。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "d",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 d",
+          "body": "本文 d"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:05:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c",
+          "closedAt": "2026-10-29T00:05:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "成功"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-5",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        },
+        {
+          "type": "decision",
+          "id": "id-6",
+          "at": "2026-10-29T00:05:00.000Z",
+          "decision": "task の状態を変えた（c）: queued → done（成功）",
+          "grounds": "自分で journal_write の closes した",
+          "target": {
+            "kind": "task",
+            "id": "c"
+          }
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-5"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c",
+            "status": "done",
+            "options": {
+              "reason": "成功",
+              "by": "clone",
+              "at": "2026-10-29T00:05:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "c"
+            },
+            "decision": "task の状態を変えた（c）: queued → done（成功）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "ok id-6"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "d"
+          },
+          "outcome": "threw Error: ストアが落ちた（get）"
+        }
+      ]
+    },
+    "closes-races#1": {
+      "output": {
+        "length": 63,
+        "text": "日誌に記録した（id-1）。\ncloses a: task a は無い（確かめた直後に消えていた）。この呼びでは閉じていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "not-found (faked)"
+        }
+      ]
+    },
+    "closes-races#2": {
+      "output": {
+        "length": 36,
+        "text": "日誌に記録した（id-2）。\ncloses b: b は既に done。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "unchanged (faked)"
+        }
+      ]
+    },
+    "closes-races#3": {
+      "output": {
+        "length": 85,
+        "text": "日誌に記録した（id-3）。\ncloses c: c は done から done へは移せない（閉じた件から戻せるのは queued だけ）。この呼びでは閉じていない。",
+        "isError": false,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a"
+        },
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "c",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 c",
+          "body": "本文 c"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-3"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "c"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "c",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:03:00.000Z"
+            }
+          },
+          "outcome": "rejected (faked)"
+        }
+      ]
+    },
+    "closes-journal-fails#1": {
+      "output": {
+        "length": 121,
+        "text": "日誌に記録した（id-1）。\ncloses a: **task は done にしている**が、日誌に残せていない（既に閉じているので、閉じ直す呼びは要らない）。人間が後から読めるよう、journal_write で閉じたことを書き残すこと。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "task-and-journal",
+      "tasks": [
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [
+        "alteroid: 2026-10-29T00:01:00.000Z 日誌を記録できませんでした（decision decision.chars=35 grounds.chars=29）: Error: 日誌が落ちた\n"
+      ],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-1"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "a"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "a",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:01:00.000Z"
+            }
+          },
+          "outcome": "changed"
+        },
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "target": {
+              "kind": "task",
+              "id": "a"
+            },
+            "decision": "task の状態を変えた（a）: queued → done（済んだ）",
+            "grounds": "自分で journal_write の closes した"
+          },
+          "outcome": "threw Error: 日誌が落ちた"
+        }
+      ]
+    },
+    "closes-journal-fails#2": {
+      "output": {
+        "length": 148,
+        "text": "日誌に記録した（id-2）。\ncloses b: 閉じる処理が失敗した（Error: ストアが落ちた（setStatus））。閉じたかどうかは task_list で確かめること。\ncloses ghost: task ghost は無い（task_list で実在する id を確かめること）。",
+        "isError": true,
+        "thrown": false,
+        "errorName": null
+      },
+      "wrote": "journal",
+      "tasks": [
+        {
+          "id": "b",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 b",
+          "body": "本文 b"
+        },
+        {
+          "id": "a",
+          "createdAt": "2026-10-01T00:00:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 a",
+          "body": "本文 a",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "済んだ"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "週次の見直しを始める",
+          "grounds": "記憶の方針"
+        }
+      ],
+      "dropped": [],
+      "calls": [
+        {
+          "op": "journal.append",
+          "args": {
+            "type": "decision",
+            "decision": "週次の見直しを始める",
+            "grounds": "記憶の方針"
+          },
+          "outcome": "ok id-2"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "b"
+          },
+          "outcome": "queued"
+        },
+        {
+          "op": "tasks.setStatus",
+          "args": {
+            "id": "b",
+            "status": "done",
+            "options": {
+              "reason": "済んだ",
+              "by": "clone",
+              "at": "2026-10-29T00:02:00.000Z"
+            }
+          },
+          "outcome": "threw Error: ストアが落ちた（setStatus）"
+        },
+        {
+          "op": "tasks.get",
+          "args": {
+            "id": "ghost"
+          },
+          "outcome": "null"
+        }
+      ]
+    }
+  }
+}
