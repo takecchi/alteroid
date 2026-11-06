@@ -34,7 +34,7 @@ import { createCloneTools } from './tools.js';
 //
 // 秘密: 値は作りものだけ。この道具は decision・grounds を日誌へ伏せずに書く（`noteDroppedRecord` が残す跡には本文は含まれない）ので、作りものの値が入る場面は
 // 日誌へそのまま入ることをいまの振る舞いとして固定する（json にはその作りものの値が残る。本物ではない）。
-// 固定値の json に長い `[A-Za-z0-9_./@-]` の連続を作らない（`scripts/agents-md-references.test.ts` の走査が二乗の時間になる）。長い文字列は 10 字ごとに空白を挟む（`spaced`）。
+// 固定値の json に長い `[A-Za-z0-9_./@-]` の連続を作らない（`scripts/agents-md-references.test.ts` の走査が二乗の時間になる）。長い文字列は 5 字ごと（既定の語なら 10 字ごと）に空白を挟む（`spaced`）。
 //
 // 作れない分岐: 無い（`closes` の検査・grounds の有無・日誌の失敗・閉じる側の失敗・競り合いは口で作った）。
 
@@ -89,7 +89,7 @@ function callTime(index: number): number {
   return BASE_MS + (index + 1) * 60_000;
 }
 
-/** 長さ len の、10 字ごとに空白を挟んだ文字列（末尾は空白にしない） */
+/** 長さ len の、「語＋空白」を繰り返した文字列（空白の間隔は語の長さ＋1 字。既定の語は 9 字で 10 字ごと、`'long'` は 5 字ごと。末尾は空白にしない） */
 function spaced(len: number, word = 'abcdefghi'): string {
   let out = '';
   while (out.length < len) out += `${word} `;
