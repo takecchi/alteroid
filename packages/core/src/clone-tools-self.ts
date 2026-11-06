@@ -426,6 +426,58 @@ async function readSelfStatusFull(
   });
 }
 
+function renderSelfDroppedEmpty(origin: string, since: string): string {
+  return [describeDroppedTraceEmpty(), origin, since].join(' ');
+}
+
+function renderSelfDroppedOffsetBeyond(args: {
+  offset: number;
+  total: number;
+  origin: string;
+  since: string;
+}): string {
+  const { offset, total, origin, since } = args;
+  return (
+    `offset（${String(offset)}）が帳面の件数（${String(total)}）以上なので、` +
+    `これより古い分は無い。offset を ${String(total - 1)} 以下にして呼び直すこと。 ` +
+    `${origin} ${since}`
+  );
+}
+
+// `limit` と予算の両方をこの1本の窓に通す: どちらで切れても、次に渡す offset を同じ式（`skip + shown`）で組めるようにするため
+function sliceSelfDroppedWindow(
+  all: readonly string[],
+  offset: number,
+): { skip: number; windowed: readonly string[] } {
+  const skip = Math.min(offset, all.length);
+  const windowed = skip === 0 ? all : all.slice(0, all.length - skip);
+  return { skip, windowed };
+}
+
+// 残りは `limit` で除外された分と予算で除外された分を1つに数える: 呼び手にどちらが原因かを区別させないため
+function renderSelfDroppedRemaining(args: {
+  remaining: number;
+  total: number;
+  shown: number;
+  nextOffset: number;
+}): string {
+  const { remaining, total, shown, nextOffset } = args;
+  return (
+    `…ほか古い ${String(remaining)} 件は省略（帳面には全 ${String(total)} 件あり、` +
+    `直近から ${String(shown)} 件だけ出した）。続きは ` +
+    `self_dropped offset=${String(nextOffset)} で取れる（limit を上げても動かない）。`
+  );
+}
+
+function renderSelfDroppedPage(args: { lines: string[]; origin: string; since: string }): string {
+  const { lines, origin, since } = args;
+  return [
+    lines.join('\n'),
+    origin,
+    `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
+  ].join('\n');
+}
+
 export function selfTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores } = shared;
   return [
@@ -547,38 +599,28 @@ export function selfTools(context: ToolContext, shared: CloneToolsShared) {
         const since = `この帳面が数え始めたのは ${droppedTraceLedgerSince()}。`;
         const all = recentDroppedTraces();
         if (all.length === 0) {
-          return text([describeDroppedTraceEmpty(), origin, since].join(' '));
+          return text(renderSelfDroppedEmpty(origin, since));
         }
-        // `limit` と予算の両方をこの1本の窓に通す: どちらで切れても、次に渡す offset を同じ式（`skip + shown`）で組めるようにするため
-        const skip = Math.min(offset, all.length);
-        const windowed = skip === 0 ? all : all.slice(0, all.length - skip);
+        const { skip, windowed } = sliceSelfDroppedWindow(all, offset);
         if (windowed.length === 0) {
-          return text(
-            `offset（${String(offset)}）が帳面の件数（${String(all.length)}）以上なので、` +
-              `これより古い分は無い。offset を ${String(all.length - 1)} 以下にして呼び直すこと。 ` +
-              `${origin} ${since}`,
-          );
+          return text(renderSelfDroppedOffsetBeyond({ offset, total: all.length, origin, since }));
         }
         const traces = windowed.slice(-limit);
         const fill = fillListingBudget(traces, SELF_DROPPED_BUDGET, true);
-        // 残りは `limit` で除外された分と予算で除外された分を1つに数える: 呼び手にどちらが原因かを区別させないため
         const remaining = windowed.length - fill.shown;
         const nextOffset = skip + fill.shown;
         const lines = [...fill.lines];
         if (remaining > 0) {
           lines.unshift(
-            `…ほか古い ${String(remaining)} 件は省略（帳面には全 ${String(all.length)} 件あり、` +
-              `直近から ${String(fill.shown)} 件だけ出した）。続きは ` +
-              `self_dropped offset=${String(nextOffset)} で取れる（limit を上げても動かない）。`,
+            renderSelfDroppedRemaining({
+              remaining,
+              total: all.length,
+              shown: fill.shown,
+              nextOffset,
+            }),
           );
         }
-        return text(
-          [
-            lines.join('\n'),
-            origin,
-            `（${describeDroppedTraceRetention(RECENT_TRACE_LIMIT)} ${since}）`,
-          ].join('\n'),
-        );
+        return text(renderSelfDroppedPage({ lines, origin, since }));
       },
     ),
   ];
