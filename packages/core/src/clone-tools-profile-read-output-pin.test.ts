@@ -650,7 +650,8 @@ function classify(
 async function runScenario(scenario: Scenario): Promise<PinnedStep[]> {
   const base = createMemoryStores();
   vi.setSystemTime(new Date(SEED_MS));
-  for (const spec of scenario.seed) await base.profile.set(spec.name, spec.script, spec.scope);
+  for (const spec of scenario.seed)
+    await base.profile.set(spec.name, spec.script, spec.scope ?? 'all');
   let failsNow = false;
   const recorded: Recorded = { calls: [], writes: [] };
   const tools = createCloneTools({
