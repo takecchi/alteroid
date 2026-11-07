@@ -72,6 +72,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
     callPattern: '#journalSelf',
     with: 'self',
   },
+  'clone-denial-journal.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -333,10 +338,8 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#journalRestoreUnreadPassEnd': 'gauge',
     '#journalRestoreUnreadPassStart': 'gauge',
     '#journalSupersededTokenPoolNotice': 'thinning',
-    '#noteDenial': 'decision',
     '#noteDroppedSignals': 'decision',
     '#noteFoldedTick': 'thinning',
-    '#noteGrantFunneled': 'decision',
     '#noteHeldEscalation': 'decision',
     '#noteRedeliveryPredicateHitB': 'gauge',
     '#noteRefusal': 'decision',
@@ -345,7 +348,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteUnproductiveUsageBlockFold': 'decision',
     '#noteUsageNotice': 'gauge',
     '#onPreCompact': 'failure,recovery',
-    '#onSubagentStop': 'decision',
     '#openHumanTask': 'failure',
     '#plugins': 'decision,failure',
     '#pump': 'thinning',
@@ -364,8 +366,15 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#withFreshMemory': 'gauge',
     '#withdrawQueued': 'decision',
     '#workerLimitNotice': 'decision',
-    buildHumanAnswerEvent: 'thinning',
     dropQueuedInboxEvents: 'thinning',
+  },
+  // 拒否の記録（旧 `Clone#noteDenial` ほか）。`onForget` の2本は field 初期化の中にあり、囲む宣言が無いので `<top>`
+  // （`Clone` にあったときは、field の前にあった関数 `buildHumanAnswerEvent` の行に数えられていた）
+  'clone-denial-journal.ts': {
+    '#noteGrantFunneled': 'decision',
+    '<top>': 'thinning',
+    noteDenial: 'decision',
+    onSubagentStop: 'decision',
   },
   // 墓標と見失ったセッション（旧 `Clone#salvageTranscript` ほか）。拾い直しの後半（拾い直しの行・蒸留の失敗の行）は `#distillGrave` が書く。前半（読めなかった印の行）は各 `#pickUpOne*` に残る
   'clone-graves.ts': {
@@ -482,6 +491,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-denial-journal.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -542,6 +555,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 const EXCHANGE_SOURCES = [
   'archive-receiver.ts',
   'clone-daily-report.ts',
+  'clone-denial-journal.ts',
   'clone-graves.ts',
   'clone.ts',
   'denial-renotify.ts',

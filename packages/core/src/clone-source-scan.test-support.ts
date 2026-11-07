@@ -22,6 +22,7 @@ export const JOURNAL_SELF_SOURCES = [
   'clone.ts',
   'clone-graves.ts',
   'clone-daily-report.ts',
+  'clone-denial-journal.ts',
 ] as const;
 
 /** `packages/core/src` の下のファイルを、名前で読む（`JOURNAL_SELF_SOURCES` の走査用）。 */

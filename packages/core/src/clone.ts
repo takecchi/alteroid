@@ -7,7 +7,6 @@ import type { query, SessionKey, SessionStore } from '@anthropic-ai/claude-agent
 import type {
   AgentContentBlock,
   AgentEvent,
-  AgentPermissionDenial,
   AgentRuntimeFacts,
   AgentTurnEnded,
   AgentTurnUsage,
@@ -17,7 +16,6 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
-  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
@@ -49,12 +47,6 @@ import {
   restoredInboxEventVerdict,
   type RestoredInboxEventVerdict,
 } from './inbox-staleness.js';
-import {
-  denialInputAbsence,
-  denialInputShape,
-  RecentDenialLog,
-  type DeniedRecord,
-} from './denial-shape.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
@@ -106,9 +98,11 @@ import {
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
 import { CloneDailyReport } from './clone-daily-report.js';
+import { CloneDenialJournal, DENIED_TOOL_USE_MEMORY_LIMIT } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
 import { redeliveredLiveHeadline, redeliveryNoticeFor } from './clone-redelivery-text.js';
 import { CloneGraves } from './clone-graves.js';
+import { UNKNOWN_AGENT_TYPE, UNKNOWN_TOOL_NAME } from './clone-unknown-labels.js';
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
   readTranscriptTail,
@@ -425,27 +419,10 @@ const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
   practice_write: 'やり方を書き直した',
 };
 
-// 空文字や省略で表さない: 読めなかったことを黙って落とすと、監査の穴が「何も起きなかった」と同じ見え方になるため
-const UNKNOWN_TOOL_NAME = '(不明な道具)';
-const UNKNOWN_AGENT_TYPE = '(不明)';
-
 const JOURNAL_WRITE_QUALIFIED_TOOL_NAME = qualifiedToolName('journal_write');
 
 // 切らずに残さない: `error` は上限の無い自由文で、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
 const TOOL_USE_ERROR_EXCERPT = 500;
-
-const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
-
-const RECENT_DENIAL_LIMIT = 32;
-
-const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
-
-// コマンド本文を持たない: 覚える必要があるのは人間が承認済みの規則（`grant.rule`）とその行の id だけのため
-interface AllowedByGrantRecord {
-  readonly grantId: string;
-  readonly rule: string;
-  readonly agentId?: string;
-}
 
 // 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
 const MERGED_BATCH_SIZE_LIMIT = 50;
@@ -927,39 +904,19 @@ class Clone implements CloneHost {
   #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
-  // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
-  readonly #deniedToolUses = createRecentMap<DeniedRecord>({
-    limit: DENIED_TOOL_USE_MEMORY_LIMIT,
-    onForget: (ids) => {
-      void this.#journalSelf(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限` +
-          `（${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
-          `${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から` +
-          '再び届くと、同じ拒否がもう一度日誌に載る。',
-      );
-    },
+  /**
+   * 拒否の記録（`clone-denial-journal.ts`）。拒否の記憶・直近の拒否・許可 DB に一致して allow した控えと、その `onForget` の日誌を持つ。
+   * field 初期化で作る: 口は呼ばれるまで読まない関数だけで組む（`#permissionMode` は constructor の中で入る）。
+   * 口は Promise を直に返す（`async` で包まない）: `await` の段を増やさないため。
+   */
+  readonly #denials = new CloneDenialJournal({
+    journal: (entry) => this.#journal(entry),
+    permissionMode: () => this.#permissionMode,
   });
-  readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
   // 入力が読めず断られた tool_use の id（#5313）。上限で忘れた id の再送は二重に書かれうるが、行が1本増えるだけで欠けはしない
   readonly #unparsedToolInputJournaled = createRecentMap<true>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
   });
-  // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
-  readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
-    limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
-    onForget: (ids) => {
-      void this.#journalSelf(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
-          `（${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
-          `${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を` +
-          '追い越した」とは検出できない。',
-      );
-    },
-  });
-  // 日誌の書き込みは毎回行い、間引くのは注意書きの文言だけにする。上限や永続化は持たせない: 忘れても実害は注意書きがもう一度載るだけのため
-  readonly #grantFunneledWarnedOnce = new Set<string>();
 
   // 台帳（消費）が積まれたかで代用しない: 「いくら使ったか」の軸であって「答えが返ったか」の軸ではないため
   #sessionAnswered = false;
@@ -5406,7 +5363,7 @@ class Clone implements CloneHost {
       // `PostToolUse` と排他なので両方に登録しても二重記録にならない。片方だけだと失敗・中断した道具呼び出しが日誌に残らない
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       // 配線の理由は `claude-provider.ts` の `CloneSessionOptionsRequest.onSubagentStop` の doc
-      onSubagentStop: (record) => this.#onSubagentStop(record),
+      onSubagentStop: (record) => this.#denials.onSubagentStop(record),
     };
   }
 
@@ -5463,7 +5420,7 @@ class Clone implements CloneHost {
         const turn = this.#sdkSession.turn;
         return turn?.conversationId ?? turn?.originConversationId ?? undefined;
       },
-      recentDenials: () => this.#recentDenials.list(),
+      recentDenials: () => this.#denials.recentDenials(),
       // task に結び付けていない委譲は控えない（どの task にも一致しない）
       noteDelegationStarted: (taskId) => {
         if (taskId !== undefined) this.#turnReplies.delegated.add(taskId);
@@ -5591,7 +5548,7 @@ class Clone implements CloneHost {
       });
       if (!usable) continue;
       if (typeof record.toolUseId === 'string') {
-        this.#allowedByGrantToolUses.set(record.toolUseId, {
+        this.#denials.rememberAllowedByGrant(record.toolUseId, {
           grantId: grant.id,
           rule: grant.rule,
           ...(typeof record.agentId === 'string' ? { agentId: record.agentId } : {}),
@@ -5616,7 +5573,7 @@ class Clone implements CloneHost {
     this.#noteTranscriptPath(record.transcriptPath);
     // 決着したので控えから忘れる: `PreToolUse` は実行前にしか発火せず、成功した呼び出しに後から拒否は届かない
     if (typeof record.toolUseId === 'string') {
-      this.#allowedByGrantToolUses.delete(record.toolUseId);
+      this.#denials.settleAllowedByGrant(record.toolUseId);
     }
 
     await this.#journalToolUse(record, CLONE_ACTOR_ID);
@@ -5751,7 +5708,7 @@ class Clone implements CloneHost {
     if (typeof level === 'string') this.#effort = level;
     this.#noteTranscriptPath(record.transcriptPath);
     if (typeof record.toolUseId === 'string') {
-      this.#allowedByGrantToolUses.delete(record.toolUseId);
+      this.#denials.settleAllowedByGrant(record.toolUseId);
     }
 
     await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
@@ -5823,136 +5780,6 @@ class Clone implements CloneHost {
         TOOL_USE_ERROR_EXCERPT,
       ),
     });
-  }
-
-  /**
-   * `tool_use` としては記録しない: 拒否は道具を使ったのではなく、混ぜると `digest` の「自分で手を動かした回数」が使えていない回数まで数える。
-   * 生の合図と `result.permission_denials` の両方から呼ばれるので、`tool_use_id` で二重書きを防ぐ。
-   */
-  async #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): Promise<void> {
-    const tool = denial.tool ?? UNKNOWN_TOOL_NAME;
-
-    // 必ず SDK が付けてきた `tool_use_id` で引く: 下の代用値では無関係な一致が起きうる。引いたら消す（両方の合図から届いても検出は1回）
-    if (typeof denial.toolUseId === 'string') {
-      const funneled = this.#allowedByGrantToolUses.get(denial.toolUseId);
-      if (funneled !== undefined) {
-        this.#allowedByGrantToolUses.delete(denial.toolUseId);
-        await this.#noteGrantFunneled(funneled, denial, via);
-      }
-    }
-
-    // id が無ければ道具の名前で代用する: 取りこぼすより重複を許す
-    const toolUseId = denial.toolUseId ?? `${tool}:${via}`;
-    // 既に書いた1件でも、入力を持つ記録が後から来たら形だけ足す: 入力を持つのは `via: 'result'` だけで、`has` で弾くと何を実行しようとしたかが残らない
-    const seen = this.#deniedToolUses.get(toolUseId);
-    if (seen !== undefined) {
-      if (seen.input || denial.input === undefined) return;
-      this.#deniedToolUses.set(toolUseId, { input: true });
-      this.#recentDenials.fillHeadWord(toolUseId, denial.input);
-      const later = denialInputShape(denial.input);
-      if (later !== undefined) {
-        await this.#journalSelf(
-          'inbound',
-          `${EXCHANGE_KIND_DECISION_PREFIX}先に書いた ${tool} の拒否について、ターン終わりの記録（合図の出所: result）に` +
-            `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${later}`,
-        );
-      }
-      return;
-    }
-    this.#deniedToolUses.set(toolUseId, { input: denial.input !== undefined });
-    this.#recentDenials.remember(toolUseId, new Date().toISOString(), tool, denial);
-
-    // 欠けているものは作り物を出さず行を省く
-    const denialDetails = [
-      denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
-      denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
-      denial.message === undefined ? undefined : `モデルへの拒否文: ${denial.message}`,
-    ].filter((line): line is string => line !== undefined);
-    const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
-
-    // 層は `agent_id` で見る: 分けないと「クローン自身の手が止まっている」と「作業者の手が止まっている」が潰れ、誤った層へ次の判断が向く。
-    // `via: 'result'` には `agent_id` が原理的に無いので「クローン本体」と決めつけず、「どちらの層か不明」のまま出す。
-    // `agent_type` は今のところ常に無い（`permission-denied.test.ts` が不在を固定）。作り物の型名を出さない。
-    const agentId = denial.agentId;
-    const agentType = denial.agentType;
-    const actorLabel =
-      via !== 'live'
-        ? 'どちらの層か不明'
-        : agentId === undefined
-          ? 'クローン本体'
-          : `作業者（${agentType ?? UNKNOWN_AGENT_TYPE}）`;
-
-    await this.#journalSelf(
-      'inbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}${tool} の実行が、確認へ上がらずに止められた${why}。` +
-        `止められたのは ${actorLabel} の手（合図の出所: ${via}）。` +
-        // 入力は形だけ残し値は残さない: 道具の入力には鍵が入りうる（`denial-shape.ts`）
-        `入力の形: ${denialInputShape(denial.input) ?? denialInputAbsence(via)}。` +
-        `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
-    );
-  }
-
-  /**
-   * 原因は断定しない: 分類器へ回された／deny 規則が上書きした、のどちらかをここからは切り分けられないので、「効いていない可能性がある」とだけ言う。
-   * 事実は検出のたびに書き、注意書きは grant ごとに初回だけ足す。コマンド本文は読まない（形は `#noteDenial` が書く）。
-   */
-  async #noteGrantFunneled(
-    funneled: AllowedByGrantRecord,
-    denial: AgentPermissionDenial,
-    via: 'live' | 'result',
-  ): Promise<void> {
-    const denialDetails = [
-      denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
-      denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
-    ].filter((line): line is string => line !== undefined);
-    const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
-
-    const firstTimeForGrant = !this.#grantFunneledWarnedOnce.has(funneled.grantId);
-    if (firstTimeForGrant) this.#grantFunneledWarnedOnce.add(funneled.grantId);
-    const guidance = firstTimeForGrant
-      ? ' 考えられるのは、SDK が hook の allow を分類器へ回すようになったこと、' +
-        'または deny 規則が hook の allow を上書きしたことである' +
-        '（どちらかは、あるいは両方かは、ここからは切り分けられない）。' +
-        'この許可は、いまは効いていない可能性がある。'
-      : '';
-
-    await this.#journalSelf(
-      'inbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
-        `PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: ${via}）が拒否された${why}。` +
-        guidance,
-    );
-  }
-
-  /**
-   * 決着も拒否も来ないまま作業者が `SubagentStop` を迎えた `#allowedByGrantToolUses` の控えを日誌へ残す。
-   * 「追い越された」とは書かず「決着しなかった」とだけ言う: 分かるのは不在の事実だけで、実際の拒否を受け取ってはいないため。
-   * `agentId` で絞る: 本体や別の作業者の控えを消費しないため。
-   */
-  async #onSubagentStop(record: AgentSubagentStopRecord): Promise<void> {
-    if (typeof record.agentId !== 'string') return;
-    const agentId = record.agentId;
-
-    for (const [toolUseId, funneled] of this.#allowedByGrantToolUses.entries()) {
-      if (funneled.agentId !== agentId) continue;
-      this.#allowedByGrantToolUses.delete(toolUseId);
-
-      const firstTimeForGrant = !this.#grantFunneledWarnedOnce.has(funneled.grantId);
-      if (firstTimeForGrant) this.#grantFunneledWarnedOnce.add(funneled.grantId);
-      const guidance = firstTimeForGrant
-        ? ' 「hook の allow を追い越した」とは断定しない——決着も拒否の記録も' +
-          '無いまま作業者が終わった、という不在の事実だけがここでは分かる。' +
-          'この許可は、いまは効いていない可能性がある。'
-        : '';
-
-      await this.#journalSelf(
-        'inbound',
-        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
-          `PreToolUse が allow を返した作業者（agentId: ${agentId}）の呼び出し` +
-          `（tool_use_id: ${toolUseId}）が、実行の決着も拒否の記録も無いまま、` +
-          `その作業者の SubagentStop を迎えた。決着しなかった。${guidance}`,
-      );
-    }
   }
 
   /**
@@ -6155,7 +5982,7 @@ class Clone implements CloneHost {
       ...this.#attachmentLimitsEntry(),
       // 省略しない: `ToolContext.conversationId` が必須で、省くと `createCloneTools` が throw する。
       conversationId: () => undefined,
-      recentDenials: () => this.#recentDenials.list(),
+      recentDenials: () => this.#denials.recentDenials(),
     });
     // 蒸留が使う鍵の身元（観測用。env には触れない）。鍵が回ったとき env と身元がずれないよう、`distill` の組み立てと同じ同期区間で読む
     const identity = this.#tokenIdentity?.();
@@ -6483,7 +6310,7 @@ class Clone implements CloneHost {
 
       case 'permission_denied': {
         // 捨てない: 止められたことが日誌に出ないと「静かになった」と「起きていない」が区別できない。
-        await this.#noteDenial(event.denial, 'live');
+        await this.#denials.noteDenial(event.denial, 'live');
         return;
       }
 
@@ -6814,7 +6641,7 @@ class Clone implements CloneHost {
 
     // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
     for (const denial of event.denials) {
-      await this.#noteDenial(denial, 'result');
+      await this.#denials.noteDenial(denial, 'result');
     }
 
     const turn = this.#sdkSession.turn;

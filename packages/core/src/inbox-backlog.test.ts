@@ -1449,6 +1449,7 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
       '../../../packages/core/src/clone.ts',
       '../../../packages/core/src/clone-graves.ts',
       '../../../packages/core/src/clone-daily-report.ts',
+      '../../../packages/core/src/clone-denial-journal.ts',
     ];
 
     // 道具の実装ソース（tools.ts と clone-tools-*.ts）は全部読む。
