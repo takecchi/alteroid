@@ -65,7 +65,6 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
-import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
@@ -181,10 +180,7 @@ import { placedEnvValue } from './placed-env.js';
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
-import {
-  delegatedPermissionRuleOf,
-  type DelegatedPermissionRuleService,
-} from './delegated-permission-rules.js';
+import { type DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { McpServers } from './mcp-servers.js';
 import { isManagerInFlight } from './job-status-running.js';
 import type { PluginDistributionService } from './plugin-distribution-service.js';
@@ -218,7 +214,7 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
-import { describeAnsweredVia, PERMISSION_GRANT_CONSENT_PHRASE } from './schema.js';
+import { describeAnsweredVia } from './schema.js';
 import type {
   ApprovalSelection,
   ChatStreamEvent,
@@ -229,11 +225,9 @@ import type {
   JournalEntryInput,
   MemoryDocument,
   PendingApproval,
-  PermissionGrant,
   ScheduledRequest,
 } from './schema.js';
 import { matchPermissionRule } from './permission-rule.js';
-import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError } from './store.js';
