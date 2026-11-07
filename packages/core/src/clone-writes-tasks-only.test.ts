@@ -105,19 +105,22 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     expect(prompt).toContain('task_set_status_many');
   });
 
-  it.each(['prompt.ts', 'digest.ts', 'clone.ts', 'clone-graves.ts', 'tools.ts', 'manager.ts'])(
-    '%s に、消した道具の名前が残っていない',
-    (file) => {
-      // tools.ts は道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
-      const source =
-        file === 'tools.ts' ? readCloneToolsSource() : readFileSync(`${root}${file}`, 'utf8');
-      expect(source.length, `${file} の本文が空`).toBeGreaterThan(0);
-      // 許す1種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）
-      const historical = /^\s+commitment_(close|reopen): '/;
-      const hits = source
-        .split('\n')
-        .filter((line) => removed.test(line) && !historical.test(line));
-      expect(hits, `${file} に消した道具の名前が在る`).toEqual([]);
-    },
-  );
+  it.each([
+    'prompt.ts',
+    'digest.ts',
+    'clone.ts',
+    'clone-graves.ts',
+    'clone-digest.ts',
+    'tools.ts',
+    'manager.ts',
+  ])('%s に、消した道具の名前が残っていない', (file) => {
+    // tools.ts は道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
+    const source =
+      file === 'tools.ts' ? readCloneToolsSource() : readFileSync(`${root}${file}`, 'utf8');
+    expect(source.length, `${file} の本文が空`).toBeGreaterThan(0);
+    // 許す1種: 日誌に残っている人間の操作の種別ラベル（`HUMAN_ACTION_LABEL`。古い日誌の行を読むために残す）
+    const historical = /^\s+commitment_(close|reopen): '/;
+    const hits = source.split('\n').filter((line) => removed.test(line) && !historical.test(line));
+    expect(hits, `${file} に消した道具の名前が在る`).toEqual([]);
+  });
 });

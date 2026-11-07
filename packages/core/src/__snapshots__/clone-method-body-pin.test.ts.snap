@@ -43,7 +43,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "if (event.cause !== 'manual' && claimed.status !== 'withdrawn' && claimed.status !== 'completed') {this.#onScheduledRunNotStarted?.(event.kind);} return;} const cause = event.cause === 'manual' ? 'manual' : 'schedule';",
   "const journalCause = event.cause ?? 'schedule';",
   "const plan = claimed.status === 'ok' ? claimed.plan : null;",
-  "const timerDigest = await this.#recentDigestCounts();",
+  "const timerDigest = await this.#digest.recentCounts();",
   "await this.#journal(turnInputEntry({type: 'timer', kind: event.kind, cause: journalCause, ...(event.target === undefined ? {} : {target: event.target}), request: plan !== null, digest: timerDigest}));",
   "const timerPrompt = buildTimerPrompt({kind: event.kind, ...(event.target === undefined ? {} : {target: event.target}), ...(plan === null ? {} : {request: plan.request}), ...(plan?.lastRunAt === undefined ? {} : {lastRunAt: plan.lastRunAt}), ...(plan?.pendingRun === undefined ? {} : {unfinishedAt: plan.pendingRun.at}), digest: timerDigest});",
   "const outcome = await this.#runInternal(timerPrompt);",
