@@ -950,4 +950,65 @@ describe('taskId を渡さない manager_start は、そのターンで読んだ
     expect(await statusOf(stores, 'evt-e1')).toBe('done');
     await s.clone.stop();
   });
+
+  it('(f) 読んだ1件の task が人間起点でない（同じ id の自分の task が先に在る）とき: 結ばずに起こす', async () => {
+    const started: ManagerStartInput[] = [];
+    const stores = createMemoryStores();
+    await stores.tasks.add(seeded('evt-f1', { origin: 'self' }));
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('委譲した'),
+        { run: () => tool('manager_start')({ request: '調査' }) },
+      ],
+      { stores, managers: stubPool(started) },
+    );
+    s.clone.post(human('evt-f1', '同じ id の自分の task が先に在る'));
+    await waitForTerminal(s.events);
+
+    expect(started).toHaveLength(1);
+    expect(started[0]?.taskId).toBeUndefined();
+    await s.clone.stop();
+  });
+
+  it('(g) 1ターンで manager_start を2回呼ぶとき: 1本目だけが結ばれ、2本目は断られず結ばずに起こす', async () => {
+    const started: ManagerStartInput[] = [];
+    const stores = createMemoryStores();
+    // 実際の委譲は start で job を書く。偽も、結ばれた委譲が走っている記録を残す
+    const managers = stubPool(started, {
+      start: (input: ManagerStartInput): Promise<ManagerSummary> => {
+        started.push(input);
+        const managerId = `mgr-g${started.length}`;
+        if (input.taskId !== undefined) {
+          void stores.jobs.putJob(runningJob(managerId, 'conv-1', input.taskId));
+        }
+        return Promise.resolve({
+          managerId,
+          status: 'running',
+          live: true,
+          cwd: '/work',
+          request: input.request,
+          startedAt: AT,
+          updatedAt: AT,
+          waiting: [],
+          runnerId: 'runner-a',
+        });
+      },
+    });
+    const s = boot(
+      (_turn, _input, tool) => [
+        ...say('2本頼んだ'),
+        { run: () => tool('manager_start')({ request: '1本目の調査' }) },
+        { run: () => tool('manager_start')({ request: '2本目の調査' }) },
+      ],
+      { stores, managers },
+    );
+    s.clone.post(human('evt-g1', '2本の調査を頼みたい'));
+    await waitForTerminal(s.events);
+
+    expect(started).toHaveLength(2);
+    expect(started[0]?.taskId).toBe('evt-g1');
+    expect(started[1]?.taskId).toBeUndefined();
+    expect(await statusOf(stores, 'evt-g1')).toBe('queued');
+    await s.clone.stop();
+  });
 });
