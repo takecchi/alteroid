@@ -114,6 +114,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'clone-daily-report.ts',
     'clone-denial-journal.ts',
     'clone-tool-use-journal.ts',
+    'clone-approval-answers.ts',
     'clone-redelivery-text.ts',
     'tools.ts',
     'manager.ts',

@@ -77,6 +77,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
     callPattern: '#journalSelf',
     with: 'self',
   },
+  'clone-approval-answers.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -355,7 +360,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#record': 'human',
     '#recordUsage': 'failure,gauge',
     '#recordWorkerLimit': 'decision',
-    '#reopenAnswerDeliveryAfterFailure': 'decision',
     '#reopenSession': 'decision',
     '#reportFailure': 'failure,human,thinning',
     '#restoreUnreadPass': 'thinning',
@@ -383,6 +387,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#pickUpOneTranscriptGrave': 'failure',
     '#reportDroppedGraves': 'failure',
     salvageTranscript: 'failure,recovery',
+  },
+  // 承認への回答の配達と許可の記録（旧 `Clone#reopenAnswerDeliveryAfterFailure`）。公開メソッドは `#` の付かない名前の行
+  'clone-approval-answers.ts': {
+    reopenDeliveryAfterFailure: 'decision',
   },
   // 日報（旧 `Clone#dailyReport`）。公開メソッド `run` は `#` の付かない名前の行
   'clone-daily-report.ts': {
@@ -495,6 +503,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-approval-answers.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -554,6 +566,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 
 const EXCHANGE_SOURCES = [
   'archive-receiver.ts',
+  'clone-approval-answers.ts',
   'clone-daily-report.ts',
   'clone-denial-journal.ts',
   'clone-graves.ts',

@@ -122,7 +122,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "await this.#noteDroppedSignals(batch, {failedOutsideUsage, defer});",
   "for (const held of batch) {if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);",
   "if (failedOutsideUsage && held.type === 'human_answer') {this.#handledHumanAnswerIds.delete(held.id);",
-  "await this.#reopenAnswerDeliveryAfterFailure(held);} await this.#settleInboxEvent(held, defer);} this.#turnTimer = null;",
+  "await this.#approvals.reopenDeliveryAfterFailure(held);} await this.#settleInboxEvent(held, defer);} this.#turnTimer = null;",
   "await this.#writeTurnTiming(timer, this.#pumpTurnFailed);",
   "this.#inFlight = null;}} this.#delivery.settleAllCompletions();",
 ]

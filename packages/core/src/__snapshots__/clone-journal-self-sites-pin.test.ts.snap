@@ -1,5 +1,11 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-approval-answers.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "reopenDeliveryAfterFailure 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 \${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、\` + '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' + '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。'",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-daily-report.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "run 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: \${cause}）\`",
@@ -52,7 +58,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#journalSupersededTokenPoolNotice 'outbound' (next === null ? \`\${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）は、処理中に内容の違う同種の通知が届いて\` + \`代表が差し替わった後に枠で失敗して戻ってきたので、延期の列へは積まずに畳んだ（モデルへ渡るのは新しい代表だけ。\` : \`\${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、\` + \`内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（\` + \`\${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。\`) + \`合流はここまでで累計 \${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。\`",
   "#openHumanTask 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: \${event.id}）。\` + \`必要なら \\\`task_add\\\` で載せ直すこと（理由: \${reasonOf(error)}）。\`",
   "#noteDroppedSignals 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}\`",
-  "#reopenAnswerDeliveryAfterFailure 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 \${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、\` + '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' + '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。'",
   "#restoreUnreadPass 'outbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので、配らずに畳んだ\` + \`（配り直しの対象だったが、消し込みが先に届いた）: \${inboxEventShape(record.event)}\`",
   "#journalRedeliveredLive 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${redeliveredLiveHeadline(liveRecordsThisPass, alone, this.#restoredCohort)}\`",
   "#journalRestoreUnreadPassStart 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 \${total} 件）\`",
