@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -12,6 +12,25 @@ export const CLONE_TS = path.join(SRC_DIR, 'clone.ts');
 
 export function readCloneSource(): string {
   return readFileSync(CLONE_TS, 'utf8');
+}
+
+/**
+ * 日誌へ `with: 'self'` の1行を書く箇所（`this.#journalSelf(` / `this.#journal({ type: 'exchange', with: 'self', … })`）を持つソース。
+ * `Clone` から協力者クラスへ塊を切り出したら、その協力者のファイルをここへ足す（足し漏れは `clone-journal-self-sites-pin.test.ts` が落ちる）。
+ */
+export const JOURNAL_SELF_SOURCES = ['clone.ts'] as const;
+
+/** `packages/core/src` の下のファイルを、名前で読む（`JOURNAL_SELF_SOURCES` の走査用）。 */
+export function readCoreSource(file: string): string {
+  return readFileSync(path.join(SRC_DIR, file), 'utf8');
+}
+
+/** `packages/core/src` の下の（試験ではない）ソースのファイル名。`JOURNAL_SELF_SOURCES` の足し漏れを見つけるために並べる。 */
+export function coreSourceFiles(): string[] {
+  return readdirSync(SRC_DIR).filter(
+    (file) =>
+      file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.endsWith('.test-support.ts'),
+  );
 }
 
 /** 振り分けの固定・長いメソッドの固定の対象にしてよいソース（`packages/core/src` の下）。 */

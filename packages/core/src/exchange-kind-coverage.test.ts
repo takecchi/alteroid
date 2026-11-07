@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -65,6 +65,8 @@ const DEFAULT_EXCHANGE_HELPER: ExchangeHelper = {
 };
 const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
   'clone.ts': { definition: '#journalSelf', callPattern: '#journalSelf', with: 'self' },
+  // `Clone` から切り出した協力者は、`Clone` と同じ形の private `#journalSelf(role, text)` を持つ（`this.#ports.journalSelf(…)` の字面だと走査が拾わない）
+  'clone-graves.ts': { definition: '#journalSelf', callPattern: '#journalSelf', with: 'self' },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -462,6 +464,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-graves.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -519,21 +525,31 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
   );
 }
 
+const EXCHANGE_SOURCES = [
+  'archive-receiver.ts',
+  'clone.ts',
+  'denial-renotify.ts',
+  'manager.ts',
+  'push-ledger.ts',
+  'quota-stop-windows.ts',
+  'restored-windows.ts',
+  'resume-event-windows.ts',
+  'session-loaders.ts',
+  'synthesized-notice-windows.ts',
+  'usage-receiver.ts',
+  'usage-wake.ts',
+];
+
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
-  for (const file of [
-    'archive-receiver.ts',
-    'clone.ts',
-    'denial-renotify.ts',
-    'manager.ts',
-    'push-ledger.ts',
-    'quota-stop-windows.ts',
-    'restored-windows.ts',
-    'resume-event-windows.ts',
-    'session-loaders.ts',
-    'synthesized-notice-windows.ts',
-    'usage-receiver.ts',
-    'usage-wake.ts',
-  ]) {
+  it('private `#journalSelf(` を持つソースは、すべて走査の対象に載っている（Clone から協力者へ切り出したときの足し漏れを通さない）', () => {
+    const unlisted = readdirSync(CORE_SRC_DIR)
+      .filter((file) => file.endsWith('.ts') && !/\.test(?:-support)?\.ts$/.test(file))
+      .filter((file) => !EXCHANGE_SOURCES.includes(file))
+      .filter((file) => /\bthis\.#journalSelf\(/.test(readCoreSource(file)));
+    expect(unlisted).toEqual([]);
+  });
+
+  for (const file of EXCHANGE_SOURCES) {
     const sites = findJournalCallObjects(file);
 
     it(`${file}: 走査が書き込み箇所を1つも見つけられない状態（走査の故障）を通さない`, () => {

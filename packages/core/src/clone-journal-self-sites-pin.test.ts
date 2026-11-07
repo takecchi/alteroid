@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  coreSourceFiles,
   enclosingDeclaration,
+  JOURNAL_SELF_SOURCES,
   readCloneSource,
+  readCoreSource,
   splitGroup,
   squash,
 } from './clone-source-scan.test-support.js';
@@ -55,13 +58,34 @@ function selfSites(text: string): string[] {
   return sites.sort((a, b) => a.start - b.start).map((site) => site.line);
 }
 
+/**
+ * 試験の名前。clone.ts の分は、ファイルを増やす前の名前のまま（スナップショットの名前を変えないため）。
+ * スナップショットはファイルごとに別にする: 連結して読むと、箇所の並び（`start` の順）がファイルをまたいで変わるため。
+ */
+function titleOf(file: string, title: string): string {
+  return file === 'clone.ts' ? title : `${file}: ${title}`;
+}
+
 describe('clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯）', () => {
-  it('書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない', () => {
-    expect(selfSites(readCloneSource())).toMatchSnapshot();
-  });
+  for (const file of JOURNAL_SELF_SOURCES) {
+    it(titleOf(file, '書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない'), () => {
+      expect(selfSites(readCoreSource(file))).toMatchSnapshot();
+    });
+  }
 
   it('走査が箇所を見つけられない状態（走査の故障）を通さない', () => {
     // 寄せ終わっても `#journalSelf(` の呼び出しとして数えられるので、0 にはならない
     expect(selfSites(readCloneSource()).length).toBeGreaterThan(50);
+    for (const file of JOURNAL_SELF_SOURCES) {
+      expect(selfSites(readCoreSource(file)).length, file).toBeGreaterThan(0);
+    }
+  });
+
+  it('with: self の書き込み箇所を持つソースは、すべて走査の対象に載っている（協力者へ切り出したときの足し漏れを通さない）', () => {
+    const listed: readonly string[] = JOURNAL_SELF_SOURCES;
+    const unlisted = coreSourceFiles()
+      .filter((file) => !listed.includes(file))
+      .filter((file) => selfSites(readCoreSource(file)).length > 0);
+    expect(unlisted).toEqual([]);
   });
 });
