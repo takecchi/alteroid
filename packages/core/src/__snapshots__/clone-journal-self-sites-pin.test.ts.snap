@@ -1,5 +1,12 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-daily-report.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "run 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: \${cause}）\`",
+  "run 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（\${date}）で日誌を読めなかった\` + \`（理由: \${reasonOf(error)}）。\` + (outcome.status === 'failed' ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。' : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' + 'ならこの回の重複（消さずに日誌から辿ること）。')",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-graves.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "salvageTranscript 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
@@ -53,8 +60,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#handleTimer 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 \${event.kind} は、この発火では動かない: \${claimed.reason}\`",
   "#settleTimerRun 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 \${event.kind}（\${event.at}）のターンが失敗で終わった\` + \`ので「終わった」とは記録しない（引き受けた印は残る。\${retryClause}）: \` + outcome.reason",
   "#completeScheduledRun 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 \${kind} の「終わった」を記録できなかった\` + \`（引き受けた印が残るので、次の起動で配り直される）: \${last}\`",
-  "#dailyReport 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: \${cause}）\`",
-  "#dailyReport 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（\${date}）で日誌を読めなかった\` + \`（理由: \${reasonOf(error)}）。\` + (outcome.status === 'failed' ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。' : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' + 'ならこの回の重複（消さずに日誌から辿ること）。')",
   "#withFreshMemory 'outbound' EXCHANGE_KIND_GAUGE_PREFIX + redactErrorText(describeMemoryIndexRefresh({slugs: documents.map((doc) => doc.slug), renderedChars: reinjectedIndex.length, totalDocuments: documents.length}), this.#env)",
   "#resumeCandidateWithinBudget 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: \${sessionId}\` + \`（\${bytes} バイト ＞ 予算 \${RESUME_SIZE_BUDGET_BYTES} バイト）\`",
   "#externalMcpServers 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで\` + \`このセッションを起こした（理由: \${reasonOf(error)}）。\` + '登録を直すには人間に PUT /mcp-servers で置き直してもらう。'",

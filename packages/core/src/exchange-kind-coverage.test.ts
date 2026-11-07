@@ -67,6 +67,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
   'clone.ts': { definition: '#journalSelf', callPattern: '#journalSelf', with: 'self' },
   // `Clone` から切り出した協力者は、`Clone` と同じ形の private `#journalSelf(role, text)` を持つ（`this.#ports.journalSelf(…)` の字面だと走査が拾わない）
   'clone-graves.ts': { definition: '#journalSelf', callPattern: '#journalSelf', with: 'self' },
+  'clone-daily-report.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -313,7 +318,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#applySessionStarted': 'decision',
     '#buildSessionSpec': 'decision',
     '#completeScheduledRun': 'failure',
-    '#dailyReport': 'decision,failure',
     '#dropPendingCollapse': 'thinning',
     '#dropStaleRedelivery': 'thinning',
     '#externalMcpServers': 'failure',
@@ -370,6 +374,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#pickUpOneTranscriptGrave': 'failure',
     '#reportDroppedGraves': 'failure',
     salvageTranscript: 'failure,recovery',
+  },
+  // 日報（旧 `Clone#dailyReport`）。公開メソッド `run` は `#` の付かない名前の行
+  'clone-daily-report.ts': {
+    run: 'decision,failure',
   },
   'manager.ts': {
     '#askedOf': 'thinning',
@@ -470,6 +478,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-daily-report.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -529,6 +541,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 
 const EXCHANGE_SOURCES = [
   'archive-receiver.ts',
+  'clone-daily-report.ts',
   'clone-graves.ts',
   'clone.ts',
   'denial-renotify.ts',

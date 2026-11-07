@@ -111,6 +111,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'clone.ts',
     'clone-graves.ts',
     'clone-digest.ts',
+    'clone-daily-report.ts',
     'tools.ts',
     'manager.ts',
   ])('%s に、消した道具の名前が残っていない', (file) => {

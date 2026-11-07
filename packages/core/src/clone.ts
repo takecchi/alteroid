@@ -55,7 +55,6 @@ import {
   RecentDenialLog,
   type DeniedRecord,
 } from './denial-shape.js';
-import { buildActivityDigest } from './digest.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
@@ -106,6 +105,7 @@ import {
   type MixableSignal,
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
+import { CloneDailyReport } from './clone-daily-report.js';
 import { CloneDigest } from './clone-digest.js';
 import { CloneGraves } from './clone-graves.js';
 import {
@@ -216,20 +216,14 @@ import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
   buildCloneSystemPrompt,
-  buildDailyReportPrompt,
   buildDistillPrompt,
   buildExternalEventPrompt,
   buildSelfInitiativePrompt,
   buildTimerPrompt,
 } from './prompt.js';
-import { DAILY_REPORT_KIND, dailyReportEvent, localDate, localDayRange } from './schedule.js';
+import { DAILY_REPORT_KIND, localDate } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
-import {
-  describeAnsweredVia,
-  isDailyReport,
-  isWrittenDailyReport,
-  PERMISSION_GRANT_CONSENT_PHRASE,
-} from './schema.js';
+import { describeAnsweredVia, PERMISSION_GRANT_CONSENT_PHRASE } from './schema.js';
 import type {
   ApprovalSelection,
   ChatStreamEvent,
@@ -399,8 +393,6 @@ type RawLogMeasure =
 
 // この値を上げない: 巨大セッションを resume すると JSON.parse の結果が V8 ヒープ 4 GiB を使い切って落ちるため（天井の半分 ÷ 展開倍率4 ＝ 512 MiB）
 const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024;
-
-const DAILY_REPORT_LOOKUP = 30;
 
 // 使い切ったら諦める: 恒常的な失敗で回り続けないため
 export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
@@ -794,7 +786,7 @@ type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
 // 文字列で返さない: 呼び出し側（日報）が成否を判別できず、エラーの文言を応答として保存してしまうため
-type TurnOutcome =
+export type TurnOutcome =
   | { status: 'answered'; text: string }
   | {
       status: 'failed';
@@ -912,12 +904,14 @@ class Clone implements CloneHost {
   readonly #mergedBatchLimit: number;
   readonly #inboxSettleMs: number;
   readonly #reportSettleMs: number;
-  readonly #dailyReportRetryDelays: readonly number[];
   readonly #restoreUnreadRetryDelays: readonly number[];
   readonly #contextUsageTimeoutMs: number;
   readonly #interruptTimeoutMs: number;
-  readonly #dailyReportRetries = new Map<string, number>();
-  readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+  /**
+   * 日報（`clone-daily-report.ts`）。作り直しの間隔が constructor のオプションで決まるので、constructor の中で作る。
+   * 口は呼ばれるまで読まない関数で組む。口は Promise を直に返す（`async` で包まない）: `await` の段を増やさないため。
+   */
+  readonly #daily: CloneDailyReport;
   readonly #mcpServerFactory: typeof createCloneMcpServer;
 
   // 蒸留のサイドクエリの init はここへ反映しない: 別の SDK セッションのため
@@ -1215,7 +1209,19 @@ class Clone implements CloneHost {
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
     this.#tokenSavingExcerpt = resolveTokenSavingExcerpt(envSource);
-    this.#dailyReportRetryDelays = dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS;
+    this.#daily = new CloneDailyReport(
+      {
+        stores: () => this.#stores,
+        journal: (entry) => this.#journal(entry),
+        runInternal: (text) => this.#runInternal(text),
+        post: (event) => {
+          this.post(event);
+        },
+        tokenSavingExcerpt: () => this.#tokenSavingExcerpt,
+      },
+      this.#digest,
+      dailyReportRetryDelaysMs ?? DAILY_REPORT_RETRY_DELAYS_MS,
+    );
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
     this.#onFirstTurnToolSearch = onFirstTurnToolSearch;
@@ -2005,8 +2011,7 @@ class Clone implements CloneHost {
   }
 
   async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {
-    for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
-    this.#dailyReportRetryTimers.clear();
+    this.#daily.dispose();
     // `#inbox.closed` も見る: 読み切りのあいだ `#stopped` はまだ立っておらず、`#stopped` だけで守ると2度目の呼びが本体をもう一度走らせるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
 
@@ -4586,7 +4591,7 @@ class Clone implements CloneHost {
   async #handleTimer(event: Extract<InboxEvent, { type: 'timer' }>): Promise<void> {
     if (event.kind === DAILY_REPORT_KIND) {
       // 省略時は `schedule`: この分岐は下の journalCause の計算より前で return するので、同じ既定をここで別に持つ
-      await this.#dailyReport(
+      await this.#daily.run(
         event.target ?? localDate(new Date(event.at)),
         event.cause ?? 'schedule',
       );
@@ -5015,125 +5020,6 @@ class Clone implements CloneHost {
       status: 'churning',
       reason: '読むたびに依頼が書き換わっている（人間が直している最中なので次の発火に譲る）',
     };
-  }
-
-  // 書かれなかった日を作らない（道具を呼び忘れたらその応答を日報にする）。ただし失敗したターンの応答は日報にしない: エラー文言が日報として保存されるため。失敗時は `unavailable`（`schema.ts`）の印を付けた行だけを書く。
-  // 読めなければ「無い」として走らせる側へ倒す: 引き下がると、本物の日報が永久に書かれない恐れがあるため（下の既存確認と同じ理由）
-  async #dailyReportWritten(date: string): Promise<boolean> {
-    try {
-      const written: JournalEntry[] = await this.#stores.journal.list({
-        types: ['daily_report'],
-        limit: DAILY_REPORT_LOOKUP,
-      });
-      return written
-        .filter(isDailyReport)
-        .some((entry) => entry.date === date && isWrittenDailyReport(entry));
-    } catch {
-      return false;
-    }
-  }
-
-  async #dailyReport(
-    date: string,
-    cause: 'schedule' | 'schedule_catchup' | 'manual' = 'schedule',
-  ): Promise<void> {
-    // 走らせる前にも見る（#4757）: 同じ日付の合図が2本積まれる（受信箱に残った定時の合図と起動時の後追い）と、2本目もターンを丸ごと払ってから下の確認で捨てるため。
-    // `manual` は除く: 人間が作り直しを頼んだ回は、既にあっても走らせる
-    if (cause !== 'manual' && (await this.#dailyReportWritten(date))) {
-      this.#dailyReportRetries.delete(date);
-      await this.#journalSelf(
-        'outbound',
-        `${EXCHANGE_KIND_DECISION_PREFIX}${date} の日報は既に書かれているので、日報のターンを走らせなかった（契機: ${cause}）`,
-      );
-      return;
-    }
-    const range = localDayRange(date);
-    const axes = range === null ? null : await this.#digest.axes();
-    const digest =
-      range === null || axes === null
-        ? await this.#digest.bare()
-        : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
-            trimHistory: this.#tokenSavingExcerpt,
-          }).catch(
-            async (error: unknown) =>
-              `（この日の記録をまとめられなかった: ${reasonOf(error)}）${await this.#digest.taskQueueHeadAfterFailure()}`,
-          );
-
-    // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
-    await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));
-
-    const outcome = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
-
-    // 枠で保持しているなら痕跡を残さず引き下がる: 印だけでも書くと、下の早期 return と `missingDailyReportDates`（`schedule.ts`）が「もう書いた」と判断し、本物の日報が永久に書かれないため。
-    if (outcome.status === 'failed' && outcome.heldForUsage) return;
-
-    // 読めなかった回を「日報が無い」と扱わない・かといって書かずに引き下がりもしない: 既存確認の失敗には配り直しが無く、後追いは起動時に1回だけで、引き下がると本物の日報が永久に書かれないため。書くが重複の可能性を日誌に残し、失敗の回の印は1日1件を確かめられないので積まない。
-    let existing: JournalEntry[] = [];
-    try {
-      const written: JournalEntry[] = await this.#stores.journal.list({
-        types: ['daily_report'],
-        limit: DAILY_REPORT_LOOKUP,
-      });
-      existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
-    } catch (error) {
-      await this.#journalSelf(
-        'outbound',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
-          `（理由: ${reasonOf(error)}）。` +
-          (outcome.status === 'failed'
-            ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。'
-            : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
-              'ならこの回の重複（消さずに日誌から辿ること）。'),
-      );
-      if (outcome.status === 'failed') {
-        // 印を書けなかっただけで、失敗した日報であることは変わらない: 再起動まで待たずに作り直す。
-        this.#scheduleDailyReportRetry(date);
-        return;
-      }
-    }
-    // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
-    // doc）。数えると、後から本物を書き直す道が閉じる。
-    if (existing.some(isWrittenDailyReport)) return;
-
-    if (outcome.status === 'failed') {
-      // 印は1日1件でよい。**積むと人間が読む唯一の層が「作れなかった」で埋まる。**
-      // 失敗が続いた回数は日誌（`#reportFailure`）に全部残っているので、ここで
-      // 数える必要は無い。
-      if (existing.length === 0)
-        await this.#journal({
-          type: 'daily_report',
-          date,
-          // SDK の文言を言い換えない（`usage-limits.ts`）: 人間が検索できる形で残すため。本文ではなく書けなかった理由として置く。
-          body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
-          unavailable: outcome.reason,
-        });
-      // 印だけで終わりにしない: 後追い（`missingDailyReportDates`）は起動時に1回しか走らず、枠切れ以外の失敗は一時的なことが多いため。
-      this.#scheduleDailyReportRetry(date);
-      return;
-    }
-    this.#dailyReportRetries.delete(date);
-
-    await this.#journal({
-      type: 'daily_report',
-      date,
-      body:
-        outcome.text.trim().length > 0
-          ? outcome.text
-          : '（クローンがこの日の日報を残さなかった。日誌から直接辿ること。）',
-    });
-  }
-
-  #scheduleDailyReportRetry(date: string): void {
-    const done = this.#dailyReportRetries.get(date) ?? 0;
-    const delay = this.#dailyReportRetryDelays[done];
-    if (delay === undefined) return;
-    this.#dailyReportRetries.set(date, done + 1);
-    const timer = setTimeout(() => {
-      this.#dailyReportRetryTimers.delete(timer);
-      this.post(dailyReportEvent(date, new Date(), 'schedule_catchup'));
-    }, delay);
-    timer.unref();
-    this.#dailyReportRetryTimers.add(timer);
   }
 
   // 判定をここに書かない: 基準は `distill-gap.ts` の `deriveDistillGapFromJournal` が1本で持つ（散ると片方だけ直して残りが古い基準のまま残る）。蒸留のターンには載せず印も下ろさない: 内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため。読めなくても空文字でターンを進める・印は読む前に下ろす: 日誌が壊れていると毎ターン同じ読み出しを繰り返すため。

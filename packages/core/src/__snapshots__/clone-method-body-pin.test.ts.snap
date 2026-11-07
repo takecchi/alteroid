@@ -37,7 +37,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
 
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #handleTimer: 出した先を差し戻した中身が変わらない 1`] = `
 [
-  "if (event.kind === DAILY_REPORT_KIND) {await this.#dailyReport(event.target ?? localDate(new Date(event.at)), event.cause ?? 'schedule');",
+  "if (event.kind === DAILY_REPORT_KIND) {await this.#daily.run(event.target ?? localDate(new Date(event.at)), event.cause ?? 'schedule');",
   "return;} const claimed = await this.#claimScheduledRun(event.kind, event.at, event.cause === 'manual' ? 'manual' : 'schedule', event);",
   "if (claimed.status !== 'ok' && claimed.status !== 'missing') {await this.#journalSelf('outbound', \`\${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 \${event.kind} は、この発火では動かない: \${claimed.reason}\`);",
   "if (event.cause !== 'manual' && claimed.status !== 'withdrawn' && claimed.status !== 'completed') {this.#onScheduledRunNotStarted?.(event.kind);} return;} const cause = event.cause === 'manual' ? 'manual' : 'schedule';",

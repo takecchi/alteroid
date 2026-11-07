@@ -18,7 +18,11 @@ export function readCloneSource(): string {
  * 日誌へ `with: 'self'` の1行を書く箇所（`this.#journalSelf(` / `this.#journal({ type: 'exchange', with: 'self', … })`）を持つソース。
  * `Clone` から協力者クラスへ塊を切り出したら、その協力者のファイルをここへ足す（足し漏れは `clone-journal-self-sites-pin.test.ts` が落ちる）。
  */
-export const JOURNAL_SELF_SOURCES = ['clone.ts', 'clone-graves.ts'] as const;
+export const JOURNAL_SELF_SOURCES = [
+  'clone.ts',
+  'clone-graves.ts',
+  'clone-daily-report.ts',
+] as const;
 
 /** `packages/core/src` の下のファイルを、名前で読む（`JOURNAL_SELF_SOURCES` の走査用）。 */
 export function readCoreSource(file: string): string {
