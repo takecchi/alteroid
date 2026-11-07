@@ -255,7 +255,7 @@ describe('クローン — 安全分類器に弾かれ続けたセッション',
     expect(s.state.sideQueries).toBe(0);
   });
 
-  it('内部のターンが弾かれたときは、直近の人間の会話へ知らせる', async () => {
+  it('内部のターンが弾かれたときは、人間の会話へは書かず、日誌にだけ残す', async () => {
     const s = build();
     s.state.mode = 'ok';
     await s.human();
@@ -271,15 +271,15 @@ describe('クローン — 安全分類器に弾かれ続けたセッション',
     await waitFor(async () => (await internalFailures()) >= 2, '2件目の内部ターンが失敗すること');
     await waitFor(
       async () =>
-        (await lines(s.stores, 'human')).some((text) => text.includes('新しく開き直した')),
-      '人間へ知らせること',
+        (await lines(s.stores, 'self')).some((text) => text.includes('セッションごと弾かれていると見る')),
+      '日誌に判断の行が残ること',
     );
+    await s.clone.stop();
 
     const told = (await lines(s.stores, 'human')).filter((text) =>
       text.includes('新しく開き直した'),
     );
-    expect(told).toHaveLength(1);
-    await s.clone.stop();
+    expect(told).toEqual([]);
   });
 
   it('自動で開き直したセッションが、答えないまま弾かれたら止まる。人間へ1行、もう開き直さず、答えれば解ける', async () => {

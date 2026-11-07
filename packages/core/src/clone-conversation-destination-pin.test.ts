@@ -270,11 +270,11 @@ describe('混合の束の宛先（分岐5）', () => {
   }, 15_000);
 });
 
-describe('失敗の1行の宛先 — 報告のターンに起点があっても、直近の人間の会話へ書く（分岐6）', () => {
+describe('失敗の1行の宛先 — 報告のターンの失敗は、人間の会話へ書かず日誌だけに残す（分岐6）', () => {
   const REFUSAL_TEXT =
     "Claude Opus 5.5's safeguards flagged this session as potentially violating our usage policy. Details: [cyber]";
 
-  it('起点 conv-origin の委譲の報告ターンが2回弾かれても、人間への1行は conv-origin ではなく直近の会話 conv-1 へ出る', async () => {
+  it('起点 conv-origin の委譲の報告ターンが2回弾かれても、人間の会話（conv-origin・直近の conv-1）へは何も書かれない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job('mgr-origin', 'conv-origin'));
     const state = { mode: 'ok' as 'ok' | 'refuse' };
@@ -315,14 +315,16 @@ describe('失敗の1行の宛先 — 報告のターンに起点があっても�
     clone.post(managerReport('r2', 'mgr-origin'));
     await waitFor(async () => (await internalFailures()) >= 2, '2件目の内部ターンが失敗する');
     await waitFor(
-      async () => (await rows()).some((row) => row.text.includes('新しく開き直した')),
-      '人間へ知らせる',
+      async () =>
+        (await rows()).some(
+          (row) => row.with === 'self' && row.text.includes('セッションごと弾かれていると見る'),
+        ),
+      '日誌に判断の行が残る',
     );
-
-    const told = (await rows()).filter((row) => row.text.includes('新しく開き直した'));
-    expect(told).toHaveLength(1);
-    expect(told[0]?.with).toBe('human');
-    expect(told[0]?.conversationId).toBe('conv-1');
     await clone.stop();
+
+    // 内部のターン（報告）の失敗は日誌だけに残し、人間の会話へは書かない（関係のない会話へ書き込まないため）
+    const told = (await rows()).filter((row) => row.with === 'human' && row.text.includes('開き直'));
+    expect(told).toEqual([]);
   }, 20_000);
 });

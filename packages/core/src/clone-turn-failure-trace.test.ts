@@ -319,7 +319,7 @@ describe('クローン — ターンの失敗の跡', () => {
       await s.clone.stop();
     });
 
-    it('#955 (A): 内部のターンで畳み直した回も、直近の人間の会話へ1行で知らせる（黙って畳まない）', async () => {
+    it('#955 (A): 内部のターンで畳み直した回は、日誌に残し、人間の会話へは書かない（関係のない会話へ書き込まない）', async () => {
       const s = setupFold(tooLong);
       s.failFrom();
       s.clone.post(humanMessage('一つ目'));
@@ -346,9 +346,7 @@ describe('クローン — ターンの失敗の跡', () => {
       );
       await s.clone.stop();
 
-      expect(notices).toHaveLength(1);
-      expect(notices[0]?.conversationId).toBe('conv-1');
-      expect(notices[0]?.text).toContain('記録は残っている');
+      expect(notices).toEqual([]);
     });
 
     it('#955 (A): 開き直したセッションもまた答えないまま同じ形で畳み直したら、回数つきで「収まっていない可能性」を名乗る', async () => {
