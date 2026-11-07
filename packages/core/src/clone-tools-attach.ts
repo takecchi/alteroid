@@ -456,6 +456,49 @@ function renderAttachmentFetchFailed(id: string, error: unknown): string {
   return `添付 ${id} を取り出せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`;
 }
 
+function renderFileListAmbiguous(given: string, resolution: FileListUnresolved): string {
+  return `置き場の一覧は読んでいない。${describeUnresolvedConversation(given, resolution)}`;
+}
+
+function renderFileListPrefixNote(given: string, id: string): string {
+  return `${describeResolvedConversationPrefix(given, id)}\n`;
+}
+
+function renderFileListFailed(error: unknown): string {
+  return `置き場の一覧を読めなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`;
+}
+
+type FileListUnresolved = Extract<
+  Awaited<ReturnType<typeof resolveConversationId>>,
+  { kind: 'ambiguous' }
+>;
+
+// 会話の id の解決。一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。当たらない id は今どおりそのまま絞る。
+// 結果は「断り（置き場は読まない）」か「絞る id と、読み替えたときの注記（無ければ空）」
+async function resolveFileListConversation(
+  journal: Parameters<typeof resolveConversationId>[0],
+  conversationIdInput: string | undefined,
+): Promise<
+  | { kind: 'refused'; message: string }
+  | { kind: 'resolved'; conversationId: string | undefined; note: string }
+> {
+  if (conversationIdInput === undefined) {
+    return { kind: 'resolved', conversationId: undefined, note: '' };
+  }
+  const resolution = await resolveConversationId(journal, conversationIdInput);
+  if (resolution.kind === 'ambiguous') {
+    return { kind: 'refused', message: renderFileListAmbiguous(conversationIdInput, resolution) };
+  }
+  if (resolution.kind === 'prefix') {
+    return {
+      kind: 'resolved',
+      conversationId: resolution.id,
+      note: renderFileListPrefixNote(conversationIdInput, resolution.id),
+    };
+  }
+  return { kind: 'resolved', conversationId: conversationIdInput, note: '' };
+}
+
 export function attachTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, getConversationId } = shared;
   return [
@@ -604,28 +647,20 @@ export function attachTools(context: ToolContext, shared: CloneToolsShared) {
       },
       async ({ kept, from, conversationId: conversationIdInput, query, cursor }) => {
         try {
-          // 一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。当たらない id は今どおりそのまま絞る
-          let conversationId = conversationIdInput;
-          let resolvedNote = '';
-          if (conversationIdInput !== undefined) {
-            const resolution = await resolveConversationId(stores.journal, conversationIdInput);
-            if (resolution.kind === 'ambiguous') {
-              return text(
-                `置き場の一覧は読んでいない。${describeUnresolvedConversation(conversationIdInput, resolution)}`,
-              );
-            }
-            if (resolution.kind === 'prefix') {
-              conversationId = resolution.id;
-              resolvedNote = `${describeResolvedConversationPrefix(conversationIdInput, resolution.id)}\n`;
-            }
-          }
+          const resolved = await resolveFileListConversation(stores.journal, conversationIdInput);
+          if (resolved.kind === 'refused') return text(resolved.message);
           return text(
-            resolvedNote + (await listFiles(stores, { kept, from, conversationId, query, cursor })),
+            resolved.note +
+              (await listFiles(stores, {
+                kept,
+                from,
+                conversationId: resolved.conversationId,
+                query,
+                cursor,
+              })),
           );
         } catch (error) {
-          return text(
-            `置き場の一覧を読めなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
-          );
+          return text(renderFileListFailed(error));
         }
       },
     ),
