@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createClone, humanTurnText } from './clone.js';
-import type { HumanMessage } from './clone.js';
+import { createClone } from './clone.js';
+import { humanTurnText } from './clone-batch-prompts.js';
+import type { HumanMessage } from './clone-batch-prompts.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';

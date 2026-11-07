@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ORIGIN_NO_TASK_GUIDE, REPORT_FOLLOW_UP_GUIDE } from './clone.js';
+import { ORIGIN_NO_TASK_GUIDE, REPORT_FOLLOW_UP_GUIDE } from './clone-batch-prompts.js';
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import type { InboxEvent, Job } from './schema.js';

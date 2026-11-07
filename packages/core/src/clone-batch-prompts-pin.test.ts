@@ -10,8 +10,8 @@ import {
   MANAGER_REPORT_BODY_LIMIT,
   ORIGIN_NO_TASK_GUIDE,
   REPORT_FOLLOW_UP_GUIDE,
-} from './clone.js';
-import type { ExternalEvent, HumanMessage, ManagerReportMessage } from './clone.js';
+} from './clone-batch-prompts.js';
+import type { ExternalEvent, HumanMessage, ManagerReportMessage } from './clone-batch-prompts.js';
 
 // 束ねて読む入力の文面を作る純関数群を `clone-batch-prompts.ts` へ切り出す前後で、出力が1文字も変わらないことを固定する歯。
 // 長い本文（予算・上限の試験）は同じ文字の繰り返しにして、繰り返しだけを `<c×N>` に畳んで比べる（周りの文面は逐語のまま、長さは N で固定する）。

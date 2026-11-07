@@ -3,7 +3,7 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
-import { MANAGER_REPORT_BODY_LIMIT } from './clone.js';
+import { MANAGER_REPORT_BODY_LIMIT } from './clone-batch-prompts.js';
 
 // 3つの describe で共有する: 定義を describe ごとに置くと、実時間の待ちの数（scripts/wallclock-waits-baseline.json、#2146）が describe の数だけ増えるため
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));

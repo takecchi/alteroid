@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeManagerOrigin, ORIGIN_NO_TASK_GUIDE } from './clone.js';
+import { describeManagerOrigin, ORIGIN_NO_TASK_GUIDE } from './clone-batch-prompts.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
