@@ -13,7 +13,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "const compactions = this.#sdkSession.turn?.compactions ?? [];",
   "await finalizeStep('usage', () => this.#recordUsage(event.usage, 'session', 'cumulative', {contextUsage, compactions}));",
   "await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);",
-  "for (const denial of event.denials) {await this.#noteDenial(denial, 'result');} const turn = this.#sdkSession.turn;",
+  "for (const denial of event.denials) {await this.#denials.noteDenial(denial, 'result');} const turn = this.#sdkSession.turn;",
   "const failure = event.failure ?? turn?.rejected ?? undefined;",
   "if (turn) await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));",
   "if (failure !== undefined) {const notice = classifyFailedTurnUsageNotice(failure.text, event.errorLines);",

@@ -7,6 +7,17 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
 ]
 `;
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-denial-journal.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "<top> 'inbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限\` + \`（\${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い \${ids.length} 件を忘れた: \` + \`\${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から\` + '再び届くと、同じ拒否がもう一度日誌に載る。'",
+  "<top> 'inbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限\` + \`（\${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い \${ids.length} 件を忘れた: \` + \`\${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を\` + '追い越した」とは検出できない。'",
+  "noteDenial 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}先に書いた \${tool} の拒否について、ターン終わりの記録（合図の出所: result）に\` + \`入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: \${later}\`",
+  "noteDenial 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${tool} の実行が、確認へ上がらずに止められた\${why}。\` + \`止められたのは \${actorLabel} の手（合図の出所: \${via}）。\` + \`入力の形: \${denialInputShape(denial.input) ?? denialInputAbsence(via)}。\` + \`許可モードは \${this.#permissionMode} で、この層に確認を回す相手は居ない。\`",
+  "#noteGrantFunneled 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 \${funneled.rule}（grant \${funneled.grantId}）で \` + \`PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: \${via}）が拒否された\${why}。\` + guidance",
+  "onSubagentStop 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 \${funneled.rule}（grant \${funneled.grantId}）で \` + \`PreToolUse が allow を返した作業者（agentId: \${agentId}）の呼び出し\` + \`（tool_use_id: \${toolUseId}）が、実行の決着も拒否の記録も無いまま、\` + \`その作業者の SubagentStop を迎えた。決着しなかった。\${guidance}\`",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-graves.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "salvageTranscript 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
@@ -22,8 +33,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
 
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
-  "buildHumanAnswerEvent 'inbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限\` + \`（\${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い \${ids.length} 件を忘れた: \` + \`\${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から\` + '再び届くと、同じ拒否がもう一度日誌に載る。'",
-  "buildHumanAnswerEvent 'inbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限\` + \`（\${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い \${ids.length} 件を忘れた: \` + \`\${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を\` + '追い越した」とは検出できない。'",
   "#reopenSession 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}\` + \`（操作: \${options.actor}、理由: \${options.reason}、古い session id: \` + \`\${previousSessionId ?? '不明'}、蒸留: \${options.distill ? 'する' : 'しない'}、\` + \`\${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）\`",
   "dropQueuedInboxEvents 'outbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}器から消された合図 \${ids.length} 件のうち、\${dropped} 件を配達の待ち行列からも外した\` + \`（待ち行列 \${fromQueue.length} 件、枠で保持していた分 \${fromHeld.length} 件）。\` + '既に取り出して処理中のものは取り消していない。'",
   "#withdrawQueued 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、順番待ちだった発言（clientMessageId \` + \`\${target.clientMessageId}）を取り下げた。ターンを起こさず配らない。発言の行は日誌に残してある\` + (closedTasks > 0 ? '。同じ id の Task も取り下げ（cancelled）で閉じた' : '') [+conversationId,withdrawnClientMessageId]",
@@ -69,10 +78,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#buildSessionSpec 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${text}\`",
   "#recordWorkerLimit 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}作業者（\${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。\` + \`次の道具の結果に知らせを添える（原文: \${shown.trim().slice(0, 300)}）\`",
   "#workerLimitNotice 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（\${String(notice.count)} 体）ので、\` + 'この道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。'",
-  "#noteDenial 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}先に書いた \${tool} の拒否について、ターン終わりの記録（合図の出所: result）に\` + \`入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: \${later}\`",
-  "#noteDenial 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${tool} の実行が、確認へ上がらずに止められた\${why}。\` + \`止められたのは \${actorLabel} の手（合図の出所: \${via}）。\` + \`入力の形: \${denialInputShape(denial.input) ?? denialInputAbsence(via)}。\` + \`許可モードは \${this.#permissionMode} で、この層に確認を回す相手は居ない。\`",
-  "#noteGrantFunneled 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 \${funneled.rule}（grant \${funneled.grantId}）で \` + \`PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: \${via}）が拒否された\${why}。\` + guidance",
-  "#onSubagentStop 'inbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 \${funneled.rule}（grant \${funneled.grantId}）で \` + \`PreToolUse が allow を返した作業者（agentId: \${agentId}）の呼び出し\` + \`（tool_use_id: \${toolUseId}）が、実行の決着も拒否の記録も無いまま、\` + \`その作業者の SubagentStop を迎えた。決着しなかった。\${guidance}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: \${reasonOf(error)}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: \${reasonOf(error)}\` + (archiveId !== null ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）' : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）')",
