@@ -17,8 +17,6 @@ export const JOURNAL_DIAGNOSTICS_TYPES = [
   'inbox_flow',
 ] as const;
 
-export type JournalDiagnosticsType = (typeof JOURNAL_DIAGNOSTICS_TYPES)[number];
-
 export type JournalDiagnosticsEntryLike =
   | {
       type: 'worker_wait';
