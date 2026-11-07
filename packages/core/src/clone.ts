@@ -100,6 +100,7 @@ import { CloneDailyReport } from './clone-daily-report.js';
 import { CloneDenialJournal } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
 import { CloneApprovalAnswers } from './clone-approval-answers.js';
+import { buildHumanAnswerPrompt } from './clone-human-answer-prompt.js';
 import { redeliveredLiveHeadline, redeliveryNoticeFor } from './clone-redelivery-text.js';
 import { CloneGraves } from './clone-graves.js';
 import { CloneToolUseJournal } from './clone-tool-use-journal.js';
@@ -4012,44 +4013,18 @@ class Clone implements CloneHost {
       noteDroppedRecord('回答済みの承認待ちの読み出し', inboxEventShape(event), error);
     }
     await this.#approvals.markDeliveredOnHandle(approval, event);
-    const question =
-      approval?.question ??
-      (approvalUnreadable
-        ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
-        : '(不明な質問)');
     // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
     // 決着済みの確認へ requestId 付きで返すと `gone` で弾かれ、答えの中身が担当へ届かない: `manager_message` の枝と同じく、待たれていないと分かるときだけ案内を変える（分からないときは変えない）
     const answerLiveness: ConfirmationLiveness =
       approval?.jobId !== undefined && approval.requestId !== undefined
         ? await confirmationLiveness(this.#managers, approval.jobId, approval.requestId)
         : 'unknown';
-    const waiting =
-      approval?.jobId === undefined
-        ? ''
-        : answerLiveness === 'settled'
-          ? `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-            `この確認はもう待たれていない（既に解決したか、マネージャーが終わっている）。` +
-            `回答の中身を担当へ届けるなら、確認への返答ではなく普通の伝言として \`manager_send\` で送ること（requestId は付けない）。` +
-            `\n宛先: managerId: "${approval.jobId}"`
-          : `\n\nこの確認はマネージャー ${approval.jobId} のものである。` +
-            `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
-            `\n宛先: managerId: "${approval.jobId}"` +
-            (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
-    // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
-    const viaLine =
-      event.answeredVia === undefined
-        ? ''
-        : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
-    // 構造も JSON で添える: 回答の文は人間向けに畳んだもので、設問 id と選択肢 id の対が文から読み取れないため
-    const selectionsLine =
-      event.selections === undefined
-        ? ''
-        : `\n選択（構造。設問 id → 選んだ選択肢 id ＋ その他）: ${JSON.stringify(event.selections)}`;
-    const answerPrompt =
-      `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
-      `${selectionsLine}${viaLine}${waiting}\n\n` +
-      'この回答に沿って続きを進めよ。\n\n' +
-      HUMAN_ANSWER_CRITERIA_GUIDE;
+    const answerPrompt = buildHumanAnswerPrompt(
+      approval,
+      approvalUnreadable,
+      event,
+      answerLiveness,
+    );
     // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
     const turnStart = turnInputEntry({
       type: 'human_answer',
