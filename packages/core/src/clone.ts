@@ -86,7 +86,6 @@ import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
 import { distillTailOf } from './distill-transcript-tail.js';
-import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -4037,10 +4036,7 @@ class Clone implements CloneHost {
     // 文脈窓を超えた失敗の目印は末尾に足し、先頭（`内部ターンが失敗した:` / `人間との対話ターンが失敗した:`）は変えない: `clone-turn-failure-trace.test.ts` の `text.startsWith(...)` を壊すため
     const contextWindowFailure = classifyContextWindowFailure(rawMessage);
     // 判定はここでしかしない: `#apply` 側でもう一度分類すると判定が2本に割れるため
-    const foldingForContextWindow = await this.#noteContextWindowFold(
-      contextWindowFailure,
-      conversationId,
-    );
+    const foldingForContextWindow = await this.#noteContextWindowFold(contextWindowFailure);
     // 枠に当たり続けたことによる畳みは判定済みなので、ここでは立っている印を読むだけにする: 二重に畳まないため
     const foldingForUnproductiveUsage: 'no' | 'folding' =
       foldingForContextWindow === 'no' &&
@@ -4130,13 +4126,12 @@ class Clone implements CloneHost {
   }
 
   // 畳んでも直らない枝（`held`）を置く: 会話を引き継がずに開いたセッションが1度も答えを返せず長さで落ちたなら、開き直しても材料は同じで、落ちる→畳む→開く→落ちるを枠が閉じているときほど激しく繰り返すため（抑止しても悪くなるものは無く、止まるのは畳み直しだけでターンは回る）
-  // `held` は1回きり: 拒まれた入力がセッションに残るなら、次の入力で履歴ごと送り直して同じ長さで落ち、自力では抜けられないため。同じセッションで別の入力でもう一度長さの失敗が起きたらそこで畳む（`#heldInSession`）。黙って回さず、畳み直すたびに日誌と人間の会話へ1行残す（`#noteHeldEscalation`）
+  // `held` は1回きり: 拒まれた入力がセッションに残るなら、次の入力で履歴ごと送り直して同じ長さで落ち、自力では抜けられないため。同じセッションで別の入力でもう一度長さの失敗が起きたらそこで畳む（`#heldInSession`）。黙って回さず、畳み直すたびに日誌へ1行残す（`#noteHeldEscalation`。人間の発言のターンでは `#reportFailure` の1行が人間へ届く）
   // 人間の発言には上限を掛けない: 人間の言葉を機械が黙って切ると、人間にできることがこの層でできない形になるため
   // `setCloneSessionId(null)` は畳んだ後でなく印と同時に打つ: 畳む前にプロセスが死ぬと、長すぎるセッション id が残って次の起動が resume し同じところで落ちるため
   // 投げない: 失敗の報告そのものが失敗するため（id を捨てられなかったことは記録に残し、報告は続ける）
   async #noteContextWindowFold(
     failure: ContextWindowFailure | undefined,
-    conversationId: string | null,
   ): Promise<'no' | 'folding' | 'held'> {
     if (failure === undefined) return 'no';
     if (this.#sdkSession.query === null) return 'no';
@@ -4153,12 +4148,12 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
-    if (escalatedFromHeld) await this.#noteHeldEscalation(conversationId);
+    if (escalatedFromHeld) await this.#noteHeldEscalation();
     return 'folding';
   }
 
-  // 人間の発言のターンでは書かない: `#reportFailure` の1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載るため。内部のターンで落ちた回は人間へ何も届かないので、直近の会話へ1行書く。投げない
-  async #noteHeldEscalation(conversationId: string | null): Promise<void> {
+  // 日誌だけに書く: 人間の発言のターンでは `#reportFailure` の1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る。内部のターンで落ちた回は、直近の人間の会話へ書かない（今の仕事と関係のない会話へ書き込むことになるため）。投げない
+  async #noteHeldEscalation(): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
     await this.#journalSelf(
@@ -4173,24 +4168,6 @@ class Clone implements CloneHost {
             '（held と畳み直しの交互）。'
           : ''),
     );
-    if (conversationId !== null) return;
-    try {
-      // 会話の窓は `readConversationWindow` でだけ組む: `scripts/conversation-window-single-source.test.ts` が見るため
-      const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
-      const last = recent[0] as { conversationId?: string } | undefined;
-      if (last?.conversationId === undefined) return;
-      await this.#journal({
-        type: 'exchange',
-        with: 'human',
-        role: 'outbound',
-        text:
-          '文脈が収まらずに走れなくなっていたので、この会話はここで一区切りにして、新しいセッションで' +
-          '開き直した。それまでのやりとりは消えていない（記録は残っている）。',
-        conversationId: last.conversationId,
-      });
-    } catch (error) {
-      noteDroppedRecord('畳み直しを人間へ知らせる1行', 'clone', error);
-    }
   }
 
   /** 連続数と控えを 0 へ戻す（答えが返った・開き直した）。止め（`#autoReopenHalted`）は別の条件で解くので触らない。 */
@@ -4295,24 +4272,18 @@ class Clone implements CloneHost {
   }
 
   /**
-   * 人間へ1行を書く。失敗したのが人間の会話ならその会話へ、内部のターンなら直近の人間の会話へ
-   * （`#noteHeldEscalation` と同じ形。会話が1つも無ければ書かない）。**投げない。**
+   * 人間へ1行を書く。失敗したのが人間の会話ならその会話へだけ書く。内部のターン（会話なし）は日誌だけに残し、
+   * 直近の人間の会話へは書かない（今の仕事と関係のない会話へ書き込むことになるため）。**投げない。**
    */
   async #noteRefusalToHuman(conversationId: string | null, text: string): Promise<void> {
+    if (conversationId === null) return;
     try {
-      let target = conversationId;
-      if (target === null) {
-        // 会話の窓は `readConversationWindow` でだけ組む（`scripts/conversation-window-single-source.test.ts`）
-        const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
-        target = (recent[0] as { conversationId?: string } | undefined)?.conversationId ?? null;
-      }
-      if (target === null) return;
       await this.#journal({
         type: 'exchange',
         with: 'human',
         role: 'outbound',
         text,
-        conversationId: target,
+        conversationId,
       });
     } catch (error) {
       noteDroppedRecord('安全分類器の拒否を人間へ知らせる1行', 'clone', error);

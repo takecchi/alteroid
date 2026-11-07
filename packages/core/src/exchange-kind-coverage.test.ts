@@ -333,7 +333,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteDroppedSignals': 'decision',
     '#noteFoldedTick': 'thinning',
     '#noteGrantFunneled': 'decision',
-    '#noteHeldEscalation': 'decision,human',
+    '#noteHeldEscalation': 'decision',
     '#noteRedeliveryPredicateHitB': 'gauge',
     '#noteRefusal': 'decision',
     '#noteRefusalToHuman': 'human',

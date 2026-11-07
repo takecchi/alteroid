@@ -271,7 +271,9 @@ describe('クローン — 安全分類器に弾かれ続けたセッション',
     await waitFor(async () => (await internalFailures()) >= 2, '2件目の内部ターンが失敗すること');
     await waitFor(
       async () =>
-        (await lines(s.stores, 'self')).some((text) => text.includes('セッションごと弾かれていると見る')),
+        (await lines(s.stores, 'self')).some((text) =>
+          text.includes('セッションごと弾かれていると見る'),
+        ),
       '日誌に判断の行が残ること',
     );
     await s.clone.stop();

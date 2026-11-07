@@ -324,7 +324,9 @@ describe('失敗の1行の宛先 — 報告のターンの失敗は、人間の�
     await clone.stop();
 
     // 内部のターン（報告）の失敗は日誌だけに残し、人間の会話へは書かない（関係のない会話へ書き込まないため）
-    const told = (await rows()).filter((row) => row.with === 'human' && row.text.includes('開き直'));
+    const told = (await rows()).filter(
+      (row) => row.with === 'human' && row.text.includes('開き直'),
+    );
     expect(told).toEqual([]);
   }, 20_000);
 });
