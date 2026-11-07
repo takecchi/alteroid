@@ -98,11 +98,11 @@ import {
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
 import { CloneDailyReport } from './clone-daily-report.js';
-import { CloneDenialJournal, DENIED_TOOL_USE_MEMORY_LIMIT } from './clone-denial-journal.js';
+import { CloneDenialJournal } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
 import { redeliveredLiveHeadline, redeliveryNoticeFor } from './clone-redelivery-text.js';
 import { CloneGraves } from './clone-graves.js';
-import { UNKNOWN_AGENT_TYPE, UNKNOWN_TOOL_NAME } from './clone-unknown-labels.js';
+import { CloneToolUseJournal } from './clone-tool-use-journal.js';
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
   readTranscriptTail,
@@ -418,11 +418,6 @@ const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
   practice_remove: 'やり方を消した',
   practice_write: 'やり方を書き直した',
 };
-
-const JOURNAL_WRITE_QUALIFIED_TOOL_NAME = qualifiedToolName('journal_write');
-
-// 切らずに残さない: `error` は上限の無い自由文で、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
-const TOOL_USE_ERROR_EXCERPT = 500;
 
 // 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
 const MERGED_BATCH_SIZE_LIMIT = 50;
@@ -913,9 +908,15 @@ class Clone implements CloneHost {
     journal: (entry) => this.#journal(entry),
     permissionMode: () => this.#permissionMode,
   });
-  // 入力が読めず断られた tool_use の id（#5313）。上限で忘れた id の再送は二重に書かれうるが、行が1本増えるだけで欠けはしない
-  readonly #unparsedToolInputJournaled = createRecentMap<true>({
-    limit: DENIED_TOOL_USE_MEMORY_LIMIT,
+  /**
+   * 道具の呼びの日誌（`clone-tool-use-journal.ts`）。`tool_use` の行（成功・失敗・検証落ち・入力が読めず断られた分）と、その id の記憶を持つ。
+   * field 初期化で作る: 口は呼ばれるまで読まない関数だけで組む（`#env` と `#sdkSession` は constructor の中で入る）。
+   * 口は Promise を直に返す（`async` で包まない）: `await` の段を増やさないため。
+   */
+  readonly #toolUseJournal = new CloneToolUseJournal({
+    journal: (entry) => this.#journal(entry),
+    env: () => this.#env,
+    turnApprovalId: () => this.#sdkSession.turn?.approvalId,
   });
 
   // 台帳（消費）が積まれたかで代用しない: 「いくら使ったか」の軸であって「答えが返ったか」の軸ではないため
@@ -5564,7 +5565,7 @@ class Clone implements CloneHost {
 
   /**
    * 自前で日誌へ書く道具（`SELF_JOURNALING_CLONE_TOOLS`）だけを除く: 重ねて書くと日誌が自分の記録で埋まる。自作ツール全部を除かない（読む道具は何も書かず、「どちらで見たかは日誌に残す」から落ちる）。名簿の誤りは「誤って除く」ほうが監査の穴になるので、迷ったら除かない側（`TRACELESS_CLONE_TOOLS`）へ倒す。
-   * 除外の前提が崩れる回: MCP の入力検証が落ちるとハンドラが一度も呼ばれず、SDK は成功扱いの `isError` 応答にするので、除外だけが効いて何も残らない。除外する前に検証落ちかを見て（`detectMcpInputValidationFailure`）、`#journalSelfJournalingToolValidationFailure` が `tool_use` として残す。
+   * 除外の前提が崩れる回: MCP の入力検証が落ちるとハンドラが一度も呼ばれず、SDK は成功扱いの `isError` 応答にするので、除外だけが効いて何も残らない。除外する前に検証落ちかを見て（`detectMcpInputValidationFailure`）、`CloneToolUseJournal`（`clone-tool-use-journal.ts`）の `#journalSelfJournalingToolValidationFailure` が `tool_use` として残す。
    * 例外を投げない: ツール実行の後続に影響しうる。
    */
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
@@ -5576,7 +5577,7 @@ class Clone implements CloneHost {
       this.#denials.settleAllowedByGrant(record.toolUseId);
     }
 
-    await this.#journalToolUse(record, CLONE_ACTOR_ID);
+    await this.#toolUseJournal.journalToolUse(record, CLONE_ACTOR_ID);
 
     const workerLimit = await this.#workerLimitNotice(record.agentId);
     return workerLimit === null ? { kind: 'continue' } : { kind: 'addContext', text: workerLimit };
@@ -5619,87 +5620,7 @@ class Clone implements CloneHost {
 
   /** 本セッションと同じ関数を通す: 片方だけ記録が無いと、蒸留のターンで何をしたかがどこにも残らない。effort はここで拾わない: 別セッションの値を本セッションの観測として持つと嘘になる。 */
   async #onDistillToolUse(record: AgentToolAuditRecord): Promise<void> {
-    await this.#journalToolUse(record, CLONE_DISTILL_ACTOR_ID);
-  }
-
-  async #journalToolUse(
-    raw: AgentToolAuditRecord | null | undefined,
-    mainThreadActor: string,
-  ): Promise<void> {
-    // `tool_name` が読めなくても落とさず `(不明な道具)` で残す: 読めないのは「観測できなかった」のであって、黙って消すと監査の穴が最も静かに空く
-    const tool = typeof raw?.toolName === 'string' ? raw.toolName : UNKNOWN_TOOL_NAME;
-    if (cloneToolJournalsItself(tool)) {
-      await this.#journalSelfJournalingToolValidationFailure(tool, raw, mainThreadActor);
-      return;
-    }
-    await this.#journal(
-      stampAnsweredApproval(
-        {
-          type: 'tool_use',
-          actor: cloneToolActor(raw, mainThreadActor),
-          tool,
-          input: raw?.toolInput,
-        },
-        this.#answeredApprovalFor(mainThreadActor),
-      ),
-    );
-  }
-
-  /** 本セッションの actor の行だけに返す: 蒸留のサイドクエリは答えのターンと並行して走りうるので、`#turn` を読むと無関係な行へ印が付く。 */
-  #answeredApprovalFor(mainThreadActor: string): string | null {
-    return mainThreadActor === CLONE_ACTOR_ID ? (this.#sdkSession.turn?.approvalId ?? null) : null;
-  }
-
-  /**
-   * `cloneToolCarriesSecrets(tool)` の道具（いまは `profile_write`）の `input` は残さない: 鍵・トークンの値そのものを運び、日誌は要約にも載るので焼かれると回収できない。検証で落ちた欄の名前だけを `error` に残す。
-   * `self_dropped` は `journal_write` にだけ足す: 判断の記録そのものが落ちるのはそれだけで、他の自作ツールはここで初めて `tool_use` の代わりが生まれるので二重に名乗らない。
-   */
-  async #journalSelfJournalingToolValidationFailure(
-    tool: string,
-    raw: AgentToolAuditRecord | null | undefined,
-    mainThreadActor: string,
-  ): Promise<void> {
-    const validation = detectMcpInputValidationFailure(raw?.toolResponse);
-    if (validation === undefined) return;
-
-    const fieldList =
-      validation.fields.length > 0 ? validation.fields.join(', ') : '（取れなかった）';
-    const secretBearing = cloneToolCarriesSecrets(tool);
-
-    await this.#journal(
-      stampAnsweredApproval(
-        {
-          type: 'tool_use',
-          actor: cloneToolActor(raw, mainThreadActor),
-          tool,
-          outcome: 'failed',
-          ...(secretBearing
-            ? {
-                error: excerptLine(
-                  `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
-                    `欠けた/不正な引数: ${fieldList}）`,
-                  TOOL_USE_ERROR_EXCERPT,
-                ),
-              }
-            : {
-                input: raw?.toolInput,
-                error: excerptLine(
-                  redactErrorText(validation.message, this.#env),
-                  TOOL_USE_ERROR_EXCERPT,
-                ),
-              }),
-        },
-        this.#answeredApprovalFor(mainThreadActor),
-      ),
-    );
-
-    if (tool === JOURNAL_WRITE_QUALIFIED_TOOL_NAME) {
-      noteDroppedRecord(
-        '判断そのもの（journal_write）',
-        `fields=${fieldList}`,
-        new Error('入力検証で落ちた——decision が届かなかった可能性がある（issue #1338 残件1）'),
-      );
-    }
+    await this.#toolUseJournal.journalToolUse(record, CLONE_DISTILL_ACTOR_ID);
   }
 
   /** `effort` と `transcript_path` もここで拾う: `#onPostToolUse` と排他なので、拾わないと失敗した回の後、次に成功するまで古いまま取り残される。 */
@@ -5711,75 +5632,12 @@ class Clone implements CloneHost {
       this.#denials.settleAllowedByGrant(record.toolUseId);
     }
 
-    await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
+    await this.#toolUseJournal.journalToolUseFailure(record, CLONE_ACTOR_ID);
   }
 
   // 成功側（`#onDistillToolUse`）と揃えて失敗も残す: 片方だけ記録が無いと、蒸留が `memory_write` に失敗したことが静かに落ちる。
   async #onDistillToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
-    await this.#journalToolUseFailure(record, CLONE_DISTILL_ACTOR_ID);
-  }
-
-  /**
-   * 失敗は `exchange` でなく `tool_use` に落とす: 失敗は走った結果で副作用が在りうるので「自分で手を動かした回数」に数える（拒否は走っていないので `exchange`）。成功と区別するため `outcome` を立てる。
-   * 自作ツールの除外は成功側と同じ規則（`cloneToolJournalsItself`）を通す: 成功は除き失敗は残す、という非対称を持ち込むと読み手が道具ごとに確かめることになる。
-   * 入力検証落ち（ハンドラが走らない回）はここへ来ない（`PostToolUse` に来る。`#onPostToolUse` の doc「除外の前提が崩れる回」）。
-   */
-  async #journalToolUseFailure(
-    raw: AgentToolAuditFailureRecord | null | undefined,
-    mainThreadActor: string,
-  ): Promise<void> {
-    const tool = typeof raw?.toolName === 'string' ? raw.toolName : UNKNOWN_TOOL_NAME;
-    if (cloneToolJournalsItself(tool)) return;
-    await this.#journal(
-      stampAnsweredApproval(
-        {
-          type: 'tool_use',
-          actor: cloneToolActor(raw, mainThreadActor),
-          tool,
-          input: raw?.toolInput,
-          // 欠けを第3の値にせず failed へ倒す: `isInterrupt` が無いのは「中断ではないと確定」ではなく「分かっていない」だけ
-          outcome: raw?.isInterrupt === true ? 'interrupted' : 'failed',
-          ...(typeof raw?.error === 'string'
-            ? // 道具の出力を運びうるので、伏せてから切る
-              { error: excerptLine(redactErrorText(raw.error, this.#env), TOOL_USE_ERROR_EXCERPT) }
-            : {}),
-        },
-        this.#answeredApprovalFor(mainThreadActor),
-      ),
-    );
-  }
-
-  /**
-   * 入力が JSON として読めず本体が断った呼び出し（`__unparsedToolInput`。#5313）を `tool_use` / `failed` で1行残す。
-   * 本体は hook より前に断るので、`PostToolUseFailure` では拾えない。assistant メッセージの tool_use が運ぶ長さだけを根拠にする。
-   * `input` は書かない・`error` に raw を写さない: 入力が記憶の本文・資格を運びうるため（`cloneToolCarriesSecrets` の道具に限らず全道具で伏せる。どの道具の入力が読めなかったかは道具名で足りる）。
-   * 同じ `id` は1回だけ書く: 再送・再生で同じメッセージが届いても行が増えないため。
-   */
-  async #journalUnparsedToolInput(
-    tool: string,
-    toolUseId: string | undefined,
-    len: number,
-    parentToolUseId: string | null,
-  ): Promise<void> {
-    if (toolUseId !== undefined) {
-      if (this.#unparsedToolInputJournaled.has(toolUseId)) return;
-      this.#unparsedToolInputJournaled.set(toolUseId, true);
-    }
-    // 作業者（`parentToolUseId` 付き）の手は、hook 側と同じ `cloneToolActor` の規則で `clone:sub:` に寄せる
-    const actor =
-      parentToolUseId === null
-        ? CLONE_ACTOR_ID
-        : cloneToolActor({ agentId: parentToolUseId }, CLONE_ACTOR_ID);
-    await this.#journal({
-      type: 'tool_use',
-      actor,
-      tool,
-      outcome: 'failed',
-      error: excerptLine(
-        `入力が JSON として読めず本体が断った（${String(len)} bytes。入力は日誌へ写さない）`,
-        TOOL_USE_ERROR_EXCERPT,
-      ),
-    });
+    await this.#toolUseJournal.journalToolUseFailure(record, CLONE_DISTILL_ACTOR_ID);
   }
 
   /**
@@ -6585,7 +6443,7 @@ class Clone implements CloneHost {
         if (turn) turn.replySeparatorPending = true;
         this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
         if (block.unparsedInputLen !== undefined) {
-          await this.#journalUnparsedToolInput(
+          await this.#toolUseJournal.journalUnparsedToolInput(
             block.name,
             block.id,
             block.unparsedInputLen,
@@ -7030,26 +6888,6 @@ function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
     if (block.type === 'text') text += block.text;
   }
   return text;
-}
-
-/**
- * どの層の手だったかを `PostToolUse` の合図から決める。`agent_id` で見る。
- *
- * [sdk-verbatim BaseHookInput.agent_id]
- * > Use this field (not agent_type) to distinguish subagent calls from main-thread calls.
- *
- * 分けない（`agent_type` で見ない）と、サブエージェントの分だけ「クローンが自分で叩いた回数」が膨らむ。
- */
-function cloneToolActor(
-  hook: { agentId?: string; agentType?: string } | null | undefined,
-  mainThreadActor: string,
-): string {
-  if (typeof hook?.agentId !== 'string' || hook.agentId.length === 0) return mainThreadActor;
-  const type =
-    typeof hook.agentType === 'string' && hook.agentType.length > 0
-      ? hook.agentType
-      : UNKNOWN_AGENT_TYPE;
-  return `${CLONE_SUB_ACTOR_PREFIX}${type}`;
 }
 
 /**

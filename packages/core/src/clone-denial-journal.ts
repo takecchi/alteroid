@@ -14,7 +14,7 @@ import { createRecentMap } from './recent.js';
 import type { JournalEntryInput } from './schema.js';
 
 /**
- * 拒否の記憶の上限。`Clone` の `#unparsedToolInputJournaled`（入力が読めず断られた tool_use の id）も同じ上限を使うので、ここから出す。
+ * 拒否の記憶の上限。`CloneToolUseJournal`（`clone-tool-use-journal.ts`）の `#unparsedToolInputJournaled`（入力が読めず断られた tool_use の id）も同じ上限を使うので、ここから出す。
  */
 export const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
