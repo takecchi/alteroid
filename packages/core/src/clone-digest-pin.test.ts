@@ -239,7 +239,12 @@ describe('B1 要約の組み立ての固定 — 管理者の軸（#managerDigest
           summaryOf('mgr-b', { live: false }),
           summaryOf('mgr-c', {
             live: true,
-            awaitingBackground: { tasks: 2, since: '2026-01-01T00:00:00.000Z' },
+            awaitingBackground: {
+              tasks: 2,
+              withheldReports: 0,
+              breakdown: 'pin',
+              since: '2026-01-01T00:00:00.000Z',
+            },
           }),
         ]),
     });

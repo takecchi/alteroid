@@ -55,13 +55,7 @@ import {
   RecentDenialLog,
   type DeniedRecord,
 } from './denial-shape.js';
-import {
-  buildActivityDigest,
-  type DigestShape,
-  type ManagerAwaitingBackgroundMap,
-  type ManagerLiveness,
-  TASK_QUEUE_SECTION_HEADING_HEAD,
-} from './digest.js';
+import { buildActivityDigest } from './digest.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
@@ -112,6 +106,7 @@ import {
   type MixableSignal,
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
+import { CloneDigest } from './clone-digest.js';
 import { CloneGraves } from './clone-graves.js';
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
@@ -181,12 +176,7 @@ import {
   type ManagerSummary,
   type WorkerToolEvent,
 } from './manager.js';
-import {
-  describeMemorySessionDelta,
-  describeMemoryTidyTargets,
-  measureMemoryFloor,
-  renderMemoryDocuments,
-} from './memory.js';
+import { describeMemoryTidyTargets, renderMemoryDocuments } from './memory.js';
 import { resolveModelTier } from './model-tier.js';
 import { heuristicChars } from './quantity.js';
 import { resolvePermissionModeFor, type PermissionModeName } from './permission-mode.js';
@@ -409,22 +399,6 @@ type RawLogMeasure =
 
 // この値を上げない: 巨大セッションを resume すると JSON.parse の結果が V8 ヒープ 4 GiB を使い切って落ちるため（天井の半分 ÷ 展開倍率4 ＝ 512 MiB）
 const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024;
-
-const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-const MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT = 10;
-
-function formatMemoryCharCountLocal(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
-function formatSignedMemoryCharCount(delta: number): string {
-  return delta >= 0 ? `+${formatMemoryCharCountLocal(delta)}` : formatMemoryCharCountLocal(delta);
-}
-
-function roundToOneDecimal(value: number): number {
-  return Math.round(value * 10) / 10;
-}
 
 const DAILY_REPORT_LOOKUP = 30;
 
@@ -1125,6 +1099,19 @@ class Clone implements CloneHost {
   readonly #notices = new CloneNotices();
 
   readonly #distillMemory = new CloneDistillMemoryState();
+  /**
+   * 直近の状況の要約（digest）を組み立てる協力者（`clone-digest.ts`）。日誌は書かない。
+   * 口は呼ばれるまで読まない関数で組む（`#stores`・`#managers`・`#tokenSavingExcerpt` は constructor の中で入る）。
+   * `Clone` 側の呼びは `await this.#digest.x()` の 1 段のまま: `await` の段を増やさないため。
+   */
+  readonly #digest = new CloneDigest(
+    {
+      stores: () => this.#stores,
+      managers: () => this.#managers,
+      tokenSavingExcerpt: () => this.#tokenSavingExcerpt,
+    },
+    this.#distillMemory,
+  );
   // 記憶を読み始めた時刻を控える（載せた後の時刻にしない）: 読んでから載せるまでの間の人間の書き込みを、次の帰属の窓から落とさないため。
   #memoryCarriedAt = new Date().toISOString();
   // `#memoryCarriedAt` と別に持つ: 記憶に差分が無いターンでは後者が進まず、人間の操作の窓だけが古いまま残るため。
@@ -4635,7 +4622,7 @@ class Clone implements CloneHost {
     const journalCause = event.cause ?? 'schedule';
     const plan = claimed.status === 'ok' ? claimed.plan : null;
     // #4938 の案2: 要約の全体ではなく、担当の節・継続中の依頼の節と、他の節の件数の行だけを付ける。
-    const timerDigest = await this.#recentDigestCounts();
+    const timerDigest = await this.#digest.recentCounts();
     // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
     await this.#journal(
       turnInputEntry({
@@ -4751,7 +4738,7 @@ class Clone implements CloneHost {
       await this.#noteSkippedInitiativeTick(gate);
       return;
     }
-    const digest = await this.#recentDigest();
+    const digest = await this.#digest.recent();
     await this.#journal(
       turnInputEntry({
         type: 'self_initiative',
@@ -5030,122 +5017,6 @@ class Clone implements CloneHost {
     };
   }
 
-  // `list()` が失敗しても digest を壊さず空の Map を返す: 全件 `/セッション不明` になり、黙って「繋がっている」に倒れないため
-  // 2つの軸を別の `Map` にする: 1つに畳むと、`live` は取れたが握り潰しは無かった委譲と、何も取れなかった委譲が同じ「載っていない」になるため。`list()` を2回呼ばない: 軸の数だけ台帳を読むことになるため
-  async #managerDigestAxes(): Promise<{
-    liveness: ManagerLiveness;
-    awaitingBackground: ManagerAwaitingBackgroundMap;
-  }> {
-    try {
-      const managers = await this.#managers.list();
-      return {
-        liveness: new Map(managers.map((manager) => [manager.managerId, manager.live])),
-        // 握り潰しが在る分だけを載せる: `Map` の側で「載っていない」と「`undefined` が載っている」が別の意味を持たないようにするため
-        awaitingBackground: new Map(
-          managers.flatMap((manager) =>
-            manager.awaitingBackground === undefined
-              ? []
-              : [[manager.managerId, manager.awaitingBackground] as const],
-          ),
-        ),
-      };
-    } catch {
-      return { liveness: new Map(), awaitingBackground: new Map() };
-    }
-  }
-
-  async #recentDigest(): Promise<string> {
-    return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare()}`;
-  }
-
-  // 日報は「記憶の床」の1行を付けない: tick という区切りに数を出す仕組みで、日報はその区切りではないため
-  async #recentDigestBare(shape: DigestShape = 'full'): Promise<string> {
-    try {
-      const axes = await this.#managerDigestAxes();
-      return await buildActivityDigest(
-        this.#stores,
-        { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
-        axes.liveness,
-        axes.awaitingBackground,
-        { shape, trimHistory: this.#tokenSavingExcerpt },
-      );
-    } catch (error) {
-      // 件数の形（定期の依頼の tick）は断り書き側が先頭を持つので足さない
-      const head = shape === 'full' ? await this.#taskQueueHeadAfterDigestFailure() : '';
-      return `（直近の状況をまとめられなかった: ${reasonOf(error)}）${head}`;
-    }
-  }
-
-  /**
-   * 要約が組めなかった回に、待ち行列の先頭だけを添える。
-   * 発意・日報の tick は、要約が先頭を載せる前提で断り書き側の先頭を出さない（`tickDigestCarriesTaskQueueHead`）ので、要約が失敗するとどこにも載らなくなるため。
-   * 読めなかったときは 0 件と書かず、読めなかったと名乗る。要約が組めた回は呼ばれず、入力は変わらない。
-   */
-  async #taskQueueHeadAfterDigestFailure(): Promise<string> {
-    try {
-      const taskList = await this.#stores.tasks.list();
-      return [
-        '',
-        '',
-        TASK_QUEUE_SECTION_HEADING_HEAD,
-        ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
-      ].join('\n');
-    } catch (error) {
-      return `\n\n${TASK_QUEUE_SECTION_HEADING_HEAD}\n- 待ち行列を読めなかった（理由: ${reasonOf(error)}）。開いている仕事が 0 件だったのではない。読み直す手は \`task_list\` である。`;
-    }
-  }
-
-  // #4938 の案2: 定期の依頼の tick は、要約の全体ではなく担当の節・継続中の依頼の節と、他の節の件数の行を付ける
-  async #recentDigestCounts(): Promise<string> {
-    return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare('counts')}`;
-  }
-
-  // 書き込みを止める門にしない・畳むことを強制しない: 数を1行足すだけで、判断は常にクローンが下すため。
-  // `injectedMemoryChars` が0（まだセッション未構築）のときは `null` を渡し線の判定も出さない: 0を基準に「n 文字増えた」と名乗らせないため。
-  // 線の判定は表示と同じ丸め後の値で `>=` を使う: 読み手の語が「達した」であり、生の値や `>` だと表示と印が食い違うため。
-  async #memoryFloorDigestLine(): Promise<string> {
-    let documents: MemoryDocument[];
-    try {
-      documents = await this.#stores.persona.documents();
-    } catch (error) {
-      return `記憶の床: 測れなかった（理由: ${reasonOf(error)}）。`;
-    }
-
-    const afterChars = measureMemoryFloor(documents).totalChars;
-    const injectedMemoryChars = this.#distillMemory.promptMemoryChars;
-    const sessionDelta = describeMemorySessionDelta({
-      afterChars,
-      injectedMemoryChars: injectedMemoryChars === 0 ? null : injectedMemoryChars,
-    });
-
-    const tickDiffNote =
-      this.#distillMemory.lastTickMemoryFloorChars === null
-        ? '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。'
-        : `前回の tick から ${formatSignedMemoryCharCount(afterChars - this.#distillMemory.lastTickMemoryFloorChars)} 文字。`;
-
-    const thresholdNote =
-      injectedMemoryChars === 0
-        ? '基準がまだ無いので線の判定は出せない。'
-        : roundToOneDecimal(((afterChars - injectedMemoryChars) / injectedMemoryChars) * 100) >=
-            MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT
-          ? `⚠️ 線（セッション構築時点から +${MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT}%）に達している。`
-          : '';
-
-    const rebasedNote =
-      this.#distillMemory.lastTickMemoryBaselineChars !== null &&
-      this.#distillMemory.lastTickMemoryBaselineChars !== 0 &&
-      injectedMemoryChars !== 0 &&
-      this.#distillMemory.lastTickMemoryBaselineChars !== injectedMemoryChars
-        ? `⚠️ セッションが組み直されて基準が ${formatMemoryCharCountLocal(this.#distillMemory.lastTickMemoryBaselineChars)} → ${formatMemoryCharCountLocal(injectedMemoryChars)} 文字へ取り直された（% が下がったのは畳んだからではない）。`
-        : '';
-
-    this.#distillMemory.recordTick(afterChars, injectedMemoryChars);
-
-    return ['記憶の床:', sessionDelta, tickDiffNote, thresholdNote, rebasedNote]
-      .filter((part) => part !== '')
-      .join(' ');
-  }
-
   // 書かれなかった日を作らない（道具を呼び忘れたらその応答を日報にする）。ただし失敗したターンの応答は日報にしない: エラー文言が日報として保存されるため。失敗時は `unavailable`（`schema.ts`）の印を付けた行だけを書く。
   // 読めなければ「無い」として走らせる側へ倒す: 引き下がると、本物の日報が永久に書かれない恐れがあるため（下の既存確認と同じ理由）
   async #dailyReportWritten(date: string): Promise<boolean> {
@@ -5177,15 +5048,15 @@ class Clone implements CloneHost {
       return;
     }
     const range = localDayRange(date);
-    const axes = range === null ? null : await this.#managerDigestAxes();
+    const axes = range === null ? null : await this.#digest.axes();
     const digest =
       range === null || axes === null
-        ? await this.#recentDigestBare()
+        ? await this.#digest.bare()
         : await buildActivityDigest(this.#stores, range, axes.liveness, axes.awaitingBackground, {
             trimHistory: this.#tokenSavingExcerpt,
           }).catch(
             async (error: unknown) =>
-              `（この日の記録をまとめられなかった: ${reasonOf(error)}）${await this.#taskQueueHeadAfterDigestFailure()}`,
+              `（この日の記録をまとめられなかった: ${reasonOf(error)}）${await this.#digest.taskQueueHeadAfterFailure()}`,
           );
 
     // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
