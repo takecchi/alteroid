@@ -105,7 +105,15 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     expect(prompt).toContain('task_set_status_many');
   });
 
-  it.each(['prompt.ts', 'digest.ts', 'clone.ts', 'clone-graves.ts', 'tools.ts', 'manager.ts'])(
+  it.each([
+    'prompt.ts',
+    'digest.ts',
+    'clone.ts',
+    'clone-graves.ts',
+    'clone-digest.ts',
+    'tools.ts',
+    'manager.ts',
+  ])(
     '%s に、消した道具の名前が残っていない',
     (file) => {
       // tools.ts は道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
