@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { humanConversationHeader } from './clone.js';
+import { humanConversationHeader } from './clone-batch-prompts.js';
 import { lastSessionCall, setup, waitForDone, wireEvents } from './clone-test-harness.js';
 import { humanMessage } from './testing.js';
 
