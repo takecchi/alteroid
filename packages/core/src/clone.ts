@@ -66,7 +66,7 @@ import {
 } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
-import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
+import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
 import { excerpt, excerptLine } from './excerpt.js';
@@ -191,7 +191,6 @@ import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extra
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
-import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
 import {
@@ -238,14 +237,7 @@ import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError } from './store.js';
 import type { PendingInboxEvent, Stores } from './store.js';
-import {
-  cloneToolCarriesSecrets,
-  cloneToolJournalsItself,
-  createCloneMcpServer,
-  detectMcpInputValidationFailure,
-  qualifiedToolName,
-  type ToolContext,
-} from './tools.js';
+import { createCloneMcpServer, type ToolContext } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
 import {
@@ -282,7 +274,6 @@ import type { AccountUsageState } from './usage-snapshot.js';
 import {
   CLONE_ACTOR_ID,
   CLONE_DISTILL_ACTOR_ID,
-  CLONE_SUB_ACTOR_PREFIX,
   usageDate,
   type UsageSite,
   type UsageSnapshot,
