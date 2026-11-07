@@ -486,7 +486,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'journal-fails-release-fails',
     covers:
-      '日誌が書けず、戻し（unbind）も落ちる: 戻しの失敗は握りつぶし、元の例外（日誌の失敗）を投げる。添付は結ばれたまま残る（書き込みあり）。新しく結んだものが無ければ unbind を呼ばないので、落ちる口があっても関係しない',
+      '日誌が書けず、戻し（unbind）も落ちる: 元の例外（日誌の失敗）の型のまま、message に残った結び付け（会話・id・戻しの失敗の理由）を足して投げる。添付は結ばれたまま残る（書き込みあり）。新しく結んだものが無ければ unbind を呼ばないので、落ちる口があっても関係しない',
     tasks: [t('q-1', 'conv-a')],
     attachments: [a('att-new', 10), a('att-new2', 10), a('att-mine', 15, 'conv-a')],
     steps: [
@@ -1257,7 +1257,16 @@ describe('task_say の出力と呼んだあとの状態の固定（場面ごと�
     expect(text('journal-fails-release-fails#1')).toContain(
       '⚠⚠ 未記録・行為は起きていない・やり直してよい',
     );
-    expect(text('journal-fails-release-fails#1')).not.toContain('置き場が落ちた');
+    // 戻しも失敗したら、残った結び付け（会話・id・戻しの失敗の理由）を同じ例外の message へ足す
+    expect(text('journal-fails-release-fails#1')).toContain(
+      '添付の結び付けが会話 conv-a に残った（日誌が書けず、戻せなかった）: att-new（Error: 置き場が落ちた（unbind））',
+    );
+    expect(text('journal-fails-release-fails#2')).toContain(
+      '添付の結び付けが会話 conv-a に残った（日誌が書けず、戻せなかった）: att-new2（Error: 置き場が落ちた（unbind））',
+    );
+    expect(text('journal-fails-release-fails#2')).not.toContain('att-mine');
+    // 戻す添付が無いときは message に足さない
+    expect(text('journal-fails-release-fails#3')).not.toContain('添付の結び付け');
     expect(ops('journal-fails-release-fails#1')).toContain('attachments.unbind');
     expect(bound('journal-fails-release-fails#1', 'att-new')).toBe('conv-a');
     expect(ops('journal-fails-release-fails#3')).not.toContain('attachments.unbind');

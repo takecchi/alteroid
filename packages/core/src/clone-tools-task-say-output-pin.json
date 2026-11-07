@@ -63,8 +63,8 @@
     "journal-fails-release#2": 222,
     "journal-fails-release#3": 222,
     "journal-fails-release#4": 222,
-    "journal-fails-release-fails#1": 222,
-    "journal-fails-release-fails#2": 222,
+    "journal-fails-release-fails#1": 295,
+    "journal-fails-release-fails#2": 296,
     "journal-fails-release-fails#3": 222
   },
   "scenarios": {
@@ -4362,8 +4362,8 @@
     },
     "journal-fails-release-fails#1": {
       "output": {
-        "length": 222,
-        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\ntask_say は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: exchange with=human role=outbound chars=5\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "length": 295,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\ntask_say は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: exchange with=human role=outbound chars=5\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。\n⚠ 添付の結び付けが会話 conv-a に残った（日誌が書けず、戻せなかった）: att-new（Error: 置き場が落ちた（unbind））",
         "isError": true,
         "thrown": true,
         "errorName": "JournalNotRecordedError"
@@ -4458,8 +4458,8 @@
     },
     "journal-fails-release-fails#2": {
       "output": {
-        "length": 222,
-        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\ntask_say は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: exchange with=human role=outbound chars=0\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。",
+        "length": 296,
+        "text": "⚠⚠ 未記録・行為は起きていない・やり直してよい\ntask_say は、この記録に失敗した時点で副作用を1つも起こしていない（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を先に書く道具であるかのどちらかに当たる）。\n記録できなかったエントリ: exchange with=human role=outbound chars=0\n理由: Error: 日誌が落ちた\nやり直してよい（同じ内容でもう一度呼べる。重複は起きない）。\n⚠ 添付の結び付けが会話 conv-a に残った（日誌が書けず、戻せなかった）: att-new2（Error: 置き場が落ちた（unbind））",
         "isError": true,
         "thrown": true,
         "errorName": "JournalNotRecordedError"
