@@ -45,7 +45,7 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#noteDroppedSignals 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}\`",
   "#reopenAnswerDeliveryAfterFailure 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}人間の回答（承認 \${event.approvalId}）を渡したターンが枠以外の理由で失敗したので、\` + '配達の印を未配達（pending）へ戻した。次の起動（器の入れ替え）の拾い直しでもう一度配る。' + '同じ承認でこの行が何度も出るなら、その回答の処理は決定的に失敗している。'",
   "#restoreUnreadPass 'outbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので、配らずに畳んだ\` + \`（配り直しの対象だったが、消し込みが先に届いた）: \${inboxEventShape(record.event)}\`",
-  "#journalRedeliveredLive 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)}\`",
+  "#journalRedeliveredLive 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${redeliveredLiveHeadline(liveRecordsThisPass, alone, this.#restoredCohort)}\`",
   "#journalRestoreUnreadPassStart 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 \${total} 件）\`",
   "#journalRestoreUnreadPassEnd 'outbound' context.interrupted ? \`\${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。\` + \`総数 \${total} 件のうち \${processed} 件を処理した＝内訳 stale \${staleCount} 件・\` + \`live \${liveCount} 件。残り \${total - processed} 件は次の起動で拾い直す）\` : \`\${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 \${total} 件のうち \${processed} 件を\` + \`処理した＝内訳 stale \${staleCount} 件・live \${liveCount} 件）\`",
   "#reportFailure 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${contextWindowFailure === undefined ? failureText : \`\${failureText}\${describeContextWindowFailure(contextWindowFailure)}\`}\${refused === undefined ? '' : describeRefusalFailureMark(refused.category)}\` [+...(conversationId === null ? {} : {conversationId})]",

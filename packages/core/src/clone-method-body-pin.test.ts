@@ -25,7 +25,7 @@ const MARKERS: Readonly<Record<ScannedSource, Readonly<Record<string, readonly s
     '#restoreUnreadPass': [
       'this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);',
       'this.#delivery.setPendingTokenPoolNotice({',
-      'this.#redeliveredLiveHeadline(liveRecordsThisPass, alone)',
+      'redeliveredLiveHeadline(liveRecordsThisPass, alone, this.#restoredCohort)',
       'await this.#journalRestoreUnreadPassEnd(decided, decided.length, {interrupted: false});',
     ],
     '#handleTimer': [
