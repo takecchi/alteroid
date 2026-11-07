@@ -272,7 +272,6 @@ import { CloneProgress } from './clone-progress.js';
 import {
   CloneDistillMemoryState,
   describeMemoryIndexRefresh,
-  type ReopenArchive,
 } from './clone-distill-memory-state.js';
 import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
 import {
@@ -1303,14 +1302,14 @@ class Clone implements CloneHost {
    *
    * - **呼んだ時点で `setCloneSessionId(null)` を打つ。** 以後の起動は resume しない
    * - **生ログは消さない。** セッションが終わるとき、`#read` の `finally` が archive へ退避する
-   *   （`#salvageTranscript`）。会話の記録（`conversation_read`）も消えない
+   *   （`CloneGraves#salvageTranscript`）。会話の記録（`conversation_read`）も消えない
    * - **走っているターンは最後まで走らせる**（`'deferred'`）。途中で畳むと、通るはずの仕事を
    *   殺し、依頼者には「セッションが終了した」という失敗として届く（`#inputStream` の doc）。
    *   セッションが無ければ `'now'` で、次に開くセッションから resume しない
    * - **マネージャーは止めない。** その報告は新しいセッションへ届く
    * - **蒸留は `distill: true` のときだけ。** 弾かれているセッションの末尾を蒸留へ送ると、送った
    *   先でまた弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通れば汚れを記憶へ書く
-   *   （`#salvageTranscript` の Why not）
+   *   （`CloneGraves#salvageTranscript` の Why not）
    * - **印は文脈窓の畳みと分けてある**（`CloneSdkSession#armReopen`）。文脈窓の畳みの挙動・文言は
    *   変わらない
    *
@@ -5571,7 +5570,7 @@ class Clone implements CloneHost {
   }
 
   // `load()` には触れない: 大きすぎる鍵は `load()` を呼ばないことで SDK の契約（返す内容は削れない）を守るため。
-  // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
+  // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`CloneGraves#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
   // 古い resume 素材を捨てない: 次のセッションの `init` が `session_started` を新しい id で上書きするため。
   async #resumeCandidateWithinBudget(sessionId: string): Promise<string | null> {
     const measure = await this.#measureRawLog(sessionId);
@@ -6418,7 +6417,7 @@ class Clone implements CloneHost {
             ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）'
             : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）'),
       );
-      // 墓標は退避の id で指す（#4884）: 退避は compaction の前の生ログの全体の写しで、拾い直しは既存の `#pickUpTranscriptGrave` が末尾から蒸留する。
+      // 墓標は退避の id で指す（#4884）: 退避は compaction の前の生ログの全体の写しで、拾い直しは既存の `CloneGraves#pickUpTranscriptGrave` が末尾から蒸留する。
       // 区間を別に持たない: 墓標は `archiveId` 1つで1区間を指し、`archiveId` が「どの時点の生ログか」をそのまま表すため。成功した回は立てない（この `catch` の中だけ）
       const id = archiveId;
       if (id !== null) {
@@ -6440,7 +6439,7 @@ class Clone implements CloneHost {
     transcriptTail: string,
     // 入力の行を書かないのは、同じ墓標の失敗が上限を超えた拾い直しだけ（#4752）。他の呼び出し元は書く
     // `onQuotaFailure` は枠で落ちたときに、観測（`#observeDistillQuota`）の `await` より前に、この蒸留を組んだ時点の鍵を渡して呼ぶ（#4898）:
-    // 観測の中から鍵の契機（`#retryGravesFor`）が来ても、拾い直し側が「同じ鍵では撃ち直さない」を判れるようにするため
+    // 観測の中から鍵の契機（`CloneGraves#retryFor`）が来ても、拾い直し側が「同じ鍵では撃ち直さない」を判れるようにするため
     options: {
       journalInput?: boolean;
       onQuotaFailure?: (tokenKey: string | undefined) => void;

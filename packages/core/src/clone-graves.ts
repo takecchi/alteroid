@@ -433,7 +433,7 @@ export class CloneGraves {
     });
   }
 
-  // `Clone` の `#journalSelf` と同じ形で置く（走査の試験が `this.#journalSelf(role, text)` の字面を数えるため。`this.#ports.…` の字面だと拾わない）。
+  // `Clone` の `#journalSelf` と同じ形で置く（走査の試験は、この private な helper の呼び出しの字面を数える。口を直に呼ぶ字面だと拾わない）。
   // async にせず口の Promise をそのまま返す: `await` / `void` の呼び出し側のタイミングを変えない。
   // 接頭辞（EXCHANGE_KIND_*_PREFIX）は呼び出し箇所の text に字面で置く（exchange-kind-coverage.test.ts が第2引数を走査する）。
   #journalSelf(role: 'inbound' | 'outbound', text: string): Promise<void> {

@@ -1445,7 +1445,10 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
   });
 
   it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
-    const targets = ['../../../packages/core/src/clone.ts'];
+    const targets = [
+      '../../../packages/core/src/clone.ts',
+      '../../../packages/core/src/clone-graves.ts',
+    ];
 
     // 道具の実装ソース（tools.ts と clone-tools-*.ts）は全部読む。
     // 入口は clone-tools-sources.test-support.ts

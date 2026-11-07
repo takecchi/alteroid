@@ -1,5 +1,18 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-graves.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "salvageTranscript 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
+  "salvageTranscript 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${label}の生ログの退避に失敗した: \${reasonOf(error)}\` + '（⚠️ この区間の生ログは器の外に残っていない）'",
+  "salvageTranscript 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${label}の蒸留に失敗した: \${reasonOf(error)}\` + (archiveId !== null ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）' : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）')",
+  "#reportDroppedGraves 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${what}が上限（\${String(MAX_PENDING_GRAVES)} 件）を超えたので、\` + \`古いものから落とした: \${dropped.join(', ')}（⚠️ この区間は記憶へ移せていない）\`",
+  "#pickUpOneTranscriptGrave 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${lowered ? text : \`記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: \${grave.archiveId}\`}\`",
+  "#distillGrave 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${options.recoveryText}\`",
+  "#distillGrave 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${options.failureText(reasonOf(error))}\` + \`（印は残す。次の起動で拾い直す: \${graveId}）\${note}\`",
+  "#pickUpOneLostSession 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${lowered ? \`捨てたセッションの生ログが1件も無いので、印を下ろした: \${grave.sessionId}\` + '（⚠️ この区間は記憶へ移せていない）' : \`捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: \${grave.sessionId}\`}\`",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "buildHumanAnswerEvent 'inbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}二重書き込み防止のために覚えている拒否の記憶が上限\` + \`（\${DENIED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い \${ids.length} 件を忘れた: \` + \`\${ids.join(', ')}。この tool_use_id の拒否が生の合図と result の両方から\` + '再び届くと、同じ拒否がもう一度日誌に載る。'",
@@ -34,14 +47,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#noteRefusal 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた\` + \`（category: \${label}、session id: \${sessionId ?? '不明'}）。⟹ 自動の開き直しはもうしない\` + '（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。' + '解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。'",
   "#noteRefusal 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}別の入力で \${String(streak)} 回続けて安全分類器に弾かれた\` + \`（category: \${label}、session id: \${sessionId ?? '不明'}）。⟹ セッションごと弾かれていると見る。\` + (setting.enabled ? '自動の開き直しが有効なので、開き直す。' : '自動の開き直しは外してあるので、開き直さない（人間へ知らせる）。') + (setting.unrecognized === undefined ? '' : \` ⚠ \${REFUSAL_AUTO_REOPEN_ENV} の値「\${setting.unrecognized}」は読めないので有効として扱った。\`)",
   "#noteUnproductiveUsageBlockFold 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が \` + \`\${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 \` + \`\${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ\` + 'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' + 'ここでセッションを畳んで作り直す（Issue #1240）。'",
-  "#salvageTranscript 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
-  "#salvageTranscript 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${label}の生ログの退避に失敗した: \${reasonOf(error)}\` + '（⚠️ この区間の生ログは器の外に残っていない）'",
-  "#salvageTranscript 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${label}の蒸留に失敗した: \${reasonOf(error)}\` + (archiveId !== null ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）' : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）')",
-  "#reportDroppedGraves 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${what}が上限（\${String(MAX_PENDING_GRAVES)} 件）を超えたので、\` + \`古いものから落とした: \${dropped.join(', ')}（⚠️ この区間は記憶へ移せていない）\`",
-  "#pickUpOneTranscriptGrave 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${lowered ? text : \`記憶へ移せていない区間の退避を拾えなかったが、拾っている間に新しい印が立ったので、印は下ろさなかった: \${grave.archiveId}\`}\`",
-  "#distillGrave 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${options.recoveryText}\`",
-  "#distillGrave 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${options.failureText(reasonOf(error))}\` + \`（印は残す。次の起動で拾い直す: \${graveId}）\${note}\`",
-  "#pickUpOneLostSession 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}\${lowered ? \`捨てたセッションの生ログが1件も無いので、印を下ろした: \${grave.sessionId}\` + '（⚠️ この区間は記憶へ移せていない）' : \`捨てたセッションの生ログが1件も無かったが、拾っている間に新しい印が立ったので、印は下ろさなかった: \${grave.sessionId}\`}\`",
   "#noteUsageNotice 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}\${describeUsageNotice(notice)}\`",
   "#handleDistill 'outbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}蒸留（\${event.reason}）は見送った。セッションが無い\` + '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' + 'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。'",
   "#handleDistill 'outbound' \`\${EXCHANGE_KIND_THINNING_PREFIX}蒸留（\${event.reason}）は見送った。前回の蒸留以降にターンが1本も\` + '走っていない（＝内容が変わっていない）ので、同一内容を重ねて払わない。'",

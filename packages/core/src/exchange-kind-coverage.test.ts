@@ -314,8 +314,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#buildSessionSpec': 'decision',
     '#completeScheduledRun': 'failure',
     '#dailyReport': 'decision,failure',
-    // 墓標の拾い直しの後半（拾い直しの行・蒸留の失敗の行）は `#distillGrave` が書く。前半（読めなかった印の行）は各 `#pickUpOne*` に残る
-    '#distillGrave': 'failure,recovery',
     '#dropPendingCollapse': 'thinning',
     '#dropStaleRedelivery': 'thinning',
     '#externalMcpServers': 'failure',
@@ -345,8 +343,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#onPreCompact': 'failure,recovery',
     '#onSubagentStop': 'decision',
     '#openHumanTask': 'failure',
-    '#pickUpOneLostSession': 'failure',
-    '#pickUpOneTranscriptGrave': 'failure',
     '#plugins': 'decision,failure',
     '#pump': 'thinning',
     '#read': 'decision',
@@ -355,11 +351,9 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#recordWorkerLimit': 'decision',
     '#reopenAnswerDeliveryAfterFailure': 'decision',
     '#reopenSession': 'decision',
-    '#reportDroppedGraves': 'failure',
     '#reportFailure': 'failure,human,thinning',
     '#restoreUnreadPass': 'thinning',
     '#resumeCandidateWithinBudget': 'decision',
-    '#salvageTranscript': 'failure,recovery',
     // `#handleTimer` のターンの後の完了の記録を出した先（失敗の再試行の1行）
     '#settleTimerRun': 'failure',
     '#stopRunningTurn': 'decision,failure',
@@ -368,6 +362,14 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#workerLimitNotice': 'decision',
     buildHumanAnswerEvent: 'thinning',
     dropQueuedInboxEvents: 'thinning',
+  },
+  // 墓標と見失ったセッション（旧 `Clone#salvageTranscript` ほか）。拾い直しの後半（拾い直しの行・蒸留の失敗の行）は `#distillGrave` が書く。前半（読めなかった印の行）は各 `#pickUpOne*` に残る
+  'clone-graves.ts': {
+    '#distillGrave': 'failure,recovery',
+    '#pickUpOneLostSession': 'failure',
+    '#pickUpOneTranscriptGrave': 'failure',
+    '#reportDroppedGraves': 'failure',
+    salvageTranscript: 'failure,recovery',
   },
   'manager.ts': {
     '#askedOf': 'thinning',
@@ -527,6 +529,7 @@ function kindsByEnclosing(sites: readonly ExchangeWriteSite[]): Record<string, s
 
 const EXCHANGE_SOURCES = [
   'archive-receiver.ts',
+  'clone-graves.ts',
   'clone.ts',
   'denial-renotify.ts',
   'manager.ts',
