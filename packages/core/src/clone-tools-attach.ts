@@ -456,6 +456,11 @@ function renderAttachmentFetchFailed(id: string, error: unknown): string {
   return `添付 ${id} を取り出せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`;
 }
 
+type FileListUnresolved = Extract<
+  Awaited<ReturnType<typeof resolveConversationId>>,
+  { kind: 'ambiguous' }
+>;
+
 function renderFileListAmbiguous(given: string, resolution: FileListUnresolved): string {
   return `置き場の一覧は読んでいない。${describeUnresolvedConversation(given, resolution)}`;
 }
@@ -467,11 +472,6 @@ function renderFileListPrefixNote(given: string, id: string): string {
 function renderFileListFailed(error: unknown): string {
   return `置き場の一覧を読めなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`;
 }
-
-type FileListUnresolved = Extract<
-  Awaited<ReturnType<typeof resolveConversationId>>,
-  { kind: 'ambiguous' }
->;
 
 // 会話の id の解決。一意に決まる 8 文字以上の前方一致だけ読み替える（#5130）。当たらない id は今どおりそのまま絞る。
 // 結果は「断り（置き場は読まない）」か「絞る id と、読み替えたときの注記（無ければ空）」
