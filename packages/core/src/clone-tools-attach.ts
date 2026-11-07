@@ -298,9 +298,27 @@ async function journalTaskSay(
     );
   } catch (error) {
     // 書けなかった発言に添付を結んだままにしない: 結んだままだと、掃除が未結び付けとして消す前に1時間ぶん居座る
-    await releaseOutboundAttachments(stores, attached.newlyBound, target).catch(() => undefined);
+    try {
+      await releaseOutboundAttachments(stores, attached.newlyBound, target);
+    } catch (releaseError) {
+      throw noteLeftBoundOnJournalError(error, target, attached.newlyBound, reasonOf(releaseError));
+    }
     throw error;
   }
+}
+
+// 戻しも失敗したときは、日誌の例外の message に残った結び付けを足して投げ直す。
+// 新しい例外へ包まず同じ例外を使う: 日誌が書けない場面では日誌の行に残せず、呼び手へ届く経路が例外の message だけであり、
+// 型（`JournalNotRecordedError`）と `entry`・`journalCause` を変えると、例外を型で扱う側の判定が変わるため
+function noteLeftBoundOnJournalError(
+  error: unknown,
+  target: string,
+  ids: readonly string[],
+  reason: string,
+): unknown {
+  if (!(error instanceof Error)) return error;
+  error.message = `${error.message}\n⚠ 添付の結び付けが会話 ${target} に残った（日誌が書けず、戻せなかった）: ${ids.join(', ')}（${reason}）`;
+  return error;
 }
 
 // 器への知らせ（書いた印と会話への投稿）。添付が無いときは3つ目の引数を渡さない
