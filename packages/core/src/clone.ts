@@ -6465,12 +6465,6 @@ async function confirmationLiveness(
   return summary.waiting.some((item) => item.requestId === requestId) ? 'live' : 'settled';
 }
 
-// 「必要なら」で写すかを任せない（#5125 c30-2）: 承認への答えは人間の判断の合図で最も濃いのに、基準として記憶へ写されず、同じ種類の確認を何度も人間へ上げていたため
-const HUMAN_ANSWER_CRITERIA_GUIDE =
-  'この回答は、同じ種類の確認が次に来たときにあなたが自分で決めるための材料である。' +
-  '拒否・条件付き・理由付きの答えなら、結論だけでなく理由と条件を、どの種類の確認に効く基準かが分かる言葉に言い換えて記憶へ書くこと。' +
-  '基準が読み取れないなら、推測で書かずに人間に訊くこと。';
-
 /**
  * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
  * 発意 tick と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
