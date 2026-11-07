@@ -5525,7 +5525,7 @@ class Clone implements CloneHost {
    * - `Bash` 以外は素通りにする: 何でも通しうる門にしない。このフックは本セッションにしか配線しない（蒸留・マネージャー・作業者はこの許可を見ない）。
    * - 許可はキャッシュせず呼び出しのたびに引き直す: 「取り消しは次の呼び出しから効く」が崩れるため。
    * - `lastUsedAt` が書けなくても allow を止めない: 観測用の副作用で、一致した事実を覆さない。
-   * - `allow` を返した呼び出しは `#allowedByGrantToolUses` に控える: SDK が allow を分類器へ回して拒否することがあり、その拒否を `#noteDenial` で見分けるため。`agentId` が読めれば同じ控えへ足す（`#onSubagentStop` は欄が無い控えを拾わない）。
+   * - `allow` を返した呼び出しは `#denials.rememberAllowedByGrant` で控える: SDK が allow を分類器へ回して拒否することがあり、その拒否を `CloneDenialJournal#noteDenial` で見分けるため。`agentId` が読めれば同じ控えへ足す（`CloneDenialJournal#onSubagentStop` は欄が無い控えを拾わない）。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     if (record.toolName !== 'Bash') return { kind: 'continue' };
