@@ -14,7 +14,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
 //   - 「新しい仕様」: `- 滞留: needs_decision 3 件（最も古いのは 5日3時間前）` の形の 1 行（件数の行の次。読めない行の断りがあればその次）
 // 古さの描き方は situation.ts と同じ `formatMinutesAgo`（分・時間+分・日+時間）。
 // 追記（waiting のしきい値）: 当初は「しきい値は置かない（waiting / needs_decision が1件でもあれば出る）」だったが、waiting は 24 時間を超えたものだけ数える
-// ようにした（task-tools.ts の BACKLOG_WAITING_STALE_MS。境目の試験は task-queue-backlog-threshold-pin.test.ts）。needs_decision は変わらず古さによらず出る。
+// ようにした（task-tools.ts の BACKLOG_WAITING_STALE_MS。境目の試験は task-queue-backlog-threshold.test.ts）。needs_decision は変わらず古さによらず出る。
 // このファイルで動いた試験: waiting を 24 時間以内で置いていた箇所（(b)・両方あるとき・読めない行の断りの次・(f) の seed）は、24 時間を超えた時刻へ置き直した
 // （出力の文字列は、古さの数字が変わっただけ）。waiting の「経過不明」の試験は、waiting を数えなくなったので needs_decision へ移した。
 // 時刻は `Date` だけを止める（実時間の待ちは足さない）。
@@ -142,7 +142,7 @@ describe('describeTaskBacklogAge（純関数）', () => {
     });
 
     it('全部読めなければ、件数と「経過不明」だけを言う（0 分前などへ丸めない）', () => {
-      // 動いた理由: 前は waiting の読めない行で言っていた。waiting の読めない行は数えなくなった（task-queue-backlog-threshold-pin.test.ts）ので、needs_decision へ移した
+      // 動いた理由: 前は waiting の読めない行で言っていた。waiting の読めない行は数えなくなった（task-queue-backlog-threshold.test.ts）ので、needs_decision へ移した
       const entries = [task('n-bad', 'needs_decision', ''), task('n-bad2', 'needs_decision', 'xx')];
       expect(describeTaskBacklogAge(list(entries), NOW)).toEqual([
         '- 滞留: needs_decision 2 件（経過不明）',
