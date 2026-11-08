@@ -14,7 +14,7 @@ const CLONE_ID_LIST_EXCERPT = 400;
 
 // 窓は `Clone` が日誌を引く件数でもある（`#humanActionSection`）: 描く側の「窓ちょうどなら窓の外を断る」と同じ値でなければ断りが嘘になるため
 export const HUMAN_ACTION_WINDOW = 200;
-const HUMAN_ACTION_SHOWN = 20;
+const HUMAN_ACTION_SHOWN = 21;
 const HUMAN_ACTION_DECISION_EXCERPT = 160;
 // `Record` で全種を強いる: kind を足したときに言い方の追加を忘れると、型が落ちる前に英語の識別子が入力へ漏れるため
 const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
