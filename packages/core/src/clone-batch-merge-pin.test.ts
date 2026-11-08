@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { InboxEvent } from './schema.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor } from './clone-test-harness.js';
+import { readAtLabel } from './situation.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
 // まとめ読み（`Clone` の `#mergedHumanBatch` ほか 11 メンバー）の境目を、`createClone` 越しに固定する試験。
@@ -71,6 +72,29 @@ describe('まとめ読みの境目の固定（切り出し前後で変えない�
     expect(inputs[1] ?? '').toContain('乙');
     expect(inputs[1] ?? '').not.toContain('丙');
     expect(inputs[2] ?? '').toContain('丙');
+    await s.clone.stop();
+  }, 15_000);
+
+  it('同じ担当の束の本文がちょうど予算（47,500 字）のとき、本文が空の別担当の報告まで1つの混合の束に広げる', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+    // 27,500 + 20,000 = 47,500（予算ちょうど）。続く本文の空の報告は 0 字なので予算に収まる
+    s.clone.post(manager('e1', 'mgr-A', `甲${'x'.repeat(27_499)}`));
+    s.clone.post(manager('e2', 'mgr-A', `乙${'x'.repeat(19_999)}`));
+    s.clone.post(manager('e3', 'mgr-empty', ''));
+
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('mgr-empty')),
+      '空の報告を含むターンが投げられる',
+    );
+    await drained(s);
+
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1] ?? '').toContain('甲');
+    expect(inputs[1] ?? '').toContain('乙');
     await s.clone.stop();
   }, 15_000);
 
@@ -176,6 +200,7 @@ describe('まとめ読みの境目の固定（切り出し前後で変えない�
 
   it('断り書きの全文（上限 2・3 件）: 4 行の並びと区切りが 1 字も変わらない', async () => {
     const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const before = Date.now();
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
@@ -192,9 +217,11 @@ describe('まとめ読みの境目の固定（切り出し前後で変えない�
     const truncated = (s.calls[0] as FakeCall).inputs[1] ?? '';
     const start = truncated.indexOf('[system] **このターンへ束ねる合図は、上限');
     const end = truncated.indexOf('---\n', start) + '---\n'.length;
-    const notice = truncated
-      .slice(start, end)
-      .replace(/\d{2}:\d{2}:\d{2}Z 時点/, '<HH:MM:SSZ> 時点');
+    const raw = truncated.slice(start, end);
+    // 時刻は「数えた時点（いま）」: 試験の前後の時刻のどちらか（秒をまたぐ回がありうる）と一致する
+    const label = /(\d{2}:\d{2}:\d{2}Z) 時点/.exec(raw)?.[1];
+    expect([readAtLabel(before), readAtLabel(Date.now())]).toContain(label);
+    const notice = raw.replace(/\d{2}:\d{2}:\d{2}Z 時点/, '<HH:MM:SSZ> 時点');
     expect(notice).toBe(
       [
         '[system] **このターンへ束ねる合図は、上限（2 件）で切った束である（この束は 2 件。<HH:MM:SSZ> 時点）。**同じ束に入るはずの合図が、待ち行列の先頭にあと 1 件連続して残っている。',
