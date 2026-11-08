@@ -8,7 +8,7 @@ import {
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
 import { noteDroppedRecord } from './dropped-record.js';
-import { describePage, excerptLine, excerptRow, page, renderListing } from './excerpt.js';
+import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } from './excerpt.js';
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
 import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-format.js';
 import { describeGithubCi } from './progress-github.js';
@@ -152,6 +152,7 @@ function journalAttachmentHead(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
   rejected?: readonly { name: string; reason: string }[],
   limit: number = Number.POSITIVE_INFINITY,
+  field: (value: string) => string = keepHeadField,
 ): string {
   // 一覧では先頭の数件だけ出し、残りは件数にする: 添付の多い1行が一覧の予算を食い潰さないため。全件は id 指定で出る
   const more = (total: number): string =>
@@ -162,7 +163,8 @@ function journalAttachmentHead(
       : ` attachments=[${attachments
           .slice(0, limit)
           .map(
-            (a) => `id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
+            (a) =>
+              `id=${field(a.id)} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
           )
           .join('; ')}${more(attachments.length)}]`;
   // 受け取れなかったファイルも出す: 全部断られた報告が、添付なしの空の発言に見えないため
@@ -221,36 +223,51 @@ function journalConversationLegend(entries: readonly JournalEntry[]): {
   return { labels, lines };
 }
 
+// 一覧の見出しに埋まる id・名前の欄の上限。超えた分は excerpt の注記（…（N 文字省略。全 M 文字））で切ったと分かる:
+// 本文だけを抜粋で切っても、見出しの欄（approvalId など）が長いと1件で一覧の予算を超えるため（#6318）。
+// 添付名の 80 字（journalAttachmentHead）に揃える。全文読み（id 指定）では掛けない
+const JOURNAL_LISTING_HEAD_FIELD = 80;
+
+function clipListingHeadField(value: string): string {
+  return excerpt(value, JOURNAL_LISTING_HEAD_FIELD);
+}
+
+function keepHeadField(value: string): string {
+  return value;
+}
+
 function renderJournalEntry(
   entry: JournalEntry,
   attachmentLimit: number = Number.POSITIVE_INFINITY,
   conversationLabels?: ReadonlyMap<string, string>,
+  field: (value: string) => string = keepHeadField,
 ): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
         entry.conversationId === undefined
           ? ''
-          : ` conversation=${conversationLabels?.get(entry.conversationId) ?? entry.conversationId}`;
+          : ` conversation=${conversationLabels?.get(entry.conversationId) ?? field(entry.conversationId)}`;
       return {
-        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit)}`,
+        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit, field)}`,
         body: entry.text,
       };
     }
     case 'decision': {
       // 印の無い行の head は従来の `[decision]` のまま: 既存の読み手（画面・試験）の形を変えないため
-      const practice = entry.target?.kind === 'practice' ? ` practice=${entry.target.slug}` : '';
+      const practice =
+        entry.target?.kind === 'practice' ? ` practice=${field(entry.target.slug)}` : '';
       const human =
         entry.humanAction === undefined
           ? ''
-          : ` humanAction=${entry.humanAction.kind} target=${entry.humanAction.target} via=${describeAnsweredVia(entry.humanAction.via)}`;
+          : ` humanAction=${entry.humanAction.kind} target=${field(entry.humanAction.target)} via=${field(describeAnsweredVia(entry.humanAction.via))}`;
       return {
         head: `[decision${practice}${human}]`,
         body: `${entry.decision}（根拠: ${entry.grounds}）`,
       };
     }
     case 'escalation': {
-      const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
+      const to = entry.managerId === undefined ? '' : ` manager=${field(entry.managerId)}`;
       const status =
         entry.withdrawnAt !== undefined
           ? `取り下げ済み ${entry.withdrawnAt}`
@@ -264,12 +281,17 @@ function renderJournalEntry(
             ? entry.question
             : `${entry.question} → ${entry.answer}`;
       const via =
-        entry.answeredVia === undefined ? '' : ` via=${describeAnsweredVia(entry.answeredVia)}`;
-      return { head: `[escalation approval=${entry.approvalId}${to} ${status}${via}]`, body };
+        entry.answeredVia === undefined
+          ? ''
+          : ` via=${field(describeAnsweredVia(entry.answeredVia))}`;
+      return {
+        head: `[escalation approval=${field(entry.approvalId)}${to} ${status}${via}]`,
+        body,
+      };
     }
     case 'tool_use':
       return {
-        head: `[tool_use ${entry.actor} ${entry.tool}]`,
+        head: `[tool_use ${field(entry.actor)} ${field(entry.tool)}]`,
         body: safeJson(entry.input),
       };
     case 'memory_update': {
@@ -281,7 +303,7 @@ function renderJournalEntry(
           ? ' bytes=不明(旧形式)'
           : ` bytes=${entry.bytesBefore}→${entry.bytesAfter}`;
       return {
-        head: `[memory_update ${entry.slug} (${entry.cause})${action}${bytes}]`,
+        head: `[memory_update ${field(entry.slug)} (${entry.cause})${action}${bytes}]`,
         body: entry.summary,
       };
     }
@@ -289,7 +311,7 @@ function renderJournalEntry(
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
       return {
-        head: `[external_event ${entry.source}]${journalAttachmentHead(entry.attachments, undefined, attachmentLimit)}`,
+        head: `[external_event ${field(entry.source)}]${journalAttachmentHead(entry.attachments, undefined, attachmentLimit, field)}`,
         body: entry.summary,
       };
     case 'worker_wait': {
@@ -344,7 +366,7 @@ function renderJournalEntry(
               .join(' / ');
       return {
         head:
-          `[turn_usage ${entry.layer}/${entry.site} ${entry.managerId}]` +
+          `[turn_usage ${entry.layer}/${entry.site} ${field(entry.managerId)}]` +
           (entry.reset === undefined ? '' : ' ⚠reset') +
           (context?.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
         body: `${modelLines}${resetLine}${contextLine}${compactionLine}`,
@@ -354,7 +376,7 @@ function renderJournalEntry(
       const context = entry.contextUsage;
       return {
         head:
-          `[context_usage ${entry.layer}/${entry.site} ${entry.managerId} ` +
+          `[context_usage ${entry.layer}/${entry.site} ${field(entry.managerId)} ` +
           `${entry.turnSucceeded ? '成功' : '失敗'}]` +
           (context.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
         body: describeContextLine(context).replace(/^\n/, ''),
@@ -369,7 +391,7 @@ function renderJournalEntry(
       const where =
         entry.tokenId === undefined
           ? ''
-          : ` → ${entry.tokenId}${entry.label === undefined ? '' : `「${entry.label}」`}`;
+          : ` → ${field(entry.tokenId)}${entry.label === undefined ? '' : `「${field(entry.label)}」`}`;
       const gen = entry.generation === undefined ? '' : ` 世代${String(entry.generation)}`;
       // `earliestAt` が無いことを「すぐ戻る」と読ませない: 無いのは戻る見込みの立っている候補が1本も無いとき。`parked` でも言い方を変えて出す: その時刻より前に重い委譲を起こす判断をしないために要るため
       const earliest =
@@ -397,10 +419,10 @@ function renderJournalEntry(
       };
     }
     case 'subagent_stall': {
-      const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
+      const agentType = entry.agentType === undefined ? '' : `/${field(entry.agentType)}`;
       return {
         head:
-          `[subagent_stall ${entry.outcome} agent=${entry.agentId}${agentType} ` +
+          `[subagent_stall ${entry.outcome} agent=${field(entry.agentId)}${agentType} ` +
           `owned=${entry.ownedTaskCount} session=${entry.sessionTaskCount} ` +
           `wakeup=${entry.wakeupCount}]`,
         body: entry.text,
@@ -432,7 +454,7 @@ function renderJournalEntry(
     }
     case 'github_observation': {
       // 申告であることを見出しに出す。数が取れなかった回は数を出さない
-      const head = `[github_observation ${entry.repo} by ${entry.observedBy} ${entry.result.status}]`;
+      const head = `[github_observation ${field(entry.repo)} by ${field(entry.observedBy)} ${entry.result.status}]`;
       const scope = `母集合: ${entry.query}${entry.limit === undefined ? '' : ` / limit ${entry.limit}`}`;
       return entry.result.status === 'ok'
         ? {
@@ -838,6 +860,7 @@ function describeJournalListingItems(
       entry,
       JOURNAL_LISTING_ATTACHMENTS,
       conversationLabels,
+      clipListingHeadField,
     );
     return (
       `${entry.at} ${head} id=${entry.id}` +
