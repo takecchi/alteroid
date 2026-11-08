@@ -565,6 +565,85 @@ describe('resume で同じ task に2本が走るとき', () => {
   });
 });
 
+// 現状の動きの固定（pin）。期待は今の作りの出力から確かめた（仕様を先に書いたものではない）。
+// 案 D（背景処理待ちで閉じた done では waiting の task を倒さない）の前後で、変わるもの・変わらないものを分けて置く。
+describe('pin: ターン終わりの report(done) と終端の即時同期（案 D の前の動き）', () => {
+  const needsDecisionLine = (lines: string[]): boolean =>
+    lines.some((line) => line.includes('waiting から needs_decision'));
+
+  it('report(done) が 1 本来ると、waiting の task は needs_decision へ倒れる（日誌にも残る）', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
+  });
+
+  it('waiting へ戻された task は、同じ委譲の別の report(done)（before=done）では倒れない', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+    await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  // この PR の後に反転する対象: 案 D は、この動きを「awaitingBackground 付きの done では waiting のまま」へ変える。
+  it('現状: awaitingBackground 付きの report(done) でも waiting の task は needs_decision へ倒れる（反転予定）', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    s.fake.push({
+      ...report(started.managerId),
+      awaitingBackground: { count: 1, breakdown: 'bash×1' },
+    } as RunnerEvent);
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
+  });
+
+  it.each([
+    ['failed（report）', (id: string): RunnerEvent => report(id, 'failed')],
+    [
+      'lost（closed）',
+      (id: string): RunnerEvent =>
+        ({ type: 'closed', managerId: id, status: 'lost', reason: '器から消えた' }) as RunnerEvent,
+    ],
+    [
+      'closed(done)',
+      (id: string): RunnerEvent =>
+        ({ type: 'closed', managerId: id, status: 'done', reason: '畳んだ' }) as RunnerEvent,
+    ],
+  ])('即時に倒す: %s は waiting の task を needs_decision へ倒す', async (_name, event) => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    s.fake.push(event(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('即時に倒す: stopped（abort）は waiting の task を needs_decision へ倒す', async () => {
+    const s = await setup();
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    await s.pool.abort(started.managerId);
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+});
+
 describe('道具: manager_start の taskId', () => {
   function build(stores: Stores) {
     const started: unknown[] = [];
