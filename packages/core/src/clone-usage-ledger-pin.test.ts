@@ -8,7 +8,7 @@ import type {
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import type { AgentProvider } from './agent-ports.js';
@@ -29,6 +29,20 @@ import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 // ここが足すのは、縛っていない枝: `turn_usage` の全欄と欄の並び・`usage.record` / `recordUnmetered` へ渡る引数の全部（`date`・`at`・`accumulation`・`tokenId` の有無）・
 // 失敗の日誌2行の全文と stderr の行・差分の欄・畳む直前の読みの行・`#applyTurnEnded` の中の並び。
 // 時刻は `Date` だけを止めて動かす（タイマーは本物のまま。実時間の待ちは足さない）。
+
+// 時間帯をテストの側で Asia/Tokyo に固定する: `usageDate` はローカル時刻で日付を切るので、器の時間帯に任せると CI（UTC）と手元（JST）で日付の境目の期待が食い違い、
+// UTC の器では「ローカルの日付を UTC の日付に取り違える」変異が通ってしまうため
+// vi.hoisted にする: 素の代入だと import が先に評価されて静かに効かなくなる（`apps/web/app/routes/reports.test.tsx` の冒頭と同じ理由）
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
