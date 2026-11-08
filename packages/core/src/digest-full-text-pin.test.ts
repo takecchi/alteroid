@@ -1334,7 +1334,8 @@ describe('B1 要約の全文の固定 — 各節の上限の境目（全部の�
 describe('B1 要約の全文の固定 — 外部イベントの発行元の追跡上限', () => {
   it('発行元が DIGEST_SOURCE_TALLY_LIMIT を超える（超過の件数の行・その他・本文の形の省略。全文）', async () => {
     const stores = createMemoryStores();
-    for (let i = 0; i < 34; i += 1) {
+    // 33 件: 追跡の上限（32）を超えて現れた発行元がちょうど 1 件
+    for (let i = 0; i < 33; i += 1) {
       await journalAgo(stores, (i + 1) * 1000, {
         type: 'external_event',
         source: `src-${String(i).padStart(2, '0')}`,
@@ -1344,14 +1345,13 @@ describe('B1 要約の全文の固定 — 外部イベントの発行元の追�
     expect(await digestOf(stores)).toMatchInlineSnapshot(`
       "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
 
-      - 件数: 人間の発言 0 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）0 本 / 自分で決めたこと 0 / 記憶の更新 0 / 外部イベント（日誌の行数）34 / 委譲側のツール実行 0 / 自分の手（委譲せず使った道具）0 / 継続中の依頼 0
+      - 件数: 人間の発言 0 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）0 本 / 自分で決めたこと 0 / 記憶の更新 0 / 外部イベント（日誌の行数）33 / 委譲側のツール実行 0 / 自分の手（委譲せず使った道具）0 / 継続中の依頼 0
 
       ## 待ち行列の先頭
       - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
 
       ## 届いた外部イベント
       この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を通さず直接書く行（source \`runner\` / \`boot-storage-footprint\` / \`boot-tool-search\`）も混ざる。
-      - src-33: 届いた 33
       - src-32: 届いた 32
       - src-31: 届いた 31
       - src-30: 届いた 30
@@ -1366,9 +1366,11 @@ describe('B1 要約の全文の固定 — 外部イベントの発行元の追�
       - src-21: 届いた 21
       - src-20: 届いた 20
       - src-19: 届いた 19
-      - …ほか 19 件（新しい側だけ出している。続きは \`journal_read\` に types=["external_event"] と until を渡して掘る（あちらも予算で打ち切り、残りの件数が本文に出る））
+      - src-18: 届いた 18
+      - …ほか 18 件（新しい側だけ出している。続きは \`journal_read\` に types=["external_event"] と until を渡して掘る（あちらも予算で打ち切り、残りの件数が本文に出る））
 
       **発行元（source）別の件数（正確な総数。上限 \`DIGEST_SOURCE_TALLY_LIMIT\`=32 発行元まで追跡する）**
+      - src-01: 1 件
       - src-02: 1 件
       - src-03: 1 件
       - src-04: 1 件
@@ -1383,17 +1385,16 @@ describe('B1 要約の全文の固定 — 外部イベントの発行元の追�
       - src-13: 1 件
       - src-14: 1 件
       - src-15: 1 件
-      - src-16: 1 件
       - その他: 17 件（17 の発行元）
-      - 上限（\`DIGEST_SOURCE_TALLY_LIMIT\`）を超えて現れた発行元: 2 件（発行元の数は数えていない —— キー数に上限を置いている以上、数えるには上限を外すしかない）
+      - 上限（\`DIGEST_SOURCE_TALLY_LIMIT\`）を超えて現れた発行元: 1 件（発行元の数は数えていない —— キー数に上限を置いている以上、数えるには上限を外すしかない）
 
-      **本文の形（保持した 34 件の標本。上の件数とは母数が違う）** —— 「本文の種類」は \`summary\` の完全一致で数える（末尾に畳んだ件数などの可変値が付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。
+      **本文の形（保持した 33 件の標本。上の件数とは母数が違う）** —— 「本文の種類」は \`summary\` の完全一致で数える（末尾に畳んだ件数などの可変値が付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。
       - src-00: 同じ本文は 1 種。最も多い1種が 1 件
       - src-01: 同じ本文は 1 種。最も多い1種が 1 件
       - src-02: 同じ本文は 1 種。最も多い1種が 1 件
       - src-03: 同じ本文は 1 種。最も多い1種が 1 件
       - src-04: 同じ本文は 1 種。最も多い1種が 1 件
-      - …ほか 29 件（新しい側だけ出している。続きは \`journal_read\` に types=["external_event"] と until を渡して掘る（あちらも予算で打ち切り、残りの件数が本文に出る）（source では絞れない。読み出した行を自分で source ごとに数える。ここは保持した標本の中の発行元数であって、総数ではない））
+      - …ほか 28 件（新しい側だけ出している。続きは \`journal_read\` に types=["external_event"] と until を渡して掘る（あちらも予算で打ち切り、残りの件数が本文に出る）（source では絞れない。読み出した行を自分で source ごとに数える。ここは保持した標本の中の発行元数であって、総数ではない））
 
       ## 使った分
       （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
@@ -1534,26 +1535,51 @@ describe('B1 要約の全文の固定 — 件数の形（counts。定期の依�
     });
     await addTask(stores, 't-1');
     await addTask(stores, 't-2', 'waiting');
-    await stores.jobs.putApproval({ id: 'ap-1', createdAt: ago(MIN), question: '確認' });
-    await journalAgo(stores, MIN, {
-      type: 'exchange',
-      with: 'human',
-      role: 'inbound',
-      text: 'やあ',
-    });
-    await journalAgo(stores, MIN, { type: 'decision', decision: '決めた', grounds: '根拠' });
-    await journalAgo(stores, MIN, {
-      type: 'escalation',
-      question: '聞いた',
-      approvalId: 'esc-1',
-    });
-    await journalAgo(stores, MIN, {
-      type: 'memory_update',
-      slug: 'values',
-      cause: 'clone',
-      summary: '直した',
-    });
-    await journalAgo(stores, MIN, { type: 'external_event', source: 'ci', summary: '届いた' });
+    // 各項目の件数を互いに違う値にする（件数の行の項目の取り違えを見つけるため）: 回答待ち 3 / エスカレーション 2 / 決めたこと 4 / 記憶 5 / 外部 6 / 人間の発言 7
+    for (let i = 0; i < 3; i += 1) {
+      await stores.jobs.putApproval({
+        id: `ap-${String(i)}`,
+        createdAt: ago(MIN),
+        question: '確認',
+      });
+    }
+    for (let i = 0; i < 7; i += 1) {
+      await journalAgo(stores, MIN, {
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `やあ ${String(i)}`,
+      });
+    }
+    for (let i = 0; i < 4; i += 1) {
+      await journalAgo(stores, MIN, {
+        type: 'decision',
+        decision: `決めた ${String(i)}`,
+        grounds: '根拠',
+      });
+    }
+    for (let i = 0; i < 2; i += 1) {
+      await journalAgo(stores, MIN, {
+        type: 'escalation',
+        question: `聞いた ${String(i)}`,
+        approvalId: `esc-${String(i)}`,
+      });
+    }
+    for (let i = 0; i < 5; i += 1) {
+      await journalAgo(stores, MIN, {
+        type: 'memory_update',
+        slug: 'values',
+        cause: 'clone',
+        summary: `直した ${String(i)}`,
+      });
+    }
+    for (let i = 0; i < 6; i += 1) {
+      await journalAgo(stores, MIN, {
+        type: 'external_event',
+        source: 'ci',
+        summary: `届いた ${String(i)}`,
+      });
+    }
     stores.jobs.listUnreadableJobs = () => Promise.resolve([{ id: 'mgr-bad', reason: '不正' }]);
     const original = stores.jobs.listApprovals.bind(stores.jobs);
     stores.jobs.listApprovals = async (options) => ({
@@ -1580,7 +1606,7 @@ describe('B1 要約の全文の固定 — 件数の形（counts。定期の依�
       失敗の中身と依頼・報告は、ここには載せていない。\`manager_list\`（\`q\` で依頼文から探せる）/ \`manager_report\`（依頼文・報告の全文）で引ける。
       - 読めない委譲が 1 件ある（id: mgr-bad）。壊れた行であって、居ないのでも、畳まれたのでもない。この一覧には載っていない。
 
-      - 回答待ち 1 / エスカレーション 1 / 聞かずに決めたこと 1 / 記憶の更新 1 / 外部イベント 1 / 人間からの発言 1
+      - 回答待ち 3 / エスカレーション 2 / 聞かずに決めたこと 4 / 記憶の更新 5 / 外部イベント 6 / 人間からの発言 7
       - 待ち行列: 開いている 2 件（queued 1 / waiting 1 / needs_decision 0）
       - 読めない行（壊れた行。上の件数には入っていない）: 承認待ち 1 / 待ち行列の task 2
       （#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— 待ち行列は \`task_list\`、回答待ちは \`approvals_list\`、決めたこと・エスカレーション・記憶の更新・外部イベントは \`journal_read\`、使った分は \`usage_read\`）"
@@ -1770,6 +1796,14 @@ describe('B1 要約の全文の固定 — 長い本文の切り詰め・滞留�
     for (const actor of ['clone', 'clone:distill', 'manager:mgr-1', 'worker:mgr-1:worker']) {
       await journalAgo(stores, 5, { type: 'tool_use', actor, tool: 'Bash', input: {} });
     }
+    // 終わりちょうどの tool_use は数えず、1ms 前は数える（口の until は含む側なので、1ms 引いて渡している）
+    await journalAgo(stores, 0, { type: 'tool_use', actor: 'clone', tool: 'Edit', input: {} });
+    await journalAgo(stores, 1, {
+      type: 'tool_use',
+      actor: 'manager:mgr-2',
+      tool: 'Edit',
+      input: {},
+    });
     // 始まり（since）ちょうどと1ms 前
     await journalAgo(stores, NOW_MS - SINCE.getTime(), {
       type: 'decision',
@@ -1791,25 +1825,84 @@ describe('B1 要約の全文の固定 — 長い本文の切り詰め・滞留�
     });
     expect(await buildActivityDigest(stores, { since: SINCE, until: new Date(NOW) }))
       .toMatchInlineSnapshot(`
-      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.000Z
+        "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.000Z
 
-      - 件数: 人間の発言 1 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）2 本 / 自分で決めたこと 2 / 記憶の更新 0 / 外部イベント（日誌の行数）0 / 委譲側のツール実行 2 / 自分の手（委譲せず使った道具）2 / 継続中の依頼 0
+        - 件数: 人間の発言 1 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）2 本 / 自分で決めたこと 2 / 記憶の更新 0 / 外部イベント（日誌の行数）0 / 委譲側のツール実行 3 / 自分の手（委譲せず使った道具）2 / 継続中の依頼 0
+
+        ## 待ち行列の先頭
+        - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
+
+        ## マネージャー（走行中・返事待ちから先に出す）
+        - mgr-before-since-running [running/セッション不明] mgr-before-since-running の依頼
+        - 手が止まっている担当（done・stopped）1 本: mgr-at-since
+        依頼と直近の報告は、ここには載せていない。\`manager_list\`（\`q\` で依頼文から探せる）/ \`manager_report\`（依頼文・報告の全文）で引ける。
+
+        ## 聞かずに決めたこと
+        - 2026-10-31T15:00:00.000Z 始まりちょうど（根拠: g）
+        - 2026-11-01T08:59:59.999Z 終わりの1ms前（根拠: g）
+
+        ## 使った分
+        （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
+        （台帳にまだ記録が無い。この機能を入れる前の分は残っていない）"
+      `);
+  });
+});
+
+describe('B1 要約の全文の固定 — 1件だけの節と、counts の打ち切りの名乗り', () => {
+  it('エスカレーションが束ねて1件だけ（見出しと1行。件数の境目の 0 / 1 / 2。全文）', async () => {
+    const stores = createMemoryStores();
+    await journalAgo(stores, 2 * MIN, {
+      type: 'escalation',
+      question: '聞いた',
+      approvalId: 'esc-only',
+    });
+    await journalAgo(stores, MIN, {
+      type: 'escalation',
+      question: '聞いた',
+      approvalId: 'esc-only',
+      answer: '答え',
+    });
+    expect(await digestOf(stores)).toMatchInlineSnapshot(`
+      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
+
+      - 件数: 人間の発言 0 / 回答待ち 0 / エスカレーション 1 / 委譲（この期間に動いた）0 本 / 自分で決めたこと 0 / 記憶の更新 0 / 外部イベント（日誌の行数）0 / 委譲側のツール実行 0 / 自分の手（委譲せず使った道具）0 / 継続中の依頼 0
 
       ## 待ち行列の先頭
       - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
 
-      ## マネージャー（走行中・返事待ちから先に出す）
-      - mgr-before-since-running [running/セッション不明] mgr-before-since-running の依頼
-      - 手が止まっている担当（done・stopped）1 本: mgr-at-since
-      依頼と直近の報告は、ここには載せていない。\`manager_list\`（\`q\` で依頼文から探せる）/ \`manager_report\`（依頼文・報告の全文）で引ける。
-
-      ## 聞かずに決めたこと
-      - 2026-10-31T15:00:00.000Z 始まりちょうど（根拠: g）
-      - 2026-11-01T08:59:59.999Z 終わりの1ms前（根拠: g）
+      ## エスカレーション
+      - 聞いた → 回答: 答え（id: esc-only）
 
       ## 使った分
       （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
       （台帳にまだ記録が無い。この機能を入れる前の分は残っていない）"
+    `);
+  });
+
+  it('counts の形でも走査を打ち切った名乗りが期間の次の行に出る（全文）', async () => {
+    const fake = createSyntheticJournalStore({
+      total: DIGEST_JOURNAL_SCAN_LIMIT + 50,
+      baseTimeMs: NOW_MS - MIN,
+      entryAt: (index) => ({
+        type: 'decision',
+        decision: `decision-${String(index)}`,
+        grounds: 'g',
+      }),
+    });
+    const text = await digestOf(
+      {
+        ...createMemoryStores(),
+        journal: { ...fake.store, countToolUsesByActor: () => Promise.resolve([]) },
+      },
+      { shape: 'counts' },
+    );
+    expect(text).toMatchInlineSnapshot(`
+      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
+      ⚠ この期間の日誌が多く、走査を \`DIGEST_JOURNAL_SCAN_LIMIT\` 件で打ち切った。これより下の件数・一覧は、日誌の新しい側から読んだ範囲のものである（実際はもっと多い可能性がある）。新しい側から読んでいるので、新しいものは1件も落ちていない——足りないとすれば古い側である。
+
+      - 回答待ち 0 / エスカレーション 0 / 聞かずに決めたこと 100000 / 記憶の更新 0 / 外部イベント 0 / 人間からの発言 0
+      - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
+      （#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— 待ち行列は \`task_list\`、回答待ちは \`approvals_list\`、決めたこと・エスカレーション・記憶の更新・外部イベントは \`journal_read\`、使った分は \`usage_read\`）"
     `);
   });
 });
