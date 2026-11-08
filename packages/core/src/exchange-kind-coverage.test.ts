@@ -92,6 +92,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
     callPattern: '#journalSelf',
     with: 'self',
   },
+  'clone-usage-ledger.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -367,7 +372,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#pump': 'thinning',
     '#read': 'decision',
     '#record': 'human',
-    '#recordUsage': 'failure,gauge',
     '#recordWorkerLimit': 'decision',
     '#reopenSession': 'decision',
     '#reportFailure': 'failure,human,thinning',
@@ -411,6 +415,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // Task の取り込み（旧 `Clone#openHumanTask`）。公開メソッド `openHumanTask` は `#` の付かない名前の行
   'clone-task-intake.ts': {
     openHumanTask: 'failure',
+  },
+  // 消費の台帳（旧 `Clone#recordUsage`）。公開メソッド `recordUsage` は `#` の付かない名前の行
+  'clone-usage-ledger.ts': {
+    recordUsage: 'failure,gauge',
   },
   'manager.ts': {
     '#askedOf': 'thinning',
@@ -531,6 +539,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-usage-ledger.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -596,6 +608,7 @@ const EXCHANGE_SOURCES = [
   'clone-graves.ts',
   'clone-task-intake.ts',
   'clone-turn-input.ts',
+  'clone-usage-ledger.ts',
   'clone.ts',
   'denial-renotify.ts',
   'manager.ts',

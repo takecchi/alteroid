@@ -49,6 +49,13 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
 ]
 `;
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-usage-ledger.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（\${fold.reset.fromCostUsd.toFixed(4)} → \` + \`\${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が \` + '0 から始まったため。記録済みの分は保持している。'",
+  "recordUsage 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}[site=\${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: \${reasonOf(error)}\`",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "#reopenSession 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}\` + \`（操作: \${options.actor}、理由: \${options.reason}、古い session id: \` + \`\${previousSessionId ?? '不明'}、蒸留: \${options.distill ? 'する' : 'しない'}、\` + \`\${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）\`",
@@ -96,8 +103,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: \${reasonOf(error)}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: \${reasonOf(error)}\` + (archiveId !== null ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）' : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）')",
-  "#recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（\${fold.reset.fromCostUsd.toFixed(4)} → \` + \`\${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が \` + '0 から始まったため。記録済みの分は保持している。'",
-  "#recordUsage 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}[site=\${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: \${reasonOf(error)}\`",
   "#read 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: \` + \`\${previousSessionId ?? '不明'}）: \${describeReopenArchive(archived)}\`",
   "#applyRefusal 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: \${event.category ?? '不明'}、\` + \`元のモデル: \${event.originalModel ?? '不明'}）。\` [+...(turn?.conversationId == null ? {} : {conversationId: turn.conversationId})]",
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${described.text}\`",

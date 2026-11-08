@@ -257,15 +257,10 @@ import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import { CloneTaskIntake } from './clone-task-intake.js';
 import { CloneTurnInput } from './clone-turn-input.js';
+import { CloneUsageLedger } from './clone-usage-ledger.js';
 import { TurnTimer } from './turn-timing.js';
 import type { AccountUsageState } from './usage-snapshot.js';
-import {
-  CLONE_ACTOR_ID,
-  CLONE_DISTILL_ACTOR_ID,
-  usageDate,
-  type UsageSite,
-  type UsageSnapshot,
-} from './usage.js';
+import { CLONE_ACTOR_ID, CLONE_DISTILL_ACTOR_ID } from './usage.js';
 import {
   classifyFailedTurnUsageNotice,
   classifyUsageNotice,
@@ -970,6 +965,19 @@ class Clone implements CloneHost {
   readonly #tasks = new CloneTaskIntake({
     stores: () => this.#stores,
     journal: (entry) => this.#journal(entry),
+  });
+  /**
+   * 消費の台帳（`clone-usage-ledger.ts`）。`usage` ストアへ積み、`turn_usage` の行と数え直し・失敗の跡を日誌へ残す。状態は持たない（読むだけ）。
+   * 口は呼ばれるまで読まない関数で組む（`#stores`・`#provider` は constructor の中で入り、`#sdkSession` はこの後ろで作る）。
+   * 呼び元 `stop()`・`#read`・`#distillFromTranscript`・`#applyTurnEnded` の呼び方は元のまま: 協力者のメソッドは `async` のまま移し、外側を包み直さない。
+   * 観測（`#observeDistillQuota`・`#observeContextUsage`・`#noteFirstTurnToolSearch`）は台帳ではないので、ここへ移していない。
+   */
+  readonly #usage = new CloneUsageLedger({
+    journal: (entry) => this.#journal(entry),
+    usage: () => this.#stores.usage,
+    provider: () => this.#provider,
+    query: () => this.#sdkSession.query,
+    sessionTokenIdentity: () => this.#sdkSession.sessionTokenIdentity,
   });
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
@@ -1740,7 +1748,7 @@ class Clone implements CloneHost {
     this.#progress.clearAll();
     this.#sdkSession.wakeInput();
     // 閉じる前に累積を1回読む: デーモンの停止でここを通ったぶんは `result` を出さず、読まなければ台帳に1行も残らないため
-    await this.#flushSessionUsage();
+    await this.#usage.flushSessionUsage();
     this.#sdkSession.closeQuery();
     await this.#sdkSession.reader?.catch(() => undefined);
     await this.#managers.stop(options).catch(() => undefined);
@@ -4695,7 +4703,7 @@ class Clone implements CloneHost {
         if (ended.type !== 'turn_ended') continue;
         // `result` を読み捨てない: 要約のたびに払う蒸留の費用の唯一の観測点。別の `query()` 呼び出しなので累積は1回で閉じており
         // （SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、基準は持たせない。要約そのものの費用は本セッションの `modelUsage` に混ざって分離できない。
-        await this.#recordUsage(ended.usage, 'distill', 'oneshot');
+        await this.#usage.recordUsage(ended.usage, 'distill', 'oneshot');
         // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
         // 失敗は投げる（#4705）: 枠切れ・実行中の失敗は例外ではなく `succeeded: false` で届く。呼び手は「投げなければ成功」と読み、墓標を立てない・下ろすため
         if (!ended.succeeded) {
@@ -4787,126 +4795,6 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * セッションを畳む直前に、累積を control channel から1回読んで台帳へ積む。
-   * `result` を出さずに終わったターンは `usage` を持たず、セッションごと死ぬと末尾ぶんが二度と積まれないため。
-   * `#query` を閉じる前に呼ぶ: 閉じた後の control channel からは何も取れない。
-   * `turnBoundary` は渡さない: ここはターンの境界ではなく、文脈占有も compaction も持たない。
-   */
-  async #flushSessionUsage(): Promise<void> {
-    const session = this.#sdkSession.query;
-    const models = await (session === null ? undefined : session.sessionModelUsage());
-    if (models === undefined) return;
-    await this.#recordUsage({ models }, 'session', 'cumulative');
-  }
-
-  /**
-   * `result` に載っている消費を台帳へ積む。
-   * モデル id で層を代用しない: `ALTEROID_CLONE_MODEL` でクローンもマネージャーと同じ opus で走り、台帳で同じ `model` に並ぶため。
-   * 台帳に積めなくてもターンは止めないが、黙って消さない。
-   */
-  async #recordUsage(
-    usage: AgentTurnUsage | undefined,
-    site: UsageSite,
-    accumulation: 'cumulative' | 'oneshot',
-    /** `case 'turn_ended'` だけが渡す。蒸留のサイドクエリは本セッションの外なので文脈占有も compaction も持たず、渡さない。 */
-    turnBoundary?: {
-      contextUsage?: ContextUsageObservation;
-      compactions?: CompactionObservation[];
-    },
-  ): Promise<void> {
-    if (usage === undefined) {
-      // 数えるのは `capabilities.usage === false` のときだけ: Claude の失敗した result も usage を持たないが、あれは無報告ではない。
-      if (this.#provider.capabilities.usage === false) await this.#recordUnmeteredTurn(site);
-      return;
-    }
-
-    const snapshot: UsageSnapshot = usage;
-
-    const at = new Date();
-    try {
-      const fold = await this.#stores.usage.record({
-        layer: 'clone',
-        site,
-        managerId: CLONE_ACTOR_ID,
-        date: usageDate(at),
-        at: at.toISOString(),
-        snapshot,
-        accumulation,
-        // `#tokenIdentity?.()` を読み直さない: 回した直後に届いた前のセッションぶんの消費が新しいトークンに付く。
-        ...(this.#sdkSession.sessionTokenIdentity === undefined
-          ? {}
-          : { tokenId: this.#sdkSession.sessionTokenIdentity.tokenId }),
-      });
-
-      // 増分が空の回は行を書かない: 取れない軸に0の行を作らない。
-      if (Object.keys(fold.delta).length > 0) {
-        await this.#journal({
-          type: 'turn_usage',
-          layer: 'clone',
-          site,
-          managerId: CLONE_ACTOR_ID,
-          ...(usage.sessionId === undefined ? {} : { sessionId: usage.sessionId }),
-          models: fold.delta,
-          ...(fold.reset === undefined
-            ? {}
-            : {
-                reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
-              }),
-          ...(usage.mainLoopUsage === undefined ? {} : { mainLoopUsage: usage.mainLoopUsage }),
-          ...(turnBoundary?.contextUsage === undefined
-            ? {}
-            : { contextUsage: turnBoundary.contextUsage }),
-          ...(turnBoundary?.compactions === undefined || turnBoundary.compactions.length === 0
-            ? {}
-            : { compactions: turnBoundary.compactions }),
-        });
-      }
-
-      // 数え直しは黙って通さない: 記録が無いと後から「なぜ集計が飛んでいるか」を誰も辿れない。
-      if (fold.reset !== undefined) {
-        await this.#journalSelf(
-          'outbound',
-          `${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（${fold.reset.fromCostUsd.toFixed(4)} → ` +
-            `${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が ` +
-            '0 から始まったため。記録済みの分は保持している。',
-        );
-      }
-    } catch (error) {
-      // stderr と日誌の両方に残す: stderr は台帳の失敗を名指しする跡で、日誌に無いと「起きなかった」と読める。
-      noteDroppedRecord('利用状況の台帳', `layer=clone site=${site}`, error);
-
-      // 日誌にも1件残す。循環しない: `#journal` は失敗しても投げ返さず、別のストア（日誌）へ1回試すだけ。
-      await this.#journalSelf(
-        'outbound',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: ${reasonOf(error)}`,
-      );
-    }
-  }
-
-  /**
-   * 消費を報告しない provider のターンを台帳へ「取れなかった」として1回数える。**0 を積まない**
-   * （`UsageStore.recordUnmetered`）。台帳に積めなくてもターンは止めず、跡は stderr に残す。
-   */
-  async #recordUnmeteredTurn(site: UsageSite): Promise<void> {
-    const at = new Date();
-    try {
-      await this.#stores.usage.recordUnmetered({
-        layer: 'clone',
-        site,
-        managerId: CLONE_ACTOR_ID,
-        date: usageDate(at),
-        at: at.toISOString(),
-        provider: this.#provider.id,
-        ...(this.#sdkSession.sessionTokenIdentity === undefined
-          ? {}
-          : { tokenId: this.#sdkSession.sessionTokenIdentity.tokenId }),
-      });
-    } catch (error) {
-      noteDroppedRecord('利用状況の台帳（無報告のターン）', `layer=clone site=${site}`, error);
-    }
-  }
-
   async #read(q: AgentCloneSession): Promise<void> {
     let failure: { readonly error: unknown } | null = null;
 
@@ -4942,8 +4830,8 @@ class Clone implements CloneHost {
           );
         }
         if (!endedForRecycle) this.#finishTurn();
-        // `#query` を捨てる前に累積を読む（`#flushSessionUsage`）: 捨ててから読んでも何も取れない。
-        await this.#flushSessionUsage();
+        // `#query` を捨てる前に累積を読む（`#usage.flushSessionUsage`）: 捨ててから読んでも何も取れない。
+        await this.#usage.flushSessionUsage();
         this.#sdkSession.clearQuery();
         // 空にしておかない: 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステムプロンプトを組むことになる。
         this.#distillMemory.forgetMemory();
@@ -5288,7 +5176,7 @@ class Clone implements CloneHost {
     // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
     this.#lastContextUsage = contextUsage ?? null;
 
-    // `turn_usage` に相乗りさせない: `#recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
+    // `turn_usage` に相乗りさせない: `#usage.recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
     if (contextUsage !== undefined) {
       await this.#journal({
         type: 'context_usage',
@@ -5309,7 +5197,7 @@ class Clone implements CloneHost {
     const compactions = this.#sdkSession.turn?.compactions ?? [];
 
     await finalizeStep('usage', () =>
-      this.#recordUsage(event.usage, 'session', 'cumulative', {
+      this.#usage.recordUsage(event.usage, 'session', 'cumulative', {
         contextUsage,
         compactions,
       }),
