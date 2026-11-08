@@ -64,6 +64,13 @@ describe('クローンの道具の一覧の固定（名前・並び・説明・�
     }
   });
 
+  // 実際の件数は clone-tools-self-status-output-pin.test.ts が縛る（cursor なしの全体は14件、cursor を渡した頁は100件。#6486）
+  it('self_status の説明文は、全体の応答の件数と cursor の頁の件数を分けて名乗る（#6486）', () => {
+    const description = actualTools().find((entry) => entry.name === 'self_status')?.description;
+    expect(description).toContain('全体の応答では14件で打ち切る');
+    expect(description).toContain('その節だけを、1頁 100 件まで出す');
+  });
+
   it('道具ごとの入力スキーマ（JSON Schema）が固定値と同じ', () => {
     const actual = actualTools();
     for (const [index, entry] of pinned.entries()) {
