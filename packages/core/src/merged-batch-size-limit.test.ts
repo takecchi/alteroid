@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { MERGED_BATCH_SIZE_LIMIT_ENV_KEY, resolveMergedBatchSizeLimit } from './clone.js';
+import {
+  MERGED_BATCH_SIZE_LIMIT_ENV_KEY,
+  resolveMergedBatchSizeLimit,
+} from './clone-batch-merge.js';
 import { captureStderr } from './testing.js';
 
-// `clone.ts` の `MERGED_BATCH_SIZE_LIMIT` はエクスポートされていないので、試験側で独立して値を持つ。
+// `clone-batch-merge.ts` の `MERGED_BATCH_SIZE_LIMIT` はエクスポートされていないので、試験側で独立して値を持つ。
 const DEFAULT_LIMIT = 50;
 
 describe('resolveMergedBatchSizeLimit', () => {

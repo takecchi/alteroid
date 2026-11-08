@@ -110,6 +110,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'digest.ts',
     'clone.ts',
     'clone-graves.ts',
+    'clone-batch-merge.ts',
     'clone-digest.ts',
     'clone-daily-report.ts',
     'clone-denial-journal.ts',

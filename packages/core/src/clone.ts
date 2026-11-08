@@ -75,17 +75,12 @@ import {
   hasReportFiles,
   humanConversationHeader,
   humanTurnText,
-  isExternalEvent,
-  isHumanMessage,
   isManagerReport,
-  isMixableSignal,
   managerPrompt,
   managerReportBatchPrompt,
   externalBatchPrompt,
-  mixableSignalChars,
   mixedSignalBatchPrompt,
   MANAGER_REPORT_BODY_LIMIT,
-  MIXED_SIGNAL_BATCH_BUDGET,
   payloadText,
   renderPayload,
   type ConfirmationLiveness,
@@ -96,6 +91,11 @@ import {
   type MixableSignal,
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
+import {
+  CloneBatchMerge,
+  externalMergeKey,
+  resolveMergedBatchSizeLimit,
+} from './clone-batch-merge.js';
 import { CloneDailyReport } from './clone-daily-report.js';
 import { CloneDenialJournal } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
@@ -127,7 +127,6 @@ import {
   staleObservedRecoveryNoticeEvent,
 } from './daemon-self-notice.js';
 import {
-  inboxBacklogDedupeKey,
   inboxCollapseKey,
   INBOX_BACKLOG_LOUD_THRESHOLD,
   isHumanOriginated,
@@ -405,29 +404,6 @@ const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
   practice_remove: 'やり方を消した',
   practice_write: 'やり方を書き直した',
 };
-
-// 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
-const MERGED_BATCH_SIZE_LIMIT = 50;
-
-export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT';
-
-const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
-
-export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
-  return readNumberEnv(env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY], {
-    fallback: MERGED_BATCH_SIZE_LIMIT,
-    positive: true,
-    floor: true,
-    onProblem: unreadableEnvRecordNote(
-      MERGED_BATCH_SIZE_LIMIT_ENV_KEY,
-      MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
-      {
-        'not-number': `数値として読めない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
-        'non-positive': `0 以下は上限にならない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
-      },
-    ),
-  });
-}
 
 // 外部の合図の窓（と、合成した報告の窓）の既定 2.5 秒: 外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため。報告の窓は別（`REPORT_SETTLE_MS`）
 const INBOX_SETTLE_MS = 2500;
@@ -1011,6 +987,18 @@ class Clone implements CloneHost {
   // 配達回数と1つの数に潰さない: `claimPending()` は未読の全行の回数を進めるので、2件以上を同時に拾い直した回の回数は器が入れ替わった回数であり、どの合図が原因かを言えないため
   #restoredCohort = 0;
   readonly #notices = new CloneNotices();
+  /**
+   * まとめ読みの判定と取り出し（`clone-batch-merge.ts`）。状態は持たず、上限・待ち行列・枠で保持した id（同じ Set を参照で渡す）・配り直しの控え・断り書きの置き場を口から読み書きする。
+   * field 初期化で作る: 口は呼ばれるまで読まない関数だけで組む（`#mergedBatchLimit` は constructor の中で入る）。全部同期（`#pump` の `await` の段を増やさない）。
+   * `#heldForUsage` と `#notices` より後ろに置く: 参照で受けるため。
+   */
+  readonly #batchMerge = new CloneBatchMerge({
+    mergedBatchLimit: () => this.#mergedBatchLimit,
+    inbox: () => this.#delivery.inbox,
+    redeliveryState: () => this.#delivery.redeliveryState,
+    heldForUsage: this.#heldForUsage,
+    notices: this.#notices,
+  });
 
   readonly #distillMemory = new CloneDistillMemoryState();
   /**
@@ -1929,19 +1917,21 @@ class Clone implements CloneHost {
 
       // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
-      const mergedHuman = this.#mergedHumanBatch(event);
-      const sameManagerReports = this.#mergedManagerReportBatch(event);
-      const mergedExternal = this.#mergedExternalBatch(event);
+      const mergedHuman = this.#batchMerge.mergedHumanBatch(event);
+      const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);
+      const mergedExternal = this.#batchMerge.mergedExternalBatch(event);
       // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときに試す。
       // 例外は同じ担当の報告の束の続きに混合の束に入る合図が連続しているとき: 1つの混合の束へ広げる（同じ担当の束の本文が予算に収まるときだけ。
       // 同じ担当の塊の見出しと注意は混合の本文の中でも保つ）。広げられない束の振る舞い（本文の組み方・予算で省く形・配り直しの束）は1字も変えない
       const extendedSignals =
-        sameManagerReports === null ? null : this.#extendReportBatchToMixed(sameManagerReports);
+        sameManagerReports === null
+          ? null
+          : this.#batchMerge.extendReportBatchToMixed(sameManagerReports);
       const mergedReports = extendedSignals === null ? sameManagerReports : null;
       const mergedSignals =
         extendedSignals ??
         (mergedHuman === null && sameManagerReports === null && mergedExternal === null
-          ? this.#mixedSignalBatch(event)
+          ? this.#batchMerge.mixedSignalBatch(event)
           : null);
       const batch: InboxEvent[] = mergedHuman ??
         mergedReports ??
@@ -2067,163 +2057,6 @@ class Clone implements CloneHost {
     if (!timer.turnStartedAny) return;
     if (failed) timer.failed();
     await this.#journal({ type: 'turn_timing', ...timer.finish() });
-  }
-
-  // 報告（`report`）をこの関数でまとめない: 対象・宛先の決め方・組み立てる本文が違うので `#mergedManagerReportBatch` に分けてある。会話が違う発言と枠で保持した合図はまとめない: 応答の宛先が1つに決まらず、束ねると再試行1回が何件ぶんの仕事かが変わるため
-  #mergedHumanBatch(event: InboxEvent): HumanMessage[] | null {
-    if (event.type !== 'human_message') return null;
-    if (!this.#mergeable(event)) return null;
-
-    // 先頭から連続している分だけ集める: 間に別の起点が挟まっているのを飛び越えると、並んでいる順に読むという約束が崩れるため
-    const rest = this.#drainMergeableWithinLimit(
-      (queued) => queued.type === 'human_message' && queued.conversationId === event.conversationId,
-    );
-    // 1件だけなら `null` を返す: まとめる側へ寄せると、いちばん多い「1件だけ」の本文に断り書きが載る形になるため
-    if (rest.length === 0) return null;
-    return [event, ...rest.filter(isHumanMessage)];
-  }
-
-  // `question` / `permission` はまとめない: 返事を待つ相手（`requestId`）が1件ごとに違いうるため。同じ `managerId` に限る: 複数のマネージャーを混ぜると「誰からの何件か」が言えなくなるため
-  #mergedManagerReportBatch(event: InboxEvent): ManagerReportMessage[] | null {
-    if (!isManagerReport(event)) return null;
-    if (!this.#mergeable(event)) return null;
-
-    const rest = this.#drainMergeableWithinLimit(
-      (queued) => isManagerReport(queued) && queued.managerId === event.managerId,
-    );
-    if (rest.length === 0) return null;
-    return [event, ...rest.filter(isManagerReport)];
-  }
-
-  // `source` だけでなく `payload` まで一致を条件にする: 中身の違う合図まで混ぜると、重要な1件が同じ出所の重複の中に埋もれるため
-  // 「中身が同じか」は `inboxBacklogDedupeKey` を再利用して独自の比較を書かない: 畳み込みの鍵が2つに割れるため
-  // 鍵が作れない場合は束ねない: `JSON.stringify` が投げうり、この関数は `#pump` の `try` の外で呼ばれるので、投げると受信箱のループが死ぬため
-  #mergedExternalBatch(event: InboxEvent): ExternalEvent[] | null {
-    if (event.type !== 'external') return null;
-    if (!this.#mergeable(event)) return null;
-
-    const key = this.#externalMergeKey(event);
-    if (key === null) return null;
-
-    // `queued.type === 'external'` は鍵と重複するが残す: TypeScript は文字列の一致から型を絞れないため
-    const rest = this.#drainMergeableWithinLimit(
-      (queued) => queued.type === 'external' && this.#externalMergeKey(queued) === key,
-    );
-    if (rest.length === 0) return null;
-    return [event, ...rest.filter(isExternalEvent)];
-  }
-
-  /**
-   * 起点の違う合図（別々の担当からの報告・質問・確認、外部イベント）を、待ち行列の先頭から連続している分だけ1ターンにまとめる。
-   * 1件ずつ別のターンで読むと、合図の数だけ長い文脈をまるごと読み直すことになり、それが費用の大半だったため（2026-10-26、トークン節約の依頼〈会話 3d91a736〉と承認 a6048e8a に基づく teto の決め。architecture.md「同時実行モデル」）。
-   * 束ねないもの: 人間の発言と人間の回答（返事の行き先が会話ごとに違う。挟まったらそこで止まる）・タイマーなど別の起点（止まる）・
-   * 枠で保持した合図（`#mergeable`）・配り直し（`redeliveryState`）・添付を持つ合図（画像の予算が束の中で割り振れないため）。
-   */
-  // 字数の予算を超える分は束に入れず次のターンへ回す（束の中で本文を省かない）: 省くと、質問・確認が requestId ごと見えなくなるため
-  #mixedSignalBatch(event: InboxEvent): MixableSignal[] | null {
-    if (!this.#mixable(event)) return null;
-    const rest = this.#drainMixableWithinBudget(mixableSignalChars(event), 1);
-    if (rest.length === 0) return null;
-    return [event, ...rest.filter(isMixableSignal)];
-  }
-
-  /**
-   * 同じ担当の報告の束（`#mergedManagerReportBatch`）の続きに、混合の束に入る合図が連続しているときは、1つの混合の束にまとめる。
-   * 広げるのは「同じ担当の束がすべて混合の束の条件を満たし、本文の合計が予算に収まる」ときだけ: 収まらない束は、古い側を省く従来の同じ担当の束の本文のまま（混合は予算超過分を次のターンへ回すので、扱いが違う）。
-   * 続きが無ければ `null`（従来の同じ担当の束をそのまま使う）。
-   */
-  #extendReportBatchToMixed(reports: ManagerReportMessage[]): MixableSignal[] | null {
-    if (!reports.every((report) => this.#mixable(report))) return null;
-    const total = reports.reduce((sum, report) => sum + mixableSignalChars(report), 0);
-    if (total > MIXED_SIGNAL_BATCH_BUDGET) return null;
-    const rest = this.#drainMixableWithinBudget(total, reports.length);
-    if (rest.length === 0) return null;
-    return [...reports, ...rest.filter(isMixableSignal)];
-  }
-
-  #drainMixableWithinBudget(initialTotal: number, alreadyTaken: number): InboxEvent[] {
-    let total = initialTotal;
-    return this.#drainMergeableWithinLimit((queued) => {
-      if (!this.#mixable(queued)) return false;
-      const chars = mixableSignalChars(queued);
-      if (total + chars > MIXED_SIGNAL_BATCH_BUDGET) return false;
-      total += chars;
-      return true;
-    }, alreadyTaken);
-  }
-
-  #mixable(event: InboxEvent): event is MixableSignal {
-    if (!isMixableSignal(event)) return false;
-    if (!this.#mergeable(event)) return false;
-    if (this.#delivery.redeliveryState.get(event.id) !== undefined) return false;
-    return event.type === 'manager_message'
-      ? !hasReportFiles(event)
-      : (event.attachments?.length ?? 0) === 0;
-  }
-
-  // 跡に本文は残さない: `noteDroppedRecord` の「本文を出さない」約束を守るため
-  #externalMergeKey(event: InboxEvent): string | null {
-    try {
-      return inboxBacklogDedupeKey(event);
-    } catch (error) {
-      noteDroppedRecord('external の束ね鍵の計算', inboxEventShape(event), error);
-      return null;
-    }
-  }
-
-  // `1` から数え始める: 呼び出し元が `event` 自身を先頭に足すので、`taken` を `0` から始めると上限より1件多く束ねるため
-  // 「本当に届いた件数」とは名乗らない: 処理済みの分は待ち行列に残っておらず測りようがなく、言えるのは待ち行列の先頭に残っている件数だけのため
-  // `alreadyTaken` は既に束に入っている件数（同じ担当の束を混合へ広げるときの続きの数え始め）
-  #drainMergeableWithinLimit(
-    predicate: (queued: InboxEvent) => boolean,
-    alreadyTaken = 1,
-  ): InboxEvent[] {
-    const limit = this.#mergedBatchLimit;
-    let taken = alreadyTaken;
-    const matchesRule = (queued: InboxEvent): boolean =>
-      predicate(queued) && this.#mergeable(queued);
-    const rest = this.#delivery.inbox.drainWhile((queued) => {
-      if (taken >= limit) return false;
-      const matches = matchesRule(queued);
-      if (matches) taken += 1;
-      return matches;
-    });
-    // `rest.length === 0` でも計算する: `limit === 1` だと `rest` は必ず空になるが、待ち行列の先頭に同じ束に入るはずだった合図は残りうるため
-    const remainingHead = this.#delivery.inbox.countWhile(matchesRule);
-    if (remainingHead > 0) {
-      this.#notices.set(
-        'mergedBatchTruncation',
-        this.#mergedBatchTruncationNoticeFor({
-          limit,
-          batchSize: taken,
-          remainingHead,
-        }),
-      );
-    }
-    return rest;
-  }
-
-  // いつ数えた値かを名乗る: この節は `#pushInput` で会話履歴に溜まり、時刻が無いと後から読み返す側が「あと何件残っている」をどのターンのものか判定できないため
-  #mergedBatchTruncationNoticeFor(truncation: {
-    readonly limit: number;
-    readonly batchSize: number;
-    readonly remainingHead: number;
-  }): string {
-    const { limit, batchSize, remainingHead } = truncation;
-    return [
-      `[system] **このターンへ束ねる合図は、上限（${String(limit)} 件）で切った束である` +
-        `（この束は ${String(batchSize)} 件。${readAtLabel(Date.now())} 時点）。**` +
-        `同じ束に入るはずの合図が、待ち行列の先頭にあと ${String(remainingHead)} 件連続して残っている。`,
-      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
-      '',
-      '---',
-      '',
-    ].join('\n');
-  }
-
-  // `#heldForUsage` は外したままにする: 再試行は「新しい合図1件につき高々1回」で、束ねるとその1回が何件ぶんの仕事かが変わるため
-  #mergeable(event: InboxEvent): boolean {
-    return !this.#heldForUsage.has(event.id);
   }
 
   // 1件でも複数件でも同じ道を通す: 分けて書くと、片方にだけ `#recorded` の待ちが入る・会話 id の取り方が違うといった食い違いが静かに入るため
@@ -2750,7 +2583,7 @@ class Clone implements CloneHost {
   // 中身の同一判定は `#externalMergeKey` を再利用して独自の比較を書かない: 同じ判定を2箇所に書かないため
   // 鍵が作れない event は合流の対象外にして素通しする: `event.id` を鍵の代わりにすると、鍵が作れない event が届くたびに既存の代表を巻き添えで外して畳んでしまうため
   #foldPendingTokenPoolNotice(event: InboxEvent): void {
-    const key = this.#externalMergeKey(event);
+    const key = externalMergeKey(event);
     if (key === null) return;
 
     const current = this.#delivery.pendingTokenPoolNotice;
@@ -3462,7 +3295,7 @@ class Clone implements CloneHost {
       if (record.event.type !== 'external') continue;
       if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
       // 鍵が作れない record は代表にしない: `event.id` を鍵の代わりにすると、次に鍵の作れる通知が届いたとき「中身が違う」と誤判定して代表を無条件で外しに行くため
-      const key = this.#externalMergeKey(record.event);
+      const key = externalMergeKey(record.event);
       if (key === null) continue;
       this.#delivery.setPendingTokenPoolNotice({
         id: record.event.id,
