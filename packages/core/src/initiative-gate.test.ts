@@ -182,6 +182,67 @@ describe('decideInitiativeTick（発意 tick の門）', () => {
     });
   });
 
+  // B2 の固定。期待の文字列は、定数化の前の作り（initiative-gate.ts と turn-input.ts が別々のリテラルで持つ形）の
+  // 出力から確かめた逐語であり、仕様を先に書いたものではない。逐語のまま残すことで、定数の値が1字も
+  // 変わっていないことの歯になる（書く側・読む側のどちらの頭を1字変えても、ここと上の「回した印」の試験が赤くなる）。
+  describe('書く側（turnInputEntry）の行の頭と、読む側の判定の噛み合い', () => {
+    const tickInput = {
+      type: 'self_initiative' as const,
+      reason: '定期 tick',
+      cause: 'schedule' as const,
+      digest: '',
+    };
+
+    it('turnInputEntry が書く self_initiative の行の頭は、逐語でこうなる', () => {
+      const entry = turnInputEntry(tickInput);
+      expect(entry).toMatchObject({ type: 'exchange', with: 'self', role: 'inbound' });
+      expect((entry as { text: string }).text).toMatch(
+        /^ターンの入力: self_initiative reason=定期 tick cause=schedule /u,
+      );
+    });
+
+    it('turnInputEntry が書いた行は「回した」と読まれ、その時刻が lastTickAt に載る', async () => {
+      const stores = createMemoryStores();
+      const at = (await stores.journal.append(turnInputEntry(tickInput))).at;
+      expect(await decideInitiativeTick(stores, schedule())).toMatchObject({
+        run: false,
+        lastTickAt: at,
+      });
+    });
+
+    it('頭が違う inbound / self の行（timer・daily_report・語尾の続く別名）は「回した」に数えない', async () => {
+      const stores = createMemoryStores();
+      for (const row of [
+        turnInputEntry({
+          type: 'timer',
+          kind: 'k',
+          cause: 'schedule',
+          request: false,
+          digest: '',
+        }),
+        turnInputEntry({ type: 'daily_report', date: '2026-01-01', cause: 'schedule', digest: '' }),
+        {
+          type: 'exchange' as const,
+          with: 'self' as const,
+          role: 'inbound' as const,
+          text: 'ターンの入力: self_initiativeX reason=a',
+        },
+        {
+          type: 'exchange' as const,
+          with: 'self' as const,
+          role: 'inbound' as const,
+          text: 'ターンの入力:self_initiative reason=a',
+        },
+      ]) {
+        await stores.journal.append(row);
+      }
+      expect(await decideInitiativeTick(stores, schedule())).toEqual({
+        run: true,
+        because: 'daily_check',
+      });
+    });
+  });
+
   describe('判定に要る読みが失敗したら、回す側へ倒す', () => {
     async function readyToSkip(): Promise<Stores> {
       const stores = createMemoryStores();
