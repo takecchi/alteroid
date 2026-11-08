@@ -21,7 +21,7 @@ export const REFUSAL_AUTO_REOPEN_ACTOR = 'クローンの自動判定（safeguar
  */
 export const REFUSAL_AUTO_REOPEN_ENV = 'ALTEROID_REFUSAL_AUTO_REOPEN';
 
-interface RefusalAutoReopenSetting {
+export interface RefusalAutoReopenSetting {
   readonly enabled: boolean;
   /** 読めなかった綴り（既定の有効へ倒した）。判断の行に残して、置いたのに効かないを黙らせない。 */
   readonly unrecognized?: string;

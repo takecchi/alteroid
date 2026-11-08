@@ -238,15 +238,21 @@ import {
 } from './clone-distill-memory-state.js';
 import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
 import {
+  describeFailureJournalLine,
+  describeHeldEscalationJournal,
+  describeHumanFailureLine,
+  describeRefusalHaltedJournal,
+  describeRefusalStreakJournal,
+  describeThinnedHumanFailure,
+  describeUnproductiveUsageBlockFoldJournal,
+  refusalOfFailure,
+} from './clone-failure-text.js';
+import {
   REFUSAL_AUTO_REOPEN_ACTOR,
-  REFUSAL_AUTO_REOPEN_ENV,
   REFUSAL_STREAK_THRESHOLD,
-  categoryFromRefusalText,
-  describeRefusalFailureMark,
   describeRefusalHalted,
   describeRefusalNotReopened,
   describeRefusalReopened,
-  looksLikeSafeguardsRefusal,
   resolveRefusalAutoReopen,
 } from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
@@ -303,7 +309,6 @@ import {
 } from './dropped-signals.js';
 import {
   classifyContextWindowFailure,
-  describeContextWindowFailure,
   type ContextWindowFailure,
 } from './context-window-failure.js';
 
@@ -499,36 +504,8 @@ const REMEMBER_RETRY_MS = 200;
 // 合わなければ諦めて次の発火に譲る: 古い本文で走らないことが最優先のため
 const SCHEDULE_CLAIM_ROUNDS = 3;
 
-// `context_window_failure` の目印と生の文言を含めない: 日誌側の道具で、人間へ返す1行に持ち込まないため（`clone-turn-failure-trace.test.ts` が測る）
-// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
-const CONTEXT_WINDOW_ALSO_NOTICE =
-  '⚠️ ただし、このターンは文脈窓（プロンプトの長さ）にも当たっている。' +
-  '⟹ 枠が開いても、長さが同じままなら同じところで落ちる。' +
-  '待つだけでは返せない可能性がある（詳しい理由は日誌に残してある）。';
-
-// 「会話が失われた」と書かない: 記録はストアに在って消えておらず、失われるのはクローンの文脈の連続性だけのため
-const CONTEXT_WINDOW_FOLD_NOTICE =
-  'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
-  '⚠️ それまでのやりとりは消えていない（記録は残っている）が、' +
-  '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
-
-// 抑止を名乗る: 畳まずに落ち続ける状態は外から「なぜか動かない」にしか見えず、名乗らないと「壊れている」と読まれるため
-// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
-const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
-  '⚠️ このセッションは既に会話を引き継がずに開いたもので、まだ1度も答えを返せていない。' +
-  '⟹ もう一度開き直しても同じ材料で同じところへ落ちるので、開き直していない。' +
-  '⟹ プロンプトそのものが収まっていない可能性がある。';
-
 // 閾値は回数ではなく文字数にする: 回数だと、小さい本文の再試行と1回あたりの持ち越しが大きい本物の事故を区別できないため
 const UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD = 200_000;
-
-// `CONTEXT_WINDOW_FOLD_NOTICE` と共通にしない: 長さで落ちたのではないのに「文脈窓」の話だと読ませないため
-const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
-  'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
-  '⚠️ 理由は文脈窓ではなく、枠（利用上限）に当たったまま1度も答えを返せずに' +
-  '再試行を繰り返しているため——同じセッションへ積み続けると、枠が開いたときには' +
-  '文脈が伸びきっている。それまでのやりとりは消えていない（記録は残っている）が、' +
-  '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
 function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimitNotice {
   if (notice.resetsAt !== undefined) return notice;
@@ -3361,29 +3338,21 @@ class Clone implements CloneHost {
       this.#sdkSession.wantsContextWindowRecycle
         ? 'folding'
         : 'no';
-    const failureText =
-      conversationId === null
-        ? `内部ターンが失敗した: ${message}`
-        : `人間との対話ターンが失敗した: ${message}`;
-    // **安全分類器（safeguards）による拒否か**。(a) このターンに構造の合図（`refusal` イベント）が
-    // 届いていた、または (b) 失敗文に `safeguards flagged` が含まれる（弱い補助の判定。`looksLikeSafeguardsRefusal`）。
+    // **安全分類器（safeguards）による拒否か**（判定は `refusalOfFailure`）。(a) このターンに構造の合図（`refusal` イベント）が
+    // 届いていた、または (b) 失敗文に `safeguards flagged` が含まれる（弱い補助の判定）。
     // **失敗で終わったターンの失敗文だけを見る**——答えが返ったターンの本文は見ない。
-    const refused: { category: string | null } | undefined =
-      running?.refusal !== undefined
-        ? { category: running.refusal.category ?? categoryFromRefusalText(rawMessage) }
-        : looksLikeSafeguardsRefusal(rawMessage)
-          ? { category: categoryFromRefusalText(rawMessage) }
-          : undefined;
+    const refused = refusalOfFailure({ structuralRefusal: running?.refusal, rawMessage });
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
       // 印は末尾に足す: 先頭の文言を変えると `startsWith` で見ている既存の歯が壊れる
-      text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
-        contextWindowFailure === undefined
-          ? failureText
-          : `${failureText}${describeContextWindowFailure(contextWindowFailure)}`
-      }${refused === undefined ? '' : describeRefusalFailureMark(refused.category)}`,
+      text: `${EXCHANGE_KIND_FAILURE_PREFIX}${describeFailureJournalLine({
+        internal: conversationId === null,
+        message,
+        contextWindowFailure,
+        refused,
+      })}`,
       ...(conversationId === null ? {} : { conversationId }),
     });
 
@@ -3396,20 +3365,12 @@ class Clone implements CloneHost {
     // 枠と長さは同時に真になりうる（CLI が合成した `Prompt is too long · automatic compaction failed: You've hit your …`）: 保持は正しい（やめると閉じた枠を叩き続ける）ので、保持だけを言うと長さでも落ちる回に守れない約束になり、どちらへも倒さず両方言う
     // ここへ ASCII の目印（`context_window_failure`）と生の文言を持ち込まない: 日誌側の道具で、`clone-turn-failure-trace.test.ts` が「人間へ返す1行」でその線を測るため
     const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
-    const humanText =
-      (this.#usageBlocked === null
-        ? 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。'
-        : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
-          '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
-          (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
-      // 畳むかどうかは枠の有無と独立なので、3軸目として1文足すだけにする: 4マスをそれぞれ書き分けると同じ内容を4回持つため
-      (foldingForContextWindow === 'folding'
-        ? CONTEXT_WINDOW_FOLD_NOTICE
-        : foldingForContextWindow === 'held'
-          ? CONTEXT_WINDOW_FOLD_HELD_NOTICE
-          : foldingForUnproductiveUsage === 'folding'
-            ? UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE
-            : '');
+    const humanText = describeHumanFailureLine({
+      usageBlocked: this.#usageBlocked !== null,
+      contextWindowFailed: contextWindowFailure !== undefined,
+      foldingForContextWindow,
+      foldingForUnproductiveUsage,
+    });
 
     const folded = this.#notices.foldHumanFailure(conversationId, humanText);
     if (folded !== null) {
@@ -3418,9 +3379,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text:
-          `${EXCHANGE_KIND_THINNING_PREFIX}人間へ返す1行は畳んだ（最後に返した1行から数えて ${folded} 件目）。同じ1行を` +
-          `既に返してあり、そのあと人間からの新しい発言は届いていない: ${humanText}`,
+        text: `${EXCHANGE_KIND_THINNING_PREFIX}${describeThinnedHumanFailure(folded, humanText)}`,
         conversationId,
       });
       return;
@@ -3475,15 +3434,7 @@ class Clone implements CloneHost {
     const streak = this.#heldEscalationStreak;
     await this.#journalSelf(
       'outbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
-        '1回目の長さの失敗では開き直さずに持ちこたえた（held）が、別の入力でもう一度同じ長さで落ちた。' +
-        '⟹ 拒まれた入力がセッションに残って送り直されている可能性があるので、ここで畳んで新しい' +
-        `セッションで開き直す（issue #955。答えを返せないままの畳み直しは連続 ${String(streak)} 回目）。` +
-        (streak >= 2
-          ? ' ⚠ 開き直した新しいセッションも、1度も答えないまま同じ形で落ちている。' +
-            'システムプロンプトや記憶の焼き込みそのものが文脈窓に収まっていない可能性がある' +
-            '（held と畳み直しの交互）。'
-          : ''),
+      `${EXCHANGE_KIND_DECISION_PREFIX}${describeHeldEscalationJournal(streak)}`,
     );
   }
 
@@ -3537,10 +3488,7 @@ class Clone implements CloneHost {
         this.#autoReopenHalted = true;
         await this.#journalSelf(
           'outbound',
-          `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
-            `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ 自動の開き直しはもうしない` +
-            '（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。' +
-            '解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。',
+          `${EXCHANGE_KIND_DECISION_PREFIX}${describeRefusalHaltedJournal({ label, sessionId })}`,
         );
         await this.#noteRefusalToHuman(
           conversationId,
@@ -3556,14 +3504,7 @@ class Clone implements CloneHost {
       const setting = resolveRefusalAutoReopen(this.#env);
       await this.#journalSelf(
         'outbound',
-        `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
-          `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ セッションごと弾かれていると見る。` +
-          (setting.enabled
-            ? '自動の開き直しが有効なので、開き直す。'
-            : '自動の開き直しは外してあるので、開き直さない（人間へ知らせる）。') +
-          (setting.unrecognized === undefined
-            ? ''
-            : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効として扱った。`),
+        `${EXCHANGE_KIND_DECISION_PREFIX}${describeRefusalStreakJournal({ streak, label, sessionId, setting })}`,
       );
       if (!setting.enabled) {
         await this.#noteRefusalToHuman(
@@ -3630,11 +3571,10 @@ class Clone implements CloneHost {
     }
     await this.#journalSelf(
       'outbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}枠に当たったまま1度も答えを返せないうちに、積んだ入力が ` +
-        `${String(this.#usageBlockedAccumulatedChars)} 文字（閾値 ` +
-        `${String(UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD)}）に達した。同じ` +
-        'セッションへ積み続けると枠が開いた頃には文脈が伸びきっているので、' +
-        'ここでセッションを畳んで作り直す（Issue #1240）。',
+      `${EXCHANGE_KIND_DECISION_PREFIX}${describeUnproductiveUsageBlockFoldJournal({
+        accumulatedChars: this.#usageBlockedAccumulatedChars,
+        thresholdChars: UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD,
+      })}`,
     );
     return 'folding';
   }
