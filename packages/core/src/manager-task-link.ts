@@ -210,7 +210,7 @@ export class ManagerTaskLink {
         const graceMs = job.status === 'done' ? TASK_FOLLOW_GRACE_MS : 0;
         const seen = lastFinished.get(job.taskId);
         // 終端の時刻が同じなら猶予の短い側を採る（即時の終端を、同時刻の `done` の猶予に待たせない）
-        if (seen === undefined || at > seen.at || (at === seen.at && graceMs < seen.graceMs)) {
+        if (seen === undefined || at > seen.at) {
           lastFinished.set(job.taskId, { id: job.id, at, graceMs });
         }
       }
