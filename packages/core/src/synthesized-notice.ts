@@ -201,7 +201,7 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
 /**
  * **要約も間引きもしない。ただ1つの例外は完全な重複**（本文が1バイトでも違えば寄せない）。族ごとに断片は違うことを
  * 答えているので、全文を到着順のまま連結する。
- * **1件のときは前置きを付けない**（いちばん多い「1件だけ」の本文に断り書きが載る形にしない。`clone.ts` の `#mergedHumanBatch` と同じ）。
+ * **1件のときは前置きを付けない**（いちばん多い「1件だけ」の本文に断り書きが載る形にしない。`clone.ts` の `CloneBatchMerge.mergedHumanBatch` と同じ）。
  * 到着順は実測であって保証ではないので、断片ごとに `label` を見出しに出して境目を見つけられるようにする。
  */
 export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedNoticeFragment[]): {

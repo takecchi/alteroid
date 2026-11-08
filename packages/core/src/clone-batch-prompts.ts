@@ -51,7 +51,7 @@ export function firstReportPerManager(events: readonly InboxEvent[]): ManagerRep
   return firsts;
 }
 
-/** 起点が違っても1ターンにまとめてよい種類（`#mixedSignalBatch`）。人間の発言・回答・タイマー・発意・蒸留は入らない。 */
+/** 起点が違っても1ターンにまとめてよい種類（`CloneBatchMerge.mixedSignalBatch`）。人間の発言・回答・タイマー・発意・蒸留は入らない。 */
 export type MixableSignal = Extract<InboxEvent, { type: 'manager_message' }> | ExternalEvent;
 
 export function isMixableSignal(event: InboxEvent): event is MixableSignal {
@@ -88,7 +88,7 @@ export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string
       number += 1;
       return [`---`, `**(${String(number)})**`, '', item, ''];
     }
-    // 同じ担当の報告の連続（`#mergedManagerReportBatch` の束と同じ見出しと注意）を束の中でも保つ: 後の報告が前の報告の補足・訂正のことがあり、並べただけだと連続だと読めないため
+    // 同じ担当の報告の連続（`CloneBatchMerge.mergedManagerReportBatch` の束と同じ見出しと注意）を束の中でも保つ: 後の報告が前の報告の補足・訂正のことがあり、並べただけだと連続だと読めないため
     const first = number + 1;
     const last = number + item.parts.length;
     const chunk = [
@@ -128,11 +128,11 @@ export function humanConversationHeader(conversationId: string, previous: string
 }
 
 /**
- * 人間の発言をターン1本の本文にする（複数件は `#mergedHumanBatch`）。
+ * 人間の発言をターン1本の本文にする（複数件は `CloneBatchMerge.mergedHumanBatch`）。
  *
  * 1件なら断り書きを足さない: いちばん多い形で、普通の一往復のたびに読ませるものが増える。
  * 複数件は要約も間引きもせず、時刻を各件に添える: 「言い直した」と「続けて打った」の判断はクローンに任せ、「最後を優先せよ」とは書かない。
- * 文面は「N件が届いた」ではなく「N件をまとめて渡す」: `#drainMergeableWithinLimit` が上限で束を切ると前者は偽になる。
+ * 文面は「N件が届いた」ではなく「N件をまとめて渡す」: `CloneBatchMerge.drainMergeableWithinLimit` が上限で束を切ると前者は偽になる。
  * `supersedes` 付き（編集）には合図を前置きし、無い発言には1文字も足さない（pure/sync を保つ）。
  */
 export function humanTurnText(

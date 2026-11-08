@@ -314,7 +314,7 @@ export {
   type TokenPoolReopenedPayload,
 } from './daemon-self-notice.js';
 
-// row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
+// row-folded は待ち行列から抜かない: 抜くと `CloneBatchMerge.mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
 /** SSE の `text` には入れない: Web の `pendingOwnLines` がこの区切りありとなしの両方で照合するため。 */
@@ -1383,12 +1383,12 @@ class Clone implements CloneHost {
     if (event.type === 'human_message') this.#notices.forgetConversation(event.conversationId);
 
     // 人間の発言・マネージャーからの一件・外部イベントは畳まない: 中身が違うため
-    // `#mergedHumanBatch` の側をこの `return` に足さない: あちらは捨てず、全文が届いた順に渡り、合図は件数ぶん器に残るため
+    // `CloneBatchMerge.mergedHumanBatch` の側をこの `return` に足さない: あちらは捨てず、全文が届いた順に渡り、合図は件数ぶん器に残るため
     if (isTick(event) && this.#delivery.inbox.hasPending((queued) => isSameTick(queued, event)))
       return;
 
     // `isTick` の畳み込みより後に置く: tick は中身が無いから畳め、こちらは中身が同じだから畳むという別の判定のため
-    // `external` は行だけ畳んで待ち行列へは入れる（`row-folded`）: 抜くと `#mergedExternalBatch` の束ね読みが消えるため
+    // `external` は行だけ畳んで待ち行列へは入れる（`row-folded`）: 抜くと `CloneBatchMerge.mergedExternalBatch` の束ね読みが消えるため
     // token-pool の「戻った」だけ先に1件へ絞る: `#foldIntoPendingCollapse` は本文が一字一句同じ場合しか畳めず、429↔成功の往復で本文が変わるたびにすり抜けるため
     if (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
       this.#foldPendingTokenPoolNotice(event);
@@ -1915,7 +1915,7 @@ class Clone implements CloneHost {
         if (wait.ms > 0) await this.#delivery.inbox.settle(wait.ms, wait.interruptWhen);
       }
 
-      // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
+      // まとめ読みの判定を呼ぶ前に必ずリセットする: `CloneBatchMerge.drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#batchMerge.mergedHumanBatch(event);
       const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);
@@ -2128,7 +2128,7 @@ class Clone implements CloneHost {
     const attached = events.some(hasReportFiles)
       ? await this.#resolveManagerReportAttachments(events)
       : undefined;
-    // 束の先頭だけで引く: 束ねるのは同じ `managerId` の報告だけ（`#mergedManagerReportBatch`）なので、起点も1つに決まるため
+    // 束の先頭だけで引く: 束ねるのは同じ `managerId` の報告だけ（`CloneBatchMerge.mergedManagerReportBatch`）なので、起点も1つに決まるため
     const origin = await this.#managerOrigin(events[0]?.managerId);
     const prompt = managerReportBatchPrompt(
       events,
@@ -2156,7 +2156,7 @@ class Clone implements CloneHost {
   }
 
   // `#handle` の `manager_message` / `external` 分岐が1件ごとにしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記・確認の生死の判定が抜けて能力の削除になるため
-  // 添付を持つ合図は束に入っていない（`#mixable`）ので、ここでは添付を解かない
+  // 添付を持つ合図は束に入っていない（`CloneBatchMerge.mixable`）ので、ここでは添付を解かない
   async #runMixedSignalBatch(events: MixableSignal[]): Promise<void> {
     const now = new Date();
     const items: string[] = [];
@@ -2512,7 +2512,7 @@ class Clone implements CloneHost {
    * 呼び出し側は `#remember` / `#record` / `#commit` / `#inbox.push` を呼ばない。
    *
    * - `external` は行だけ畳む（`row-folded`）: 待ち行列からも抜くと、同じ中身の `external` を1ターンへ束ねて
-   *   件数と届いた時刻を載せる動き（`#mergedExternalBatch`）が起きない。2つの機構は守る軸が違い、片方へ寄せるともう片方が黙って落ちる
+   *   件数と届いた時刻を載せる動き（`CloneBatchMerge.mergedExternalBatch`）が起きない。2つの機構は守る軸が違い、片方へ寄せるともう片方が黙って落ちる
    * - `#record` では日誌の代わりにならない: `human_message` にしか効かない。
    *   受信箱は「未了の仕事」、日誌は追記専用の「何が起きたか」で、畳んだ回の生の 429 文言も失わないよう分けてある
    * - 索引の照会と書き込みは `post()`（同期）の中で並ぶので、間に割り込まれない
@@ -2580,7 +2580,7 @@ class Clone implements CloneHost {
     }
   }
 
-  // 中身の同一判定は `#externalMergeKey` を再利用して独自の比較を書かない: 同じ判定を2箇所に書かないため
+  // 中身の同一判定は `externalMergeKey` を再利用して独自の比較を書かない: 同じ判定を2箇所に書かないため
   // 鍵が作れない event は合流の対象外にして素通しする: `event.id` を鍵の代わりにすると、鍵が作れない event が届くたびに既存の代表を巻き添えで外して畳んでしまうため
   #foldPendingTokenPoolNotice(event: InboxEvent): void {
     const key = externalMergeKey(event);
@@ -2950,7 +2950,7 @@ class Clone implements CloneHost {
 
   // `list()` の失敗を握り潰さず呼び出し側（`#pump`）へ返す: 握り潰すと呼び出し側の `.catch()` を外しても何も赤くならないため
   // 文言は「いまは」でなく「この断り書きを組んだ時点では」と言う: `#situationNoticeFor` とは別々の `list()` 呼び出しで、まれに食い違うため
-  // 担当ごとに最初の報告で見る: 起点の違う合図の束（`#mixedSignalBatch`）には別々の担当の報告が混ざり、先頭だけ見ると他の担当の前提の変化が落ちるため。担当が1人の束は今までどおり先頭1件で見る
+  // 担当ごとに最初の報告で見る: 起点の違う合図の束（`CloneBatchMerge.mixedSignalBatch`）には別々の担当の報告が混ざり、先頭だけ見ると他の担当の前提の変化が落ちるため。担当が1人の束は今までどおり先頭1件で見る
   async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
     // `kind` まで絞る: 質問・許可確認は `#situationNoticeFor` 側で見ており、絞らないと `list()` を1本余計に引くため
     const firsts = firstReportPerManager(events);
@@ -6301,7 +6301,7 @@ async function confirmationLiveness(
 /**
  * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
  * 発意 tick と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
- * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`#mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
+ * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`CloneBatchMerge.mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
  */
 function tickDigestCarriesTaskQueueHead(events: readonly InboxEvent[]): boolean {
   if (events.length !== 1) return false;
