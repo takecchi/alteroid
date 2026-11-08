@@ -125,12 +125,14 @@ export class CloneTaskIntake {
     try {
       const conversationIds = new Set(humanEvents.map((pending) => pending.conversationId));
       const { entries } = await this.#stores.tasks.list();
-      const candidates = selectWaitingReplyTasks(entries, [], conversationIds);
+      const nowMs = Date.now();
+      const candidates = selectWaitingReplyTasks(entries, [], conversationIds, nowMs);
       if (candidates.length === 0) return [];
       const matched = selectWaitingReplyTasks(
         candidates,
         await this.#stores.jobs.listJobs(),
         conversationIds,
+        nowMs,
       );
       return describeWaitingReplyLines(
         matched,
