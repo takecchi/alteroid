@@ -178,7 +178,7 @@ export function describeRefusalStreakJournal(input: {
       : '自動の開き直しは外してあるので、開き直さない（人間へ知らせる）。') +
     (setting.unrecognized === undefined
       ? ''
-      : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効として扱った。`)
+      : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効にした。`)
   );
 }
 
