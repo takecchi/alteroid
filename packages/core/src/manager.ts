@@ -7795,7 +7795,7 @@ class Pool implements ManagerPool {
       // ジョブ台帳が書けなくてもマネージャーは走らせるが、黙って消さない: 失敗は台帳にも日誌にも跡を残さない。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
-    await this.#syncTask(record, before, options.sessionClosed === true);
+    await this.#syncTask(record, before, false);
   }
 
   /**
