@@ -109,6 +109,19 @@ async function open(options: { status?: Job['status'] } = {}) {
         .reverse()
         .slice(journalBefore);
     },
+    /** 拒否の処理が書いた日誌の `with/role`（重複は畳む） */
+    async roles(): Promise<string[]> {
+      const entries = await stores.journal.list({ types: ['exchange'] });
+      const all = entries
+        .filter(
+          (entry): entry is Extract<typeof entry, { type: 'exchange' }> =>
+            entry.type === 'exchange',
+        )
+        .reverse()
+        .slice(journalBefore)
+        .map((entry) => `${entry.with}/${entry.role}`);
+      return [...new Set(all)];
+    },
     /** 受信箱へ上がった拒否の知らせ */
     notices(): InboxEvent[] {
       return inbox.filter((event) => event.type === 'manager_message');
@@ -223,6 +236,7 @@ async function scenarioLayers() {
     actor: 'manager:mgr',
     message: 'denied by rule',
   });
+  out['roles'] = await s.roles();
   out['events'] = s.notices().map((event) => ({ ...event, id: 'ID', text: 'TEXT' }));
   await s.pool.stop();
   return out;
@@ -306,6 +320,7 @@ async function scenarioThinning() {
   });
   const reLines = (await s.lines()).slice(-1);
   const out = {
+    roles: await s.roles(),
     forgets,
     size: afterForget.length,
     head: afterForget.slice(0, 3),
@@ -518,6 +533,8 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
       ],
     });
     // `emit` に渡る出来事の全体（本文以外）: 受信箱の kind は report、時刻は注入した時計、状態は running
+    // 日誌の向きと相手: decision 行は manager との inbound
+    expect(out['roles']).toEqual(['manager/inbound']);
     const events = out['events'] as unknown[];
     expect(events).toHaveLength(9);
     for (const event of events) {
@@ -577,6 +594,7 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
       // 層が取れていない組は「（層）」を付けず道具名だけ
       '[間引き] [mgr-denial-pin] 拒否の件数を覚えている道具×層の組が上限（64種）に達したので、古い 1 件を忘れた: Tool1。この組が次に止められたら 1 件目から数え直す（日誌には全件残っている）。',
     ]);
+    expect(out.roles).toEqual(['manager/inbound']);
     expect(out.size).toBe(64);
     expect(out.head).toEqual(['Tool2/manager/1', 'Tool3/manager/1', 'Tool4/manager/1']);
     expect(out.reLines).toEqual([
