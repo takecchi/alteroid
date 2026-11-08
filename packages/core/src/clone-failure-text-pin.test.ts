@@ -658,6 +658,27 @@ describe('安全分類器の拒否の判定・日誌・人間への知らせの�
     `);
   });
 
+  it('止めた枝で category が読めない: 日誌行・人間への知らせとも「不明」', async () => {
+    const s = build();
+    s.state.failText = 'safeguards flagged this session';
+    await s.human();
+    await s.human();
+    const beforeHalt = (await trace(s.stores)).length;
+    await s.human();
+    await s.clone.stop();
+
+    expect((await trace(s.stores)).slice(beforeHalt)).toMatchInlineSnapshot(`
+      [
+        "self@internal | [判断] 開き直した: sess-fake → sess-fake（退避するものが無かった）",
+        "self@conv-1 | [障害] 人間との対話ターンが失敗した: 結果なしで終了: error_during_execution（result_subtype） / safeguards flagged this session（safeguards: 不明）",
+        "self@internal | [判断] 自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた（category: 不明、session id: sess-fake）。⟹ 自動の開き直しはもうしない（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。",
+        "human@conv-1 | 自動で開き直したセッションが、1度も答えを返さないうちにまた安全分類器（safeguards: 不明）に弾かれた。記憶の焼き込みや届き続ける合図そのものが弾かれている可能性がある。自動の開き直しは止めた（人間が開き直すか、このセッションが1度答えを返すまで再開しない）。開き直す口: \`alteroid reopen\` / 設定画面の「クローンのセッションを開き直す」 / \`POST /clone/session/reopen\`",
+        "human@conv-1 {turnFailure=failed, kind=other} | この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。",
+        "self@internal | [障害] 内部ターンが失敗した: 結果なしで終了: error_during_execution（result_subtype） / safeguards flagged this session（safeguards: 不明）",
+      ]
+    `);
+  });
+
   it('内部のターン（会話なし）が 2 回弾かれる: 日誌行は残り、人間への知らせは無い', async () => {
     const s = build();
     s.state.mode = 'ok';
