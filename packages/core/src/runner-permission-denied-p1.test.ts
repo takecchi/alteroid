@@ -241,7 +241,7 @@ describe('allow の一往復（issue #1105 P1）', () => {
     expect(secondAttempt).toEqual({ continue: true });
   });
 
-  // 書き出しの「分類器が 」は manager.ts の `CLASSIFIER_DENIAL_ASK_HEAD` が見分けに使う: 変わると、この確認にも「allow すればそのまま通る」が付いて食い違う。
+  // 書き出しの「分類器が 」は manager-waiting.ts の `CLASSIFIER_DENIAL_ASK_HEAD` が見分けに使う: 変わると、この確認にも「allow すればそのまま通る」が付いて食い違う。
   it('確認の本文は、答えたあと自動では撃ち直されないことと、撃ち直させる伝え方を言い切る（#4447）', async () => {
     const { started, events } = await startSession();
 

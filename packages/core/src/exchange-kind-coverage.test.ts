@@ -421,7 +421,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     recordUsage: 'failure,gauge',
   },
   'manager.ts': {
-    '#askedOf': 'thinning',
     '#closeAfterLost': 'decision',
     '#closeDuplicateFailed': 'decision',
     '#closeSelfFenced': 'recovery',
@@ -456,6 +455,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // 担当の `session` を受けて、plugin の読み込み・MCP の接続の失敗を日誌へ書く協力者（旧 `Pool#handleSession`）。同じ検査をここへ移した。
   'manager-session.ts': {
     handle: 'decision,failure',
+  },
+  // 担当の確認要求の「配り終えた id の記憶」の間引きの日誌（旧 `Pool#askedOf`）。同じ検査をここへ移した。公開メソッド `askedOf` は `#` の付かない名前の行
+  'manager-waiting.ts': {
+    askedOf: 'thinning',
   },
   // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
   'denial-renotify.ts': {
@@ -619,6 +622,7 @@ const EXCHANGE_SOURCES = [
   'denial-renotify.ts',
   'manager-denial.ts',
   'manager-session.ts',
+  'manager-waiting.ts',
   'manager.ts',
   'push-ledger.ts',
   'quota-stop-windows.ts',
