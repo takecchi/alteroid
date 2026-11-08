@@ -45,14 +45,14 @@ import {
 } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
-// 名簿を読めなければ黙って省く: `self_status` の本題を、器の名簿の失敗で落とさないため
+// 名簿を読めなければ、断りの文を1行出す: `self_status` の本題は器の名簿の失敗で落とさず、落ちたことは呼んだ側に伝える（#6486）
 export async function renderPeerReach(managers: ManagerPool | undefined): Promise<string[]> {
   if (managers === undefined) return [];
   let overview: RunnerFleetOverview;
   try {
     overview = await managers.runners();
-  } catch {
-    return [];
+  } catch (error) {
+    return ['', `マネージャーの peer の届き先: 器の名簿を読めなかった（${reasonOf(error)}）。`];
   }
   const rows: { label: string; line: string }[] = [];
   for (const runner of overview.runners) {
@@ -105,7 +105,7 @@ function renderMemorySize(
   totalMemory: string,
 ): string {
   const lines = [
-    '## 記憶の大きさ（いま stores.persona を読み直した値）',
+    MEMORY_SIZE_HEADING,
     '',
     `- 総文字数: ${totalMemory.length.toLocaleString('en-US')} 文字（${documents.length} 文書）`,
   ];
@@ -170,12 +170,25 @@ const LEDGER_CURSOR_AXIS = 'ledger';
 
 const LEDGER_LABEL_SEP = '\u0000';
 
+const LEDGER_HEADING = '## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）';
+
+// 読めなかった節は断りの文にして、ほかの節は出す（#6486）
+function renderLedgerUnreadable(error: unknown): string {
+  return `${LEDGER_HEADING}\n\n台帳を読めなかった（${reasonOf(error)}）。`;
+}
+
+const MEMORY_SIZE_HEADING = '## 記憶の大きさ（いま stores.persona を読み直した値）';
+
+function renderMemoryUnreadable(error: unknown): string {
+  return `${MEMORY_SIZE_HEADING}\n\n記憶を読めなかった（${reasonOf(error)}）。`;
+}
+
 function renderLedgerCrossReference(
   sdkModel: string | null,
   aggregate: UsageAggregate | null,
   ledgerCursor?: string,
 ): string {
-  const lines = ['## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）', ''];
+  const lines = [LEDGER_HEADING, ''];
 
   if (sdkModel === null) {
     lines.push('まだ init を観測していないので、SDK のモデル id が分からず突き合わせられない。');
@@ -316,8 +329,20 @@ async function readSelfStatusLedgerPage(
   runtime: SelfStatusRuntime,
   ledgerCursor: string,
 ): Promise<string> {
-  const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
-  return renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor);
+  if (runtime.sdkModel === null) {
+    return renderLedgerCrossReference(runtime.sdkModel, null, ledgerCursor);
+  }
+  try {
+    const aggregate = await stores.usage.aggregate({});
+    return renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor);
+  } catch (error) {
+    return renderLedgerUnreadable(error);
+  }
+}
+
+// `self_status` の本題（実行時の事実）を、runner の名乗りの読み失敗で落とさない: 読めなかった節は断りの文にする（#6486）
+function renderSelfStatusRunnerUnreadable(what: string, error: unknown): string {
+  return `${what}: 読めなかった（${reasonOf(error)}）`;
 }
 
 // 読めなければ黙らずに言う
@@ -355,9 +380,9 @@ function renderSelfStatusFull(args: {
   runtime: SelfStatusRuntime;
   runnerModels: SelfStatusRunnerModels;
   runnerAnthropicRoutes: SelfStatusRunnerRoutes;
-  documents: Awaited<ReturnType<SelfStatusStores['persona']['list']>>;
-  memoryDocuments: Awaited<ReturnType<SelfStatusStores['persona']['documents']>>;
-  aggregate: UsageAggregate | null;
+  runnerNotes: string[];
+  memorySize: string;
+  ledger: string;
   codexAuth: string | null;
   turnTiming: string;
   httpTiming: string;
@@ -370,16 +395,12 @@ function renderSelfStatusFull(args: {
       ...(runnerModels === undefined ? {} : { runnerModels }),
       ...(runnerAnthropicRoutes === undefined ? {} : { runnerAnthropicRoutes }),
     }),
+    ...args.runnerNotes,
     ...(args.codexAuth === null ? [] : [args.codexAuth]),
     '',
-    // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
-    renderMemorySize(
-      args.documents,
-      args.memoryDocuments,
-      renderMemoryDocuments(args.memoryDocuments),
-    ),
+    args.memorySize,
     '',
-    renderLedgerCrossReference(runtime.sdkModel, args.aggregate),
+    args.ledger,
     '',
     args.turnTiming,
     '',
@@ -393,32 +414,54 @@ async function readSelfStatusFull(
   stores: SelfStatusStores,
   runtime: SelfStatusRuntime,
 ): Promise<string> {
-  const runnerModels = await context.runnerModels?.();
-  const runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
-  const [documents, memoryDocuments, aggregate, codexAuth, turnTiming, httpTiming] =
-    await Promise.all([
-      stores.persona.list(),
-      stores.persona.documents(),
-      runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
-      stores.codexAuth.get().then(renderSelfStatusCodexAuth, renderSelfStatusCodexAuthUnreadable),
-      // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
-      stores.journal
-        .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
-        .then(renderSelfStatusTurnTiming, renderSelfStatusTurnTimingUnreadable),
-      // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
-      stores.journal
-        .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
-        .then(renderSelfStatusHttpTiming, renderSelfStatusHttpTimingUnreadable),
-    ]);
+  const runnerNotes: string[] = [];
+  let runnerModels: SelfStatusRunnerModels;
+  try {
+    runnerModels = await context.runnerModels?.();
+  } catch (error) {
+    runnerNotes.push(renderSelfStatusRunnerUnreadable('接続中の runner が名乗ったモデル', error));
+  }
+  let runnerAnthropicRoutes: SelfStatusRunnerRoutes;
+  try {
+    runnerAnthropicRoutes = await context.runnerAnthropicRoutes?.();
+  } catch (error) {
+    runnerNotes.push(renderSelfStatusRunnerUnreadable('接続中の runner の SDK の接続先', error));
+  }
+  const [memorySize, ledger, codexAuth, turnTiming, httpTiming] = await Promise.all([
+    // 記憶の2つの読みは1つの節の材料: どちらが落ちても、記憶の節だけを断りの文にする。list が落ちても documents は始まっている
+    Promise.all([stores.persona.list(), stores.persona.documents()]).then(
+      ([documents, memoryDocuments]) =>
+        // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
+        renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
+      renderMemoryUnreadable,
+    ),
+    runtime.sdkModel === null
+      ? Promise.resolve(renderLedgerCrossReference(runtime.sdkModel, null))
+      : stores.usage
+          .aggregate({})
+          .then(
+            (aggregate) => renderLedgerCrossReference(runtime.sdkModel, aggregate),
+            renderLedgerUnreadable,
+          ),
+    stores.codexAuth.get().then(renderSelfStatusCodexAuth, renderSelfStatusCodexAuthUnreadable),
+    // 直近のターンの時間（#5086）。読むのは種別と件数で絞った行だけで、この呼び出しのときにしか読まない
+    stores.journal
+      .list({ types: ['turn_timing'], limit: SELF_STATUS_TURN_TIMING_LIMIT })
+      .then(renderSelfStatusTurnTiming, renderSelfStatusTurnTimingUnreadable),
+    // HTTP API の時間（#5089）。同じく種別と件数で絞って読む
+    stores.journal
+      .list({ types: ['http_timing'], limit: SELF_STATUS_HTTP_TIMING_LIMIT })
+      .then(renderSelfStatusHttpTiming, renderSelfStatusHttpTimingUnreadable),
+  ]);
 
   const peerReach = await renderPeerReach(context.managers);
   return renderSelfStatusFull({
     runtime,
     runnerModels,
     runnerAnthropicRoutes,
-    documents,
-    memoryDocuments,
-    aggregate,
+    runnerNotes,
+    memorySize,
+    ledger,
     codexAuth,
     turnTiming,
     httpTiming,

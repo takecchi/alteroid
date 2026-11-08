@@ -645,7 +645,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'runner-models-throws',
     covers:
-      'runnerModels が投げる → 例外のまま返る（runnerAnthropicRoutes・記憶・台帳などの読みには進まない）',
+      'runnerModels が投げる → その節だけ「読めなかった」の断りの文にして、ほかの節（runnerAnthropicRoutes・記憶・台帳など）は出す（#6486）',
     runtime: RT_MODEL,
     runnerModels: 'throws',
     runnerRoutes: ['r'],
@@ -654,7 +654,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'runner-routes-throws',
     covers:
-      'runnerModels は返り、runnerAnthropicRoutes が投げる → 例外のまま返る（記憶などの読みには進まない）',
+      'runnerModels は返り、runnerAnthropicRoutes が投げる → その節だけ断りの文にして、記憶などのほかの節は出す（#6486）',
     runtime: RT_MODEL,
     runnerModels: ['r'],
     runnerRoutes: 'throws',
@@ -777,7 +777,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'ledger-cursor-aggregate-fails',
-    covers: 'cursor あり・usage.aggregate が投げる → 例外のまま返る',
+    covers:
+      'cursor あり・usage.aggregate が投げる → 台帳の節を「読めなかった」の断りの文にして返す（#6486）',
     runtime: RT_MODEL,
     usage: FEW_BUCKETS,
     fail: ['usage.aggregate'],
@@ -809,7 +810,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'memory-persona-list-fails',
-    covers: 'persona.list が投げる → 例外のまま返る（Promise.all の他の読みは始まっている）',
+    covers:
+      'persona.list が投げる → 記憶の節だけ断りの文にして、ほかの節は出す（他の読みは始まっている）（#6486）',
     runtime: RT_MODEL,
     docs: MIXED_DOCS,
     fail: ['persona.list'],
@@ -817,7 +819,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'memory-persona-documents-fails',
-    covers: 'persona.documents が投げる → 例外のまま返る',
+    covers: 'persona.documents が投げる → 記憶の節だけ断りの文にして、ほかの節は出す（#6486）',
     runtime: RT_MODEL,
     docs: MIXED_DOCS,
     fail: ['persona.documents'],
@@ -825,7 +827,8 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'ledger-aggregate-fails',
-    covers: 'cursor なし・usage.aggregate が投げる → 例外のまま返る',
+    covers:
+      'cursor なし・usage.aggregate が投げる → 台帳の節だけ断りの文にして、ほかの節は出す（#6486）',
     runtime: RT_MODEL,
     usage: FEW_BUCKETS,
     fail: ['usage.aggregate'],
@@ -950,7 +953,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     name: 'managers-runners-throws',
-    covers: 'managers.runners が投げる → 黙って節ごと省く（本題は落とさない）',
+    covers: 'managers.runners が投げる → 断りの文を1行出す（本題は落とさない）（#6486）',
     runtime: RT_MODEL,
     managers: 'throws',
     steps: [status()],
@@ -1469,21 +1472,22 @@ describe('self_status の出力と呼びの並びの固定（場面ごとの出�
       callsOf('runner-empty-lines', 'context.runnerAnthropicRoutes('),
       'runner-empty-lines routes',
     ).toBe(1);
-    expect(step('runner-models-throws')?.output).toMatchObject({
-      thrown: true,
-      errorName: 'Error',
-      text: 'context.runnerModels が落ちた',
-    });
-    expect(readsOf('runner-models-throws'), '読みに進まない').toBe(0);
+    // 読みが落ちた節は断りの文にして、ほかの節は出す（#6486）
+    expect(step('runner-models-throws')?.output.thrown).toBe(false);
+    expect(text('runner-models-throws')).toContain(
+      '接続中の runner が名乗ったモデル: 読めなかった（Error: context.runnerModels が落ちた）',
+    );
+    expect(text('runner-models-throws')).toContain('## 記憶の大きさ');
+    expect(text('runner-models-throws')).toContain('## 台帳との突き合わせ');
     expect(
       callsOf('runner-models-throws', 'context.runnerAnthropicRoutes('),
-      'routes に進まない',
-    ).toBe(0);
-    expect(step('runner-routes-throws')?.output).toMatchObject({
-      thrown: true,
-      text: 'context.runnerAnthropicRoutes が落ちた',
-    });
-    expect(readsOf('runner-routes-throws'), '読みに進まない').toBe(0);
+      'routes にも進む',
+    ).toBe(1);
+    expect(step('runner-routes-throws')?.output.thrown).toBe(false);
+    expect(text('runner-routes-throws')).toContain(
+      '接続中の runner の SDK の接続先: 読めなかった（Error: context.runnerAnthropicRoutes が落ちた）',
+    );
+    expect(text('runner-routes-throws')).toContain('## 記憶の大きさ');
     // 台帳（cursor なし）
     expect(text('ledger-other-model')).toContain(`モデル id ${MODEL} と同じ行は無い（台帳の始点: `);
     expect(text('ledger-few')).toContain('行の内訳（台帳の軸そのもの。');
@@ -1528,14 +1532,15 @@ describe('self_status の出力と呼びの並びの固定（場面ごとの出�
     expect(callsOf('ledger-cursor-sdk-null', 'usage.aggregate('), 'cursor sdk null').toBe(0);
     expect(text('ledger-cursor-empty-ledger')).toContain('台帳にはまだ1件も記録が無い');
     expect(text('ledger-cursor-other-model')).toContain('と同じ行は無い');
-    expect(step('ledger-cursor-aggregate-fails')?.output).toMatchObject({
-      thrown: true,
-      text: 'usage.aggregate が読めない',
-    });
-    expect(step('ledger-aggregate-fails')?.output).toMatchObject({
-      thrown: true,
-      text: 'usage.aggregate が読めない',
-    });
+    expect(step('ledger-cursor-aggregate-fails')?.output.thrown).toBe(false);
+    expect(text('ledger-cursor-aggregate-fails')).toContain(
+      '台帳を読めなかった（Error: usage.aggregate が読めない）。',
+    );
+    expect(step('ledger-aggregate-fails')?.output.thrown).toBe(false);
+    expect(text('ledger-aggregate-fails')).toContain(
+      '台帳を読めなかった（Error: usage.aggregate が読めない）。',
+    );
+    expect(text('ledger-aggregate-fails')).toContain('## 記憶の大きさ');
     // 記憶
     expect(text('runtime-unobserved#1')).toContain('- 総文字数: 0 文字（0 文書）');
     expect(text('memory-mixed')).toContain('文書）');
@@ -1547,18 +1552,19 @@ describe('self_status の出力と呼びの並びの固定（場面ごとの出�
     expect(text('memory-mixed')).not.toContain('カードを落とし');
     expect(text('memory-demoted')).toContain('⚠️ うち ');
     expect(text('memory-demoted')).toContain('カードを落とし、1行になっている');
-    expect(step('memory-persona-list-fails')?.output).toMatchObject({
-      thrown: true,
-      text: 'persona.list が読めない',
-    });
+    expect(step('memory-persona-list-fails')?.output.thrown).toBe(false);
+    expect(text('memory-persona-list-fails')).toContain(
+      '記憶を読めなかった（Error: persona.list が読めない）。',
+    );
+    expect(text('memory-persona-list-fails')).toContain('## 台帳との突き合わせ');
     expect(
       callsOf('memory-persona-list-fails', 'journal.list('),
       'list 失敗でも他の読みは始まっている',
     ).toBe(2);
-    expect(step('memory-persona-documents-fails')?.output).toMatchObject({
-      thrown: true,
-      text: 'persona.documents が読めない',
-    });
+    expect(step('memory-persona-documents-fails')?.output.thrown).toBe(false);
+    expect(text('memory-persona-documents-fails')).toContain(
+      '記憶を読めなかった（Error: persona.documents が読めない）。',
+    );
     // Codex
     expect(text('codex-none')).not.toContain('Codex');
     expect(text('codex-valid')).toContain(
@@ -1618,7 +1624,10 @@ describe('self_status の出力と呼びの並びの固定（場面ごとの出�
     expect(calls('managers-no-rows')).toContain('managers.runners() -> 0 runners');
     expect(text('managers-only-silent-rows')).not.toContain('マネージャーが peer');
     expect(calls('managers-only-silent-rows')).toContain('managers.runners() -> 2 runners');
-    expect(text('managers-runners-throws')).not.toContain('マネージャーが peer');
+    expect(text('managers-runners-throws')).not.toContain('マネージャーが peer（Codex など）');
+    expect(text('managers-runners-throws')).toContain(
+      'マネージャーの peer の届き先: 器の名簿を読めなかった（Error: ',
+    );
     expect(step('managers-runners-throws')?.output.thrown).toBe(false);
     expect(calls('managers-runners-throws')).toContain('managers.runners() -> threw Error');
     expect(text('managers-many')).toContain('…ほか ');
