@@ -1531,6 +1531,10 @@ export const jobSchema = z.object({
       at: isoDateTime,
     })
     .optional(),
+  // 背景処理の完了待ちで閉じたターンの `report(done)` を受けた時刻（報告のたびに進む）。結び付いた task を `needs_decision` へ倒さない保留の印
+  // `status` では表さない: `done` は idle・背景待ち・完了の全部を兼ねるので、台帳の軸だけでは見分けられない。背景待ちでない報告・`closed`・`running` を書く経路で下りる
+  // 上限（6 時間）を過ぎると読み手が無視する（`job-awaiting-background.ts`）。欄が無い台帳・古いデーモンの読みは「保留なし」へ倒れる（今までどおり倒す側）
+  awaitingBackgroundSince: isoDateTime.optional(),
   // 台帳に持つ: 背景処理の完了待ちで畳んだ報告の在庫をプロセス内にだけ置くと、配る前にデーモンが再起動（夜の反映）したとき件数も冒頭も消え、クローンに一度も届かないため（#4626）
   // 正はプロセス内の在庫（`manager.ts` の `WithheldReportMemory`）で、これはその写し。`restore()` が読み戻す。`excerpts` は配るときと同じ字数の予算の内に詰めてある
   withheldReports: z

@@ -129,8 +129,12 @@ describe('インラインの綴りを、公開の関数を通して固定する�
   it('waiting-task-reply-notice.ts selectWaitingReplyTasks（running / waiting_human を直書きで比べる）: 委譲が結び付いて「名乗らない」値', () => {
     const named = tableOf(
       (status) =>
-        selectWaitingReplyTasks([task('t')], [{ status, taskId: 't' }], new Set(['conv-1']))
-          .length === 0,
+        selectWaitingReplyTasks(
+          [task('t')],
+          [{ status, taskId: 't' }],
+          new Set(['conv-1']),
+          Date.parse('2026-10-29T00:00:00.000Z'),
+        ).length === 0,
     );
     // true = 委譲が走っているとみなされ、返事待ちの行から外れる
     // 反転済み（まとめる PR）: #6298 時点の未知の期待は false。直書きを isManagerInFlight に寄せたので、未知は true（走っているとみなす。名乗って二重に手を出させない）。

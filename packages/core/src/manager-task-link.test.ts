@@ -596,8 +596,11 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
   });
 
-  // この PR の後に反転する対象: 案 D は、この動きを「awaitingBackground 付きの done では waiting のまま」へ変える。
-  it('現状: awaitingBackground 付きの report(done) でも waiting の task は needs_decision へ倒れる（反転予定）', async () => {
+  // 反転済み（案 D）: 直前の版の期待は「awaitingBackground 付きの done でも needs_decision へ倒れる」。
+  // 経緯: 背景処理の完了待ちで閉じたターンは委譲がまだ生きている（runner が自分で起き直す）のに、台帳が done を書くたび task が
+  // waiting から needs_decision へ戻り、クローンが手で戻し直していた。背景待ちの done は task を倒さない（awaitingBackgroundSince の印）。
+  // 背景待ちでない report(done) は上の 1 本目のとおり今までどおり倒す。
+  it('反転済み: awaitingBackground 付きの report(done) では waiting の task は倒れない', async () => {
     const s = await setup();
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
@@ -607,8 +610,8 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
       awaitingBackground: { count: 1, breakdown: 'bash×1' },
     } as RunnerEvent);
     await settle();
-    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
-    expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(false);
   });
 
   it.each([
@@ -641,6 +644,168 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
     await s.pool.abort(started.managerId);
     await settle();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+});
+
+// 新しい仕様を先に書いた試験（案 D）。上の pin と違い、実装の前は赤く、実装の後に緑になる。
+// 背景処理の完了待ちで閉じたターンの report(done) は、委譲がまだ生きている印なので waiting の task を倒さない。
+// 保留は Job.awaitingBackgroundSince が持ち、背景待ちでない report・closed・manager_send（running）で下り、6 時間で見回りが無視する。
+describe('背景処理待ちで閉じた report(done) は waiting の task を倒さない（案 D）', () => {
+  const HOUR = 60 * 60 * 1000;
+  const T0 = Date.parse('2026-10-29T00:00:00.000Z');
+  const needsDecisionLine = (lines: string[]): boolean =>
+    lines.some((line) => line.includes('waiting から needs_decision'));
+  const backgroundDone = (id: string): RunnerEvent =>
+    ({
+      ...report(id),
+      awaitingBackground: { count: 1, breakdown: 'bash×1' },
+    }) as RunnerEvent;
+  const heldSince = async (s: Awaited<ReturnType<typeof setup>>, id: string) =>
+    (await s.stores.jobs.getJob(id))?.awaitingBackgroundSince;
+
+  async function startBackgroundWaiting(clock: { at: number }) {
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(backgroundDone(started.managerId));
+    await settle();
+    return { s, id: started.managerId };
+  }
+
+  it('(a) 背景処理待ちの done では task は waiting のまま。日誌に「needs_decision にした」は出ず、印が立つ', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+    expect((await s.stores.jobs.getJob(id))?.status).toBe('done');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(false);
+    expect(await heldSince(s, id)).toBe(new Date(T0).toISOString());
+    // 終端へ入ったとは数えない（入れると見回りが拾う）
+    expect((await s.stores.jobs.getJob(id))?.endedAt).toBeUndefined();
+  });
+
+  it('(b) その後、背景待ちでない report(done) が来ると倒れ、印は下り、endedAt が書かれる', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+
+    s.fake.push(report(id));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
+    expect(await heldSince(s, id)).toBeUndefined();
+    expect((await s.stores.jobs.getJob(id))?.endedAt).toBeDefined();
+  });
+
+  // 印の時刻は報告のたびに進める: 上限は「runner からの便りが途絶えてから」の長さで、報告が来続ける委譲は生きている
+  it('(b2) 背景待ちの done がもう 1 本来ても、まだ倒れず、印の時刻は最新の報告へ進む', async () => {
+    const clock = { at: T0 };
+    const { s, id } = await startBackgroundWaiting(clock);
+
+    clock.at += HOUR;
+    s.fake.push(backgroundDone(id));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(await heldSince(s, id)).toBe(new Date(T0 + HOUR).toISOString());
+  });
+
+  it('(c) manager_send（running を書く）で印が下り、task は waiting のまま・日誌に倒した行は出ない', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+
+    await s.pool.send(id, '続きをお願い');
+    await settle();
+    expect((await s.stores.jobs.getJob(id))?.status).toBe('running');
+    expect(await heldSince(s, id)).toBeUndefined();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(false);
+  });
+
+  it('(d) closed(done) で印が下り、task は倒れる', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+
+    s.fake.push({ type: 'closed', managerId: id, status: 'done', reason: '畳んだ' } as RunnerEvent);
+    await settle();
+    expect(await heldSince(s, id)).toBeUndefined();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('(d2) closed(lost) でも印が下りる', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+
+    s.fake.push({
+      type: 'closed',
+      managerId: id,
+      status: 'lost',
+      reason: '器から消えた',
+    } as RunnerEvent);
+    await settle();
+    expect(await heldSince(s, id)).toBeUndefined();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('(e) 6 時間を過ぎたら見回り（restore）が倒す。上限の内は倒さない', async () => {
+    const clock = { at: T0 };
+    const { s } = await startBackgroundWaiting(clock);
+
+    clock.at = T0 + 6 * HOUR - 60_000;
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at = T0 + 6 * HOUR + 60_000;
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(true);
+  });
+
+  it('(e2) 上限を過ぎた後に manager_send が来ても、task は waiting へ戻る（上限を過ぎた印は読まない）', async () => {
+    const clock = { at: T0 };
+    const { s, id } = await startBackgroundWaiting(clock);
+    clock.at = T0 + 6 * HOUR + 60_000;
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    await s.pool.send(id, '続きをお願い');
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+  });
+
+  it('(f) 印の立った委譲の task は、endedAt が在っても見回り（restore）が倒さない（active 扱い）', async () => {
+    const clock = { at: T0 };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1', 'waiting'));
+    await s.stores.jobs.putJob({
+      ...ledgerJob('mgr-bg', 'done', 't-1'),
+      awaitingBackgroundSince: new Date(T0 - 60_000).toISOString(),
+    });
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(false);
+  });
+
+  it('(f2) 印の無い done の委譲の task は、今までどおり見回りが倒す', async () => {
+    const clock = { at: T0 };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1', 'waiting'));
+    await s.stores.jobs.putJob(ledgerJob('mgr-bg', 'done', 't-1'));
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('(f3) 印が上限を過ぎた台帳の行（endedAt なし）は、印の時刻を終端の時刻として見回りが倒す', async () => {
+    const clock = { at: T0 + 7 * HOUR };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add({ ...task('t-1', 'waiting'), updatedAt: new Date(T0).toISOString() });
+    const held = ledgerJob('mgr-bg', 'done', 't-1');
+    delete held.endedAt;
+    await s.stores.jobs.putJob({ ...held, awaitingBackgroundSince: new Date(T0).toISOString() });
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  it('印は台帳に残り、別のプール（再起動）でも読み戻される', async () => {
+    const { s, id } = await startBackgroundWaiting({ at: T0 });
+    const after = await setup(undefined, s.stores, () => T0 + HOUR);
+    expect(await heldSince(after, id)).toBe(new Date(T0).toISOString());
+    expect(await taskStatus(after.stores, 't-1')).toBe('waiting');
   });
 });
 

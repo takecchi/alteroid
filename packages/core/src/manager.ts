@@ -161,6 +161,7 @@ import type {
 } from './schema.js';
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
+import { isAwaitingBackgroundHold } from './job-awaiting-background.js';
 import { isManagerInFlight } from './job-status-running.js';
 import { isTaskClosed, taskStatusForJob } from './task.js';
 import {
@@ -6830,6 +6831,13 @@ class Pool implements ManagerPool {
     const deferTerminalToClosed =
       event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
     if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
+    // 背景処理の完了待ちで閉じた `done` は、台帳の `status` では idle と見分けられないので、印を別の欄に立てる（`#syncTask` が task を倒さない根拠）。
+    // 背景待ちでない報告では下ろす。`done` 以外の状態へ動く書き込みは `#persist` が下ろす。
+    if (event.awaitingBackground !== undefined && record.job.status === 'done') {
+      record.job.awaitingBackgroundSince = this.#nowIso();
+    } else {
+      delete record.job.awaitingBackgroundSince;
+    }
     // `waiting` が空なら `waiting_human` を名乗らせない: `stop()` は `#settleAll` の前に控えた状態で報告を畳むので「解かれる前」の値が届き、器の入れ替え（`abort()` の上書きが無い経路）では食い違いが台帳に残る。
     // `event.status` そのものは書き換えない: 報告が名乗った値は `lastReportStatus` に残し、「何を名乗ったか」と「いまの状態をどう数えるか」を1つに畳まない。
     if (!settledByClosed && event.status === 'waiting_human' && record.waiting.length === 0) {
@@ -7188,6 +7196,8 @@ class Pool implements ManagerPool {
   // `closed` の段3-1: 状態・貸し出し・直近の失敗の事実・未 push の観測を台帳（`record.job`）へ写す。同期のまま保つ。
   #applyClosedToJob(record: ManagerRecord, event: Extract<RunnerEvent, { type: 'closed' }>): void {
     record.job.status = event.status;
+    // 閉じたのだから背景待ちの保留も下ろす（`closed(done)` は `status` が `done` のままなので `#persist` の掃除では落ちない）
+    delete record.job.awaitingBackgroundSince;
     this.#withdrawWaiting(record, `セッションが閉じた（status=${event.status}）`);
     record.attached = false;
     // 貸し出しは期限を待たず返す（`closed` は持ち主自身が「もう走っていない」と言っている）: 返さないと引き取りが猶予のぶん遅れる。消さずに印を立てる: 消すと世代（`fence`）まで消え、遅れて届いた返却で runner の世代より小さい世代を渡し命令が拒まれ続ける。
@@ -7712,6 +7722,8 @@ class Pool implements ManagerPool {
 
   async #persist(record: ManagerRecord): Promise<void> {
     record.job.updatedAt = this.#nowIso();
+    // `done` 以外へ動く書き込み（`manager_send` の `running`・`ask` の `waiting_human`・`failed` など）は背景待ちの保留を下ろす。状態を変える経路は多く、個別に下ろすと1つ漏れた経路の印だけが残るので、書き込みの1本の口に置く
+    if (record.job.status !== 'done') delete record.job.awaitingBackgroundSince;
     // 生存の時刻は別のタイマーで進めず、書くついでに進める: 委譲ごとにタイマーが増え、進める条件を2箇所で判定することになる。
     // 応えているプロセスが違うなら進めない: 入れ替わった器の貸し出しが生き続け、引き取れる時刻が来ない。
     const lease = record.job.lease;
@@ -7728,7 +7740,13 @@ class Pool implements ManagerPool {
       linkedTaskId === undefined
         ? undefined
         : await this.#stores.jobs.getJob(record.job.id).then(
-            (stored) => stored?.status ?? null,
+            // 背景処理の完了待ちで閉じた `done`（保留の上限の内）は、台帳の上では `running` の続きとして読む: 保留中の委譲が終端へ入る書き込み（背景待ちでない報告・`closed`）で task を倒し、`running` へ動く書き込みでは task を動かさない
+            (stored) =>
+              stored === null
+                ? null
+                : isAwaitingBackgroundHold(stored, this.#now())
+                  ? 'running'
+                  : stored.status,
             (error: unknown) => {
               // 読めないと task の同期と endedAt を見送る。起動時の直しも endedAt が無いと見送るので、跡が無いと後から追えない
               noteUnreadableRecord(
@@ -7742,7 +7760,11 @@ class Pool implements ManagerPool {
     // 終端へ入った時刻を1回だけ書く（起動時の直しの基準。終わった後の書き込みでは進めない）。動き出したら消す。読めなかった回は触れない
     if (record.job.taskId !== undefined && before !== undefined) {
       const wasActive = before !== null && taskStatusForJob(before) === 'waiting';
-      if (taskStatusForJob(record.job.status) === 'waiting') {
+      // 背景待ちの保留中の `done` は終端へ入ったと数えない: `endedAt` を書くと、見回りが保留を無視して task を倒す
+      if (
+        taskStatusForJob(record.job.status) === 'waiting' ||
+        isAwaitingBackgroundHold(record.job, this.#now())
+      ) {
         if (!wasActive) delete record.job.endedAt;
       } else if (before === null || wasActive) {
         record.job.endedAt = this.#nowIso();
@@ -7781,6 +7803,9 @@ class Pool implements ManagerPool {
       const ending =
         before === null || (before !== undefined && taskStatusForJob(before) === 'waiting');
       if (!ending) return;
+      // 背景処理の完了待ちで閉じた `done` は、委譲がまだ生きている（runner が自分で起き直す。台帳は知らない）ので task を倒さない。
+      // 上限（6 時間）を過ぎた印は `isAwaitingBackgroundHold` が偽にするので、見回りの側で抜ける
+      if (isAwaitingBackgroundHold(record.job, this.#now())) return;
     }
     try {
       const task = await this.#stores.tasks.get(taskId);
@@ -7840,6 +7865,7 @@ class Pool implements ManagerPool {
    * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終端へ入ったもの（`Job.endedAt` が最も新しい）より後に
    * task が更新されていれば、クローンが置いた `waiting`（`task_set_status`）なので直さない。
    * `updatedAt` は使わない: 終わった後の書き込みでも進むので、基準にすると呼ばれるたびに判定が狂う。
+   * 背景処理の完了待ちで閉じた `done`（`Job.awaitingBackgroundSince` が立っていて、上限 `AWAITING_BACKGROUND_HOLD_LIMIT_MS` の内）が1本でも結び付いていれば、走っている委譲と同じく直さない。
    * 結び付いた終端の委譲に `endedAt` が無い・読めない行が1つでもある task は、並び順によらず見送る（クローンの置いた状態を潰す側へ倒さない）。
    * 読めない・書けないときは見送って stderr に残す（次に呼ばれたときにもう一度見る）。
    */
@@ -7848,13 +7874,16 @@ class Pool implements ManagerPool {
       const active = new Set<string>();
       const skip = new Set<string>();
       const lastFinished = new Map<string, { id: string; at: number }>();
+      const nowMs = this.#now();
       for (const job of await this.#stores.jobs.listJobs()) {
         if (job.taskId === undefined) continue;
-        if (taskStatusForJob(job.status) === 'waiting') {
+        if (taskStatusForJob(job.status) === 'waiting' || isAwaitingBackgroundHold(job, nowMs)) {
           active.add(job.taskId);
           continue;
         }
-        const at = job.endedAt === undefined ? Number.NaN : Date.parse(job.endedAt);
+        // 背景待ちの保留に入った `done` は `endedAt` を書かない。上限を過ぎて保留が切れた行は、印の時刻を終端の時刻として読む
+        const endedAt = job.endedAt ?? job.awaitingBackgroundSince;
+        const at = endedAt === undefined ? Number.NaN : Date.parse(endedAt);
         if (Number.isNaN(at)) {
           skip.add(job.taskId);
           continue;
