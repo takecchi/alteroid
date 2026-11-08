@@ -516,7 +516,8 @@ describe('pids 飽和の印（#notePidsSaturationAtClose）', () => {
 });
 
 describe('microtask の周回数（`#closeJob` の頭の同期の段を数える歯）', () => {
-  // 協力者へ移したあと、`async` で包み直す・口を `async` の皮で包む・`await` を足すと、ここの数が増える。
+  // 協力者へ移したあと、呼び元で `await` を足す・同期の段を `persist` の後ろへ動かす・`async` にして `await` すると、ここの数が変わる
+  // （口を `async` の皮で包むだけなら本体は同期のまま走るので数は変わらない。それは歯の穴ではなく同じ動きである）。
   // 数は切り出し前の作りで測った値。実時間は使わない。
   it('done: 台帳への書き込み・像の畳みまでの周回数', async () => {
     const s = await open();
