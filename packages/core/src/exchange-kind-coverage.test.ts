@@ -426,10 +426,8 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#closeDuplicateFailed': 'decision',
     '#closeSelfFenced': 'recovery',
     '#deliverReportFromUnreplacedSession': 'reply',
-    '#deniedOf': 'thinning',
     '#dropStaleSessionEvent': 'decision',
     // `#handleEvent` の case を種類ごとのメソッドへ出したので、`#handleEvent` 自身には書き込み箇所が無い
-    '#handlePermissionDenied': 'decision',
     '#handleReport': 'reply',
     '#handleResumeFailed': 'failure',
     '#handleSession': 'decision,failure',
@@ -450,6 +448,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#settleResumedReattach': 'recovery',
     '#startAfterSupersedeCheck': 'reply',
     abort: 'reply',
+  },
+  // 担当の拒否を数えて日誌・受信箱へ回す協力者（旧 `Pool#handlePermissionDenied` と `Pool#deniedOf`）。同じ検査をここへ移した。
+  'manager-denial.ts': {
+    '#deniedOf': 'thinning',
+    handle: 'decision',
   },
   // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
   'denial-renotify.ts': {
@@ -611,6 +614,7 @@ const EXCHANGE_SOURCES = [
   'clone-usage-ledger.ts',
   'clone.ts',
   'denial-renotify.ts',
+  'manager-denial.ts',
   'manager.ts',
   'push-ledger.ts',
   'quota-stop-windows.ts',
