@@ -445,6 +445,27 @@ describe('closed を受けて台帳の行へ写す（#applyClosedToJob）', () =
     await s.pool.stop();
   });
 
+  it('awaitingBackgroundSince: 背景待ちで閉じた done の報告が立てた印は、closed(done) が下ろす（status が done のままなので persist の掃除では落ちない）', async () => {
+    const s = await open();
+    await s.push({
+      type: 'report',
+      managerId: JOB_ID,
+      reportId: 'rep-1',
+      text: '背景処理の完了を待っている',
+      status: 'done',
+      awaitingBackground: { count: 1, breakdown: 'bash 1 件' },
+    } as RunnerEvent);
+    // 報告が立てた印（これが立っていなければ、下の「下ろした」は何も測らない）
+    expect((await s.job())?.awaitingBackgroundSince).toBe(T_NOW);
+
+    await s.push(closed('done'));
+
+    const job = await s.job();
+    expect(job?.status).toBe('done');
+    expect(Object.hasOwn(job as object, 'awaitingBackgroundSince')).toBe(false);
+    await s.pool.stop();
+  });
+
   it('record.attached を偽にする: 台帳へ書く窓（persist の途中）で、done の前任はもう生きていないと読まれ、後継を断らない', async () => {
     // `#assertSupersedable` は `status === 'done' && record.attached` を「セッションが生きている」と読んで断る。
     let probe: Promise<string> | undefined;
