@@ -12,7 +12,11 @@ import { createMemoryStores, humanMessage } from './testing.js';
 // 期待の文字列:
 //   - 「今の作りの出力」: 件数の行・先頭の行・固定の1文（この試験では 0 件のとき・滞留が無いときの全文として、変わらないことを見る）
 //   - 「新しい仕様」: `- 滞留: needs_decision 3 件（最も古いのは 5日3時間前）` の形の 1 行（件数の行の次。読めない行の断りがあればその次）
-// 古さの描き方は situation.ts と同じ `formatMinutesAgo`（分・時間+分・日+時間）。しきい値は置かない（waiting / needs_decision が1件でもあれば出る）。
+// 古さの描き方は situation.ts と同じ `formatMinutesAgo`（分・時間+分・日+時間）。
+// 追記（waiting のしきい値）: 当初は「しきい値は置かない（waiting / needs_decision が1件でもあれば出る）」だったが、waiting は 24 時間を超えたものだけ数える
+// ようにした（task-tools.ts の BACKLOG_WAITING_STALE_MS。境目の試験は task-queue-backlog-threshold-pin.test.ts）。needs_decision は変わらず古さによらず出る。
+// このファイルで動いた試験: waiting を 24 時間以内で置いていた箇所（(b)・両方あるとき・読めない行の断りの次・(f) の seed）は、24 時間を超えた時刻へ置き直した
+// （出力の文字列は、古さの数字が変わっただけ）。waiting の「経過不明」の試験は、waiting を数えなくなったので needs_decision へ移した。
 // 時刻は `Date` だけを止める（実時間の待ちは足さない）。
 
 const NOW = Date.parse('2026-11-01T09:00:00.000Z');
@@ -69,23 +73,25 @@ describe('describeTaskBacklogAge（純関数）', () => {
     ]);
   });
 
-  it('(b) waiting も同様', () => {
+  it('(b) waiting も同様（24 時間を超えたもの）', () => {
+    // 動いた理由: 前は 1時間20分前・30分前 の waiting も数えた。いまは 24 時間を超えたものだけなので、25 時間 20 分前・30 時間前に置き直した
     const entries = [
-      task('w-1', 'waiting', ago(1 * HOUR + 20 * MIN)),
-      task('w-2', 'waiting', ago(30 * MIN)),
+      task('w-1', 'waiting', ago(1 * DAY + 1 * HOUR + 20 * MIN)),
+      task('w-2', 'waiting', ago(1 * DAY + 6 * HOUR)),
     ];
     expect(describeTaskBacklogAge(list(entries), NOW)).toEqual([
-      '- 滞留: waiting 2 件（最も古いのは 1時間20分前）',
+      '- 滞留: waiting 2 件（最も古いのは 1日6時間前）',
     ]);
   });
 
   it('両方あるとき: 1 行に needs_decision、waiting の順で並ぶ', () => {
+    // 動いた理由: 前は waiting を 40 分前に置いていた。いまは 24 時間を超えた時刻（30 時間前）にした
     const entries = [
-      task('w-1', 'waiting', ago(40 * MIN)),
+      task('w-1', 'waiting', ago(1 * DAY + 6 * HOUR)),
       task('n-1', 'needs_decision', ago(2 * DAY)),
     ];
     expect(describeTaskBacklogAge(list(entries), NOW)).toEqual([
-      '- 滞留: needs_decision 1 件（最も古いのは 2日0時間前） / waiting 1 件（最も古いのは 40分前）',
+      '- 滞留: needs_decision 1 件（最も古いのは 2日0時間前） / waiting 1 件（最も古いのは 1日6時間前）',
     ]);
   });
 
@@ -136,9 +142,10 @@ describe('describeTaskBacklogAge（純関数）', () => {
     });
 
     it('全部読めなければ、件数と「経過不明」だけを言う（0 分前などへ丸めない）', () => {
-      const entries = [task('w-bad', 'waiting', ''), task('w-bad2', 'waiting', 'xx')];
+      // 動いた理由: 前は waiting の読めない行で言っていた。waiting の読めない行は数えなくなった（task-queue-backlog-threshold-pin.test.ts）ので、needs_decision へ移した
+      const entries = [task('n-bad', 'needs_decision', ''), task('n-bad2', 'needs_decision', 'xx')];
       expect(describeTaskBacklogAge(list(entries), NOW)).toEqual([
-        '- 滞留: waiting 2 件（経過不明）',
+        '- 滞留: needs_decision 2 件（経過不明）',
       ]);
     });
   });
@@ -160,11 +167,12 @@ describe('describeTaskQueueHead への足し方', () => {
 
   it('読めない行の断りがあれば、その次に入る', () => {
     const lines = describeTaskQueueHead(
-      list([task('w-1', 'waiting', ago(2 * HOUR))], [{ reason: '不正' }]),
+      // 動いた理由: 前は waiting を 2 時間前に置いていた。いまは 24 時間を超えた時刻（26 時間前）にした
+      list([task('w-1', 'waiting', ago(1 * DAY + 2 * HOUR))], [{ reason: '不正' }]),
       { limit: 3, nowMs: NOW },
     );
     expect(lines[1]).toContain('読めない task の行が 1 件ある');
-    expect(lines[2]).toBe('- 滞留: waiting 1 件（最も古いのは 2時間0分前）');
+    expect(lines[2]).toBe('- 滞留: waiting 1 件（最も古いのは 1日2時間前）');
   });
 
   it('(c) waiting / needs_decision が 0 件なら、今の出力から 1 字も変わらない', () => {
@@ -191,12 +199,13 @@ describe('describeTaskQueueHead への足し方', () => {
 
 async function seed(stores: Stores): Promise<void> {
   await stores.tasks.add(task('q-1', 'queued', ago(1 * DAY)));
-  await stores.tasks.add(task('w-1', 'waiting', ago(1 * HOUR + 20 * MIN)));
+  // 動いた理由: 前は 1時間20分前。waiting は 24 時間を超えたものだけ数えるので、25 時間 20 分前にした
+  await stores.tasks.add(task('w-1', 'waiting', ago(1 * DAY + 1 * HOUR + 20 * MIN)));
   await stores.tasks.add(task('n-1', 'needs_decision', ago(5 * DAY + 3 * HOUR)));
 }
 
 const BACKLOG_LINE =
-  '- 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）';
+  '- 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1日1時間前）';
 
 function count(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -289,6 +298,28 @@ describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () 
     );
     expect(counts).not.toContain(BACKLOG_PREFIX);
     expect(counts).toContain(COUNT_LINE(1, 1, 1));
+  });
+
+  it('waiting が新しいだけの回（needs_decision なし）: 断り書きにも digest にも滞留の行は出ない', async () => {
+    const stores = createMemoryStores();
+    await stores.tasks.add(task('q-1', 'queued', ago(1 * DAY)));
+    await stores.tasks.add(task('w-1', 'waiting', ago(2 * HOUR)));
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-report',
+      at: new Date().toISOString(),
+      managerId: 'mgr-T',
+      kind: 'report',
+      text: '本文',
+    });
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '報告のターン');
+    const input = s.calls[0]?.inputs[0] ?? '';
+    await s.clone.stop();
+    expect(input).toContain('[system] 待ち行列（');
+    expect(input).not.toContain(BACKLOG_PREFIX);
+    const digest = await buildActivityDigest(stores, { since: new Date(NOW - 60_000) });
+    expect(digest).not.toContain(BACKLOG_PREFIX);
   });
 
   it('滞留が無いふつうの回: 断り書きにも digest にも滞留の行は出ない', async () => {

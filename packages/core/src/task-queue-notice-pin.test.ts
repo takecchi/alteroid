@@ -14,6 +14,8 @@ import { createMemoryStores } from './testing.js';
 // 動いた理由（滞留の行を足した実装のコミットで更新）: waiting / needs_decision が混ざる 2 本（断り書き・digest full 形）の全文に、
 // 件数の行の次の 1 行 `- 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）` が入った。
 // 開いている件が 0 の 2 本・counts 形の 1 本は 1 字も動いていない（0 件のとき変わらないことの歯）。
+// 動いた理由（waiting のしきい値の実装のコミットで更新）: 上の混在 2 本の waiting（w-1）は 1時間20分前で、24 時間を超えていないので数えなくなった。
+// 滞留の行は `- 滞留: needs_decision 1 件（最も古いのは 5日3時間前）` だけになった（needs_decision は古さによらず出る）。件数の行・先頭の行・固定の1文は動いていない。
 
 const FROZEN_AT = '2026-11-01T09:00:00.000Z';
 const QUEUE_HEAD = '[system] 待ち行列（';
@@ -85,7 +87,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     expect(notice).toMatchInlineSnapshot(`
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）
-      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）
+      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前）
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1
@@ -118,7 +120,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     expect(digestSectionOf(digest)).toMatchInlineSnapshot(`
       "## 待ち行列の先頭
       - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）
-      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）
+      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前）
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1

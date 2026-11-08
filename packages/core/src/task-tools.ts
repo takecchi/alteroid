@@ -102,15 +102,29 @@ export function describeTaskQueueCount(list: Pick<TaskList, 'entries'>): string 
 const BACKLOG_STATUSES = ['needs_decision', 'waiting'] as const;
 
 /**
+ * 滞留の行で `waiting` を数えるしきい値（最後の更新からの経過。これを「超えた」ものだけ数える。ちょうどは数えない）。この定数の 1 か所だけが持つ。
+ * `waiting` は走っている委譲に結び付いて当たり前にあるものが多く、1 件でもあれば毎ターン出る作りは目に入らない雑音になった。
+ * 24 時間は、通常の委譲の待ちを越えて止まっている目安（運用で見て変える）。`needs_decision` には掛けない（決めが止まっているので、古さによらず出す）。
+ */
+export const BACKLOG_WAITING_STALE_MS = 24 * 60 * 60 * 1000;
+
+/**
  * 滞留している task（needs_decision / waiting）の件数と、最も古いものの古さ（`updatedAt` からの経過）の1行。事実だけで、何をするかは言わない。
- * どちらも 0 件なら空（1字も足さない）。しきい値は置かない: 古さそのものを見せ、「何日から滞留か」の線は読み手が引くため。
- * 古さの描き方は situation.ts と同じ `formatMinutesAgo`。`updatedAt` が読めない行は件数には入れ、古さは読める行の中の最古で言う（全部読めなければ「経過不明」）。
+ * `needs_decision` は古さによらず数える。`waiting` は `nowMs - updatedAt > BACKLOG_WAITING_STALE_MS` の行だけ数え、件数も古さもその行だけで言う。
+ * 数えた行が 0 件の状態は出さない。どちらも出なければ空（1字も足さない）。
+ * 古さの描き方は situation.ts と同じ `formatMinutesAgo`。
+ * `updatedAt` が読めない行: `needs_decision` は件数に入れ、古さは読める行の中の最古で言う（全部読めなければ「経過不明」）。
+ * `waiting` は数えない — 古いと確かめられない行を古い扱いで数えると雑音に戻るため（確かめられないものを雑音にしない）。
  * 状態も時計も読まない純関数（`nowMs` は呼び元が渡す）。
  */
 export function describeTaskBacklogAge(list: Pick<TaskList, 'entries'>, nowMs: number): string[] {
   const parts: string[] = [];
   for (const status of BACKLOG_STATUSES) {
-    const rows = list.entries.filter((task) => task.status === status);
+    const rows = list.entries.filter(
+      (task) =>
+        task.status === status &&
+        (status !== 'waiting' || nowMs - Date.parse(task.updatedAt) > BACKLOG_WAITING_STALE_MS),
+    );
     if (rows.length === 0) continue;
     const times = rows.map((task) => Date.parse(task.updatedAt)).filter((at) => !Number.isNaN(at));
     const age =
