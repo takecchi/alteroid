@@ -24,7 +24,7 @@ export function describeReopenArchive(archive: ReopenArchive): string {
  *
  * ## ⛔ 「どうすべきか」は書かない
  *
- * 文脈窓の畳みの断り（`Clone#contextWindowFoldNotice`、`CONTEXT_WINDOW_ALSO_NOTICE`）と
+ * 文脈窓の畳みの断り（`Clone#contextWindowFoldNotice`、`clone-failure-text.ts` の `CONTEXT_WINDOW_ALSO_NOTICE`）と
  * 同じ約束で、渡すのは何が起きたかとどの口で読めるかだけである。
  * ただし「同じ内容がこのセッションへ入るとまた弾かれうる」は事実なので書く
  * （理由が安全分類器の拒否だったときの話であって、そうでなければ当たらない）。

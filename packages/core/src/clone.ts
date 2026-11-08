@@ -3361,7 +3361,7 @@ class Clone implements CloneHost {
 
     if (conversationId === null) return;
 
-    // 文言の分岐は `#usageBlocked` を見てこの1か所に置く: 呼び出し側ごとに書き分けると、経路が増えたとき「枠なのに枠と言わない」失敗が静かに混ざるため
+    // 文言の分岐は `#usageBlocked` を見て `describeHumanFailureLine`（`clone-failure-text.ts`）の1か所に置く: 呼び出し側ごとに書き分けると、経路が増えたとき「枠なのに枠と言わない」失敗が静かに混ざるため。`#usageBlocked` はここで元の評価位置のまま読んで渡す
     // 枠と長さは同時に真になりうる（CLI が合成した `Prompt is too long · automatic compaction failed: You've hit your …`）: 保持は正しい（やめると閉じた枠を叩き続ける）ので、保持だけを言うと長さでも落ちる回に守れない約束になり、どちらへも倒さず両方言う
     // ここへ ASCII の目印（`context_window_failure`）と生の文言を持ち込まない: 日誌側の道具で、`clone-turn-failure-trace.test.ts` が「人間へ返す1行」でその線を測るため
     const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
@@ -3428,7 +3428,7 @@ class Clone implements CloneHost {
     return 'folding';
   }
 
-  // 日誌だけに書く: 人間の発言のターンでは `#reportFailure` の1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る。内部のターンで落ちた回は、直近の人間の会話へ書かない（今の仕事と関係のない会話へ書き込むことになるため）。投げない
+  // 日誌だけに書く: 人間の発言のターンでは `#reportFailure` の1行に `clone-failure-text.ts` の `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る。内部のターンで落ちた回は、直近の人間の会話へ書かない（今の仕事と関係のない会話へ書き込むことになるため）。投げない
   async #noteHeldEscalation(): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
