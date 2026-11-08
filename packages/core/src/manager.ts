@@ -48,10 +48,6 @@ import { RestoredWindows } from './restored-windows.js';
 import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
 import { ResumeEventWindows } from './resume-event-windows.js';
 import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
-import {
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
-  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
-} from './classifier-denial-streak.js';
 import { resolveSynthesizedNoticeWindowMs, type FoldWhenBack } from './synthesized-notice.js';
 import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { isQuotaFailure } from './sdk-failure.js';
@@ -156,6 +152,7 @@ import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import { isManagerInFlight } from './job-status-running.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
+import { askDeliveryOf, ManagerWaitingReceiver } from './manager-waiting.js';
 import { ManagerTaskLink } from './manager-task-link.js';
 import {
   carryKnownBranches,
@@ -1529,67 +1526,11 @@ function trackedGenerationSilent(record: ManagerRecord): boolean {
 /** `manager_send` の直接の返り値でページングを経由せず、`summary` は自由文なので、ここが伸びると全部そのまま agent へ渡る。 */
 const AMBIGUOUS_WAITING_EXCERPT = 400;
 
-const ASKED_MEMORY_LIMIT = 512;
-
-/**
- * `onForget` は最大 `ASKED_MEMORY_LIMIT` 件をまとめて渡しうるので、`ids.join(", ")` をそのまま繋ぐと
- * 件数に比例して伸びるのに上限も省略の合図も持たない列挙になる。
- * 兄弟の `REPORTED_FORGOTTEN_BUDGET` とは締め方が違う（こちらは文字数、あちらは件数）が、設計の判断ではない。
- */
-const ASKED_FORGOTTEN_EXCERPT = 400;
-
-/** `report` は「解決」で消える口が無いので `ASKED_MEMORY_LIMIT` と揃える強い理由は無い（実測で偏りが分かったら値だけ分ける）。 */
+/** `report` は「解決」で消える口が無いので `ASKED_MEMORY_LIMIT`（`manager-waiting.ts`）と揃える強い理由は無い（実測で偏りが分かったら値だけ分ける）。 */
 const REPORTED_MEMORY_LIMIT = 512;
 
 /** 上限も省略の合図も無い列挙にしない: `renderListing` に寄せて、切ったら「何件省いたか」が必ず出るようにする。 */
 const REPORTED_FORGOTTEN_BUDGET = 2_000;
-
-/**
- * **この合図そのものには答える先が無い。** 答えられるのは、runner が分類器の拒否から別に上げる「この1回だけ許可しますか」の確認
- * （`requestId` は `tool_use_id` の `toolu_…`）だけで、それが届かない拒否（道具名や入力が取れない回・deny 規則）もある。
- * `manager_send` は `requestId` 無しの `decision` を、待ちがちょうど1件なら黙ってその1件へ当てる（`#choosePending`）。
- * 答え方を書かないと、同じマネージャーが別に待っている無関係の確認を許可してしまう。
- * 分類器の判定には触らず、既に在る口（確認への回答・追加指示）を指すだけにする。
- * Markdown の記号を散文に混ぜない（識別子だけをバッククォートで包む）。
- */
-/** runner の `#onPermissionDenied` が上げる確認の書き出し。ここで見分けて、通常の許可確認にだけ答えたあとを足す。 */
-const CLASSIFIER_DENIAL_ASK_HEAD = '分類器が ';
-
-/**
- * 分類器の拒否の確認かどうか。書き出しだけでは見分けない: 拒否が続くと runner が連続の注記（`describeDenialStreakForClone`）を先頭に付け、書き出しが変わるため（#4945）。
- * 固定の段落（`DENIAL_ASK_AFTER_ANSWER_PARAGRAPH` と、一時規則を足せる Bash 用の `DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE`。#4905）のどちらかを含むかでも見る。書き出しの判定は、固定の段落を切り出す前の runner が組んだ待ち（再起動の引き取りで配り直す）のために残す。
- */
-function isClassifierDenialAsk(summary: string): boolean {
-  return (
-    summary.startsWith(CLASSIFIER_DENIAL_ASK_HEAD) ||
-    summary.includes(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH) ||
-    summary.includes(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE)
-  );
-}
-
-const PERMISSION_ASK_AFTER_ANSWER =
-  '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。';
-
-/**
- * 確認（`ask`）をクローンへ配る本文と描き方。届いたときと、再起動の引き取りで配り直すときの両方がここを通る。
- *
- * - `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`<Markdown>` で描くと `<code>` に食われて字面から消える。
- *   `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
- *   `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
- * - 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
- *   分類器の拒否の確認は runner が自分の本文で言っているので足さない。
- */
-function askDeliveryOf(
-  kind: 'question' | 'permission',
-  summary: string,
-): { text: string; markup: TextMarkup | undefined } {
-  const markup: TextMarkup | undefined = kind === 'permission' ? 'none' : undefined;
-  const text =
-    kind === 'permission' && !isClassifierDenialAsk(summary)
-      ? `${summary}${PERMISSION_ASK_AFTER_ANSWER}`
-      : summary;
-  return { text, markup };
-}
 
 /**
  * 疑わしい側（上書き）を止める: 引き直しを打ち切って例外にしても `start()` を呼び直せば済むが、
@@ -1886,6 +1827,7 @@ class Pool implements ManagerPool {
   readonly #archiveReceiver: ArchiveReceiver;
   /** 担当の `permission_denied` を数え、日誌と受信箱へ回す（`#handleEvent` の `case` が `handle` を直に返す）。 */
   readonly #denial: ManagerDenialReceiver;
+  readonly #waiting: ManagerWaitingReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -2212,6 +2154,14 @@ class Pool implements ManagerPool {
       nowIso: () => this.#nowIso(),
       journalExchange: this.#journalExchange.bind(this),
       emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
+    });
+    this.#waiting = new ManagerWaitingReceiver({
+      persist: (record) => this.#persist(record),
+      journal: (entry) => this.#journal(entry),
+      journalExchange: this.#journalExchange.bind(this),
+      emit: (managerId, kind, text, requestId, markup) =>
+        this.#emit(managerId, kind, text, requestId, markup),
+      nowIso: () => this.#nowIso(),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -6003,11 +5953,11 @@ class Pool implements ManagerPool {
       }
 
       case 'ask': {
-        return this.#handleAsk(event, record);
+        return this.#waiting.handleAsk(event, record);
       }
 
       case 'settled': {
-        return this.#handleSettled(event, record);
+        return this.#waiting.handleSettled(event, record);
       }
 
       case 'note': {
@@ -6275,7 +6225,7 @@ class Pool implements ManagerPool {
       return;
     }
     // `requestId` で冪等にする: 二度配ると、答えたはずの確認がクローンへもう一度届き、答えても runner 側は中断済みで「待っていない」と返る。
-    const asked = this.#askedOf(record);
+    const asked = this.#waiting.askedOf(record);
     if (asked.has(event.requestId)) return;
     asked.set(event.requestId, true);
 
