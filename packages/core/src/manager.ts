@@ -21,10 +21,6 @@ import { laterIso } from './later-iso.js';
 import { HELD_FORCE_FOLD_AFTER_MS, HeldMessages, type StaleHoldStuck } from './held-messages.js';
 import { WITHHELD_REPORT_EXCERPT, resolveWithheldReportFlushMs } from './withheld-reports.js';
 import {
-  bashCommandLooksLikeGitBranchCreate,
-  bashCommandLooksLikeGitPush,
-} from './bash-git-command.js';
-import {
   decodeDenialKey,
   type DenialReasonSnapshot,
   type DenialRenotifyState,
@@ -86,8 +82,6 @@ import {
   swapNoteOf,
 } from './runner-roster.js';
 import type { AgentPluginLoad } from './agent-events.js';
-import { describeMcpStatusForJournal } from './mcp-status-journal.js';
-import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { codeSpan } from './markdown-span.js';
 import { PushLedger, type RunnerPushHealth } from './push-ledger.js';
 import { SessionLoaders } from './session-loaders.js';
@@ -156,6 +150,9 @@ import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import { isManagerInFlight } from './job-status-running.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
+import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
+import { ManagerSessionReceiver } from './manager-session.js';
+import { ManagerToolUseReceiver } from './manager-tool-use.js';
 import { ManagerTaskLink } from './manager-task-link.js';
 import {
   carryKnownBranches,
@@ -183,7 +180,6 @@ import {
   FOLD_NOTICE_COMMANDS_MAX,
   abortTextsOf,
   composeFoldNotice,
-  composePeerCloseNotice,
   composePeerCloseNotices,
   cwdSwapNoticeClause,
   describeStoppedReportFiles,
@@ -202,7 +198,6 @@ import {
   sendFailureDetail,
   unresumableNotice,
   type DroppedReportFiles,
-  type PeerCloseNotice,
   type RestartCause,
 } from './manager-notices.js';
 import {
@@ -1864,13 +1859,6 @@ class Pool implements ManagerPool {
   readonly #held: HeldMessages;
   /** 消さない: 器が入れ替わっても次の `session` が上書きし、`at` が観測の古さを名乗る。 */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
-  /**
-   * 委譲ごとの、最後に日誌へ書いたプラグイン読み込みの要約の署名。同じ署名の `session` では書き直さない。
-   * `#retire()` で消さない: 畳んだ委譲を起こし直した `session` が同じ署名でも、日誌へ同じ行を重ねない。1件は署名の文字列1つ。
-   */
-  readonly #pluginLoadDigests = new Map<string, string>();
-  /** `#pluginLoadDigests` と同じ形・同じ理由で、接続できていない MCP サーバの組の署名を持つ。全部つながったら消す（次の失敗は書き直す）。 */
-  readonly #mcpStatusDigests = new Map<string, string>();
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   readonly #turnEndWatch: TurnEndWatch;
   readonly #unsubscribe: () => void;
@@ -1886,6 +1874,12 @@ class Pool implements ManagerPool {
   readonly #archiveReceiver: ArchiveReceiver;
   /** 担当の `permission_denied` を数え、日誌と受信箱へ回す（`#handleEvent` の `case` が `handle` を直に返す）。 */
   readonly #denial: ManagerDenialReceiver;
+  /** 担当の `session` を受け、plugin の読み込み・MCP の接続の署名を持つ（`#handleEvent` の `case` が `handle` を直に返す）。 */
+  readonly #session: ManagerSessionReceiver;
+  /** 担当の `tool_use` を日誌へ書き、未 push の観測を起こす（`#handleEvent` の `case` が `handle` を直に返す）。 */
+  readonly #toolUse: ManagerToolUseReceiver;
+  /** 担当の `parked_peers_closed` を、知らせか台帳の預けへ回す（`#handleEvent` の `case` が `handle` を直に返す）。 */
+  readonly #parkedPeers: ManagerParkedPeersReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -2212,6 +2206,26 @@ class Pool implements ManagerPool {
       nowIso: () => this.#nowIso(),
       journalExchange: this.#journalExchange.bind(this),
       emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
+    });
+    this.#session = new ManagerSessionReceiver({
+      nowIso: () => this.#nowIso(),
+      journalExchange: this.#journalExchange.bind(this),
+      persist: (record) => this.#persist(record),
+      noteRunnerSessionSince: (record) => this.#noteRunnerSessionSince(record),
+      rememberPluginLoad: (runnerId, observation) => {
+        this.#pluginLoad.set(runnerId, observation);
+      },
+    });
+    this.#toolUse = new ManagerToolUseReceiver({
+      nowIso: () => this.#nowIso(),
+      journal: (entry) => this.#journal(entry),
+      observeUnpushedWorkOnce: (managerId, source) =>
+        this.#observeUnpushedWorkOnce(managerId, source),
+    });
+    this.#parkedPeers = new ManagerParkedPeersReceiver({
+      nowIso: () => this.#nowIso(),
+      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
+      persist: (record) => this.#persist(record),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -5988,7 +6002,7 @@ class Pool implements ManagerPool {
 
     switch (event.type) {
       case 'session': {
-        return this.#handleSession(event, record, fromRunnerId);
+        return this.#session.handle(event, record, fromRunnerId);
       }
 
       case 'project_key': {
@@ -6030,7 +6044,7 @@ class Pool implements ManagerPool {
       }
 
       case 'tool_use': {
-        return this.#handleToolUse(event, record);
+        return this.#toolUse.handle(event, record);
       }
 
       case 'permission_denied': {
@@ -6060,7 +6074,7 @@ class Pool implements ManagerPool {
       }
 
       case 'parked_peers_closed': {
-        return this.#handleParkedPeersClosed(event, record);
+        return this.#parkedPeers.handle(event, record);
       }
 
       case 'peer_usage': {
@@ -6188,48 +6202,6 @@ class Pool implements ManagerPool {
     }
   }
 
-  /** 担当の出来事 `session` の1件を処理する（`#handleEvent` が振り分ける）。 */
-  async #handleSession(
-    event: Extract<RunnerEvent, { type: 'session' }>,
-    record: ManagerRecord,
-    fromRunnerId: string,
-  ): Promise<void> {
-    // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
-    if (event.pluginLoad !== undefined) {
-      this.#pluginLoad.set(fromRunnerId, {
-        at: this.#nowIso(),
-        managerId: event.managerId,
-        pluginLoad: event.pluginLoad,
-      });
-      const described = describePluginLoadForJournal(event.pluginLoad);
-      if (this.#initFindingChanged(this.#pluginLoadDigests, event.managerId, described.digest)) {
-        await this.#journalExchange(
-          'inbound',
-          `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] ${described.text}`,
-        );
-      }
-    }
-    // 外部 MCP サーバの接続の失敗は担当の道具が欠けることなので、plugin の読み込み結果と同じ経路（日誌→クローン）で知らせる。欄が無い session は上書きしない
-    if (event.mcpServers !== undefined) {
-      const described = describeMcpStatusForJournal(event.mcpServers);
-      if (described === null) {
-        this.#mcpStatusDigests.delete(event.managerId);
-      } else if (
-        this.#initFindingChanged(this.#mcpStatusDigests, event.managerId, described.digest)
-      ) {
-        await this.#journalExchange(
-          'inbound',
-          `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] ${described.text}`,
-        );
-      }
-    }
-    record.job.sessionId = event.sessionId;
-    record.attached = true;
-    this.#noteRunnerSessionSince(record);
-    await this.#persist(record);
-    return;
-  }
-
   /** 担当の出来事 `report` の1件を処理する（`#handleEvent` が振り分ける）。 */
   async #handleReport(
     event: Extract<RunnerEvent, { type: 'report' }>,
@@ -6332,76 +6304,6 @@ class Pool implements ManagerPool {
           `理由: ${event.withdrawn.reason}`,
       });
     }
-    return;
-  }
-
-  /** 担当の出来事 `tool_use` の1件を処理する（`#handleEvent` が振り分ける）。 */
-  async #handleToolUse(
-    event: Extract<RunnerEvent, { type: 'tool_use' }>,
-    record: ManagerRecord,
-  ): Promise<void> {
-    record.lastToolSettledAt = this.#nowIso();
-    await this.#journal({
-      type: 'tool_use',
-      actor: event.actor,
-      tool: event.tool,
-      input: event.input,
-    });
-    // 検出は分類器ではなく単純な正規表現で、誤検出を許容する: 害は観測が1回余分になるだけ（読み取りで多重投げも止まる）。見逃すと報告より前に落ちた委譲の枝名が残らない穴が開く。
-    // 例外で `tool_use` の処理を止めない。
-    try {
-      if (event.tool === 'Bash') {
-        const toolInput = event.input as { command?: unknown } | null | undefined;
-        const command = toolInput?.command;
-        if (
-          typeof command === 'string' &&
-          (bashCommandLooksLikeGitPush(command) || bashCommandLooksLikeGitBranchCreate(command))
-        ) {
-          this.#observeUnpushedWorkOnce(event.managerId, 'tool_use');
-        }
-      }
-    } catch {
-      // tool_use の処理を巻き添えにしないための保険。
-    }
-    return;
-  }
-
-  /** 担当の出来事 `parked_peers_closed` の1件を処理する（`#handleEvent` が振り分ける）。 */
-  async #handleParkedPeersClosed(
-    event: Extract<RunnerEvent, { type: 'parked_peers_closed' }>,
-    record: ManagerRecord,
-  ): Promise<void> {
-    const notice: PeerCloseNotice = { reason: event.reason, peers: event.peers };
-    const status = record.job.status;
-    // 担当が起こされない（人が止めた・もう終端している）なら、クローンへの知らせだけにする。起こされるなら次の起こし直しの先頭へ添える（二重にしない）
-    if (
-      event.reason === 'stopped' ||
-      status === 'stopped' ||
-      status === 'failed' ||
-      status === 'lost'
-    ) {
-      this.#emit(
-        event.managerId,
-        'report',
-        `[${event.managerId}] ${composePeerCloseNotice(notice)}`,
-      );
-      return;
-    }
-    const reason = event.reason;
-    record.job.pendingPeerCloseNotice = {
-      reason,
-      // peer ごとに理由を持たせる: 理由の違う知らせを1つに混ぜると、理由と peer の対応がずれる（#4899）
-      peers: [
-        // 理由の欄が無い古い形の peer は、上書きされる前の知らせの理由を写してから積む
-        ...(record.job.pendingPeerCloseNotice?.peers ?? []).map((peer) => ({
-          ...peer,
-          reason: peer.reason ?? record.job.pendingPeerCloseNotice?.reason ?? reason,
-        })),
-        ...event.peers.map((peer) => ({ ...peer, reason })),
-      ],
-      at: this.#nowIso(),
-    };
-    await this.#persist(record).catch(() => undefined);
     return;
   }
 
@@ -7737,13 +7639,6 @@ class Pool implements ManagerPool {
         withdrawnReason: `この確認への答えは届かない（${reason}）`,
       });
     }
-  }
-
-  // 署名が前回と同じなら false（日誌に重ねない）。違えば覚えて true。接頭辞は呼び出し箇所に字面で置くため、書くのは呼び手（`#journalExchange` の注を参照）。
-  #initFindingChanged(digests: Map<string, string>, managerId: string, digest: string): boolean {
-    if (digests.get(managerId) === digest) return false;
-    digests.set(managerId, digest);
-    return true;
   }
 
   // `with: 'manager'` の exchange を書く。async にせず `#journal` の Promise をそのまま返す: `await` / `void` の呼び出し側のタイミングを変えない。

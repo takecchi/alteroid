@@ -430,7 +430,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     // `#handleEvent` の case を種類ごとのメソッドへ出したので、`#handleEvent` 自身には書き込み箇所が無い
     '#handleReport': 'reply',
     '#handleResumeFailed': 'failure',
-    '#handleSession': 'decision,failure',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
     '#journalNote': 'reply',
@@ -453,6 +452,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager-denial.ts': {
     '#deniedOf': 'thinning',
     handle: 'decision',
+  },
+  // 担当の `session` を受けて、plugin の読み込み・MCP の接続の失敗を日誌へ書く協力者（旧 `Pool#handleSession`）。同じ検査をここへ移した。
+  'manager-session.ts': {
+    handle: 'decision,failure',
   },
   // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
   'denial-renotify.ts': {
@@ -615,6 +618,7 @@ const EXCHANGE_SOURCES = [
   'clone.ts',
   'denial-renotify.ts',
   'manager-denial.ts',
+  'manager-session.ts',
   'manager.ts',
   'push-ledger.ts',
   'quota-stop-windows.ts',
