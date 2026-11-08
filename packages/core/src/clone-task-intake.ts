@@ -173,9 +173,10 @@ export class CloneTaskIntake {
       };
     }
     if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
-    const rows = describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT });
+    const nowMs = Date.now();
+    const rows = describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT, nowMs });
     return {
-      head: [`[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`, ...rows],
+      head: [`[system] 待ち行列（${readAtLabel(nowMs)} に数えた材料）`, ...rows],
       placed: placedLines,
       failed: failedLines,
     };

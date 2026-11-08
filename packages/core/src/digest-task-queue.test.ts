@@ -29,6 +29,9 @@ function makeTask(id: string, over: Partial<Task> = {}): Task {
   };
 }
 
+// 滞留の行（waiting / needs_decision の件数と最古の古さ。task-queue-backlog-age.test.ts が逐語を持つ）の古さの基準時刻。ここは先頭の行の描き方を見る試験で、古さの文字列は固定しない
+const HEAD_OPTIONS = { limit: 3, nowMs: Date.UTC(2026, 0, 2, 0, 0, 0) };
+
 const list = (entries: Task[], unreadable: TaskList['unreadable'] = []): TaskList => ({
   entries,
   unreadable,
@@ -56,8 +59,11 @@ describe('describeTaskQueueHead（純関数）', () => {
       makeTask('k'),
       makeTask('b'),
     ];
-    const lines = describeTaskQueueHead(list(entries), { limit: 3 });
-    expect(lines).toEqual([
+    const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
+    // 動いた理由: waiting / needs_decision を含む並びなので、件数の行の次に滞留の1行が入る（逐語は task-queue-backlog-age.test.ts）。それ以外の行は従来のまま
+    const backlog = lines.filter((line) => line.startsWith('- 滞留: '));
+    expect(backlog).toHaveLength(1);
+    expect(lines.filter((line) => !line.startsWith('- 滞留: '))).toEqual([
       '- 待ち行列: 開いている 5 件（queued 3 / waiting 1 / needs_decision 1）',
       '- z-last-id（状態: waiting（待ち（外の返事・時間待ち）） / origin: human）title-z-last-id',
       '- m（状態: queued（待ち行列） / origin: manager）title-m',
@@ -68,7 +74,7 @@ describe('describeTaskQueueHead（純関数）', () => {
   });
 
   it('limit 以下なら省略の行は出ない', () => {
-    const lines = describeTaskQueueHead(list([makeTask('a'), makeTask('b')]), { limit: 3 });
+    const lines = describeTaskQueueHead(list([makeTask('a'), makeTask('b')]), HEAD_OPTIONS);
     expect(lines.some((line) => line.startsWith('- …ほか'))).toBe(false);
     expect(
       lines.filter((line) => line.startsWith('- a（') || line.startsWith('- b（')),
@@ -76,7 +82,7 @@ describe('describeTaskQueueHead（純関数）', () => {
   });
 
   it('0件のときは件数の行だけで、先頭も案内も出さない', () => {
-    expect(describeTaskQueueHead(list([]), { limit: 3 })).toEqual([
+    expect(describeTaskQueueHead(list([]), HEAD_OPTIONS)).toEqual([
       '- 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）',
     ]);
   });
@@ -84,7 +90,7 @@ describe('describeTaskQueueHead（純関数）', () => {
   it('読めない行は 0 に丸めず、件数で断る（開いている件数には入れない。終わったのではない）', () => {
     const lines = describeTaskQueueHead(
       list([makeTask('a')], [{ id: 'broken-1', reason: '不正な欄' }, { reason: 'id も無い' }]),
-      { limit: 3 },
+      HEAD_OPTIONS,
     );
     expect(lines[0]).toBe('- 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）');
     expect(lines[1]).toBe(
@@ -95,7 +101,7 @@ describe('describeTaskQueueHead（純関数）', () => {
   });
 
   it('読めない行だけ在って開いている件が0なら、0件の行と断りの両方が出る', () => {
-    const lines = describeTaskQueueHead(list([], [{ reason: '不正' }]), { limit: 3 });
+    const lines = describeTaskQueueHead(list([], [{ reason: '不正' }]), HEAD_OPTIONS);
     expect(lines).toEqual([
       '- 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）',
       '- 読めない task の行が 1 件ある（上の件数には入っていない。終わったのではない）',
@@ -115,7 +121,7 @@ describe('describeTaskQueueHead（純関数）', () => {
         makeTask('q2'),
         makeTask('n1', { status: 'needs_decision' }),
       ];
-      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
       const extra = lines.filter((line) => line.includes('先頭から離れている'));
       expect(extra).toHaveLength(1);
       expect(extra[0]).toContain('q1（状態: queued');
@@ -131,20 +137,20 @@ describe('describeTaskQueueHead（純関数）', () => {
         waiting('w3'),
         makeTask('n1', { status: 'needs_decision' }),
       ];
-      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
       expect(lines.find((line) => line.includes('先頭から離れている'))).toContain('n1（');
       expect(lines.some((line) => line.startsWith('- …ほか'))).toBe(false);
     });
 
     it('先頭3件に queued か needs_decision が1件でも在れば、足さない', () => {
       const entries = [waiting('w1'), makeTask('q1'), waiting('w2'), makeTask('q2')];
-      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
       expect(lines.join('\n')).not.toContain('先頭から離れている');
     });
 
     it('動ける件が無ければ（全部 waiting）、足さない', () => {
       const entries = [waiting('w1'), waiting('w2'), waiting('w3'), waiting('w4')];
-      const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+      const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
       expect(lines.join('\n')).not.toContain('先頭から離れている');
       expect(lines).toContain('- …ほか 1 件（task_list で全部見える）');
     });
@@ -156,7 +162,7 @@ describe('describeTaskQueueHead（純関数）', () => {
       makeTask('done-1', { status: 'done', closedAt: '2026-01-02T00:00:00.000Z' }),
       makeTask('cancelled-1', { status: 'cancelled', closedAt: '2026-01-02T00:00:00.000Z' }),
     ];
-    const lines = describeTaskQueueHead(list(entries), { limit: 3 });
+    const lines = describeTaskQueueHead(list(entries), HEAD_OPTIONS);
     expect(lines[0]).toContain('開いている 1 件');
     expect(lines.join('\n')).not.toContain('done-1');
     expect(lines.join('\n')).not.toContain('cancelled-1');
@@ -165,7 +171,7 @@ describe('describeTaskQueueHead（純関数）', () => {
   it('title は1行に畳み、長ければ切る（先頭の描画が伸びない）', () => {
     const lines = describeTaskQueueHead(
       list([makeTask('a', { title: `改行\nを含む ${'長い'.repeat(200)}` })]),
-      { limit: 3 },
+      HEAD_OPTIONS,
     );
     const row = lines.find((line) => line.startsWith('- a（')) ?? '';
     expect(row).not.toContain('\n');

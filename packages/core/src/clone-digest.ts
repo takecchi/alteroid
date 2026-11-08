@@ -114,7 +114,7 @@ export class CloneDigest {
         '',
         '',
         TASK_QUEUE_SECTION_HEADING_HEAD,
-        ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+        ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT, nowMs: Date.now() }),
       ].join('\n');
     } catch (error) {
       return `\n\n${TASK_QUEUE_SECTION_HEADING_HEAD}\n- 待ち行列を読めなかった（理由: ${reasonOf(error)}）。開いている仕事が 0 件だったのではない。読み直す手は \`task_list\` である。`;

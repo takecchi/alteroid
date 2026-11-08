@@ -1,4 +1,5 @@
 import { excerptLine } from './excerpt.js';
+import { formatMinutesAgo } from './format-elapsed.js';
 import { isTaskClosed } from './task.js';
 import type { TaskPlacement } from './task.js';
 import type { JournalEntryInput, Task, TaskStatus } from './schema.js';
@@ -98,12 +99,38 @@ export function describeTaskQueueCount(list: Pick<TaskList, 'entries'>): string 
   return `待ち行列: 開いている ${open.length} 件（${breakdown}）`;
 }
 
+const BACKLOG_STATUSES = ['needs_decision', 'waiting'] as const;
+
 /**
- * 発意 tick の入力の「待ち行列の先頭」の行。件数の1行・読めない行の断り・先頭 `limit` 件・1行の案内。
+ * 滞留している task（needs_decision / waiting）の件数と、最も古いものの古さ（`updatedAt` からの経過）の1行。事実だけで、何をするかは言わない。
+ * どちらも 0 件なら空（1字も足さない）。しきい値は置かない: 古さそのものを見せ、「何日から滞留か」の線は読み手が引くため。
+ * 古さの描き方は situation.ts と同じ `formatMinutesAgo`。`updatedAt` が読めない行は件数には入れ、古さは読める行の中の最古で言う（全部読めなければ「経過不明」）。
+ * 状態も時計も読まない純関数（`nowMs` は呼び元が渡す）。
+ */
+export function describeTaskBacklogAge(list: Pick<TaskList, 'entries'>, nowMs: number): string[] {
+  const parts: string[] = [];
+  for (const status of BACKLOG_STATUSES) {
+    const rows = list.entries.filter((task) => task.status === status);
+    if (rows.length === 0) continue;
+    const times = rows.map((task) => Date.parse(task.updatedAt)).filter((at) => !Number.isNaN(at));
+    const age =
+      times.length === 0
+        ? '経過不明'
+        : `最も古いのは ${formatMinutesAgo(nowMs - Math.min(...times))}`;
+    parts.push(`${status} ${rows.length} 件（${age}）`);
+  }
+  return parts.length === 0 ? [] : [`- 滞留: ${parts.join(' / ')}`];
+}
+
+/**
+ * 発意 tick の入力の「待ち行列の先頭」の行。件数の1行・読めない行の断り・滞留の1行（あれば）・先頭 `limit` 件・1行の案内。
  * 並びは `list.entries` のまま（器は並べ直さない。先頭が先にやるもの）。読めない行は 0 に丸めず件数で断る（終わったのではない）。
  * 開いている件が無ければ件数の行（と読めない行の断り）だけで、案内は出さない。
  */
-export function describeTaskQueueHead(list: TaskList, options: { limit: number }): string[] {
+export function describeTaskQueueHead(
+  list: TaskList,
+  options: { limit: number; nowMs: number },
+): string[] {
   const open = list.entries.filter((task) => !isTaskClosed(task.status));
   const lines = [`- ${describeTaskQueueCount(list)}`];
   if (list.unreadable.length > 0) {
@@ -111,6 +138,7 @@ export function describeTaskQueueHead(list: TaskList, options: { limit: number }
       `- 読めない task の行が ${list.unreadable.length} 件ある（上の件数には入っていない。終わったのではない）`,
     );
   }
+  lines.push(...describeTaskBacklogAge(list, options.nowMs));
   if (open.length === 0) return lines;
   const shown = open.slice(0, options.limit);
   for (const task of shown) {
