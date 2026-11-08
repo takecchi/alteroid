@@ -34,6 +34,7 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
       settleStalledUsageWakes: step('usage-wakes'),
       renotifyStalledDenials: step('denials'),
       deliverHeldMessages: step('held-messages'),
+      repairStrandedTasks: step('task-follow'),
     } as unknown as ManagerPool;
     const poller = startManagerPolling({ managers, intervalMs: 60_000 });
     await vi.waitFor(() => expect(phases).toContain('poller:done'));
@@ -54,6 +55,8 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
       'run:denials',
       'poller:held-messages',
       'run:held-messages',
+      'poller:task-follow',
+      'run:task-follow',
       'poller:done',
     ]);
   });
