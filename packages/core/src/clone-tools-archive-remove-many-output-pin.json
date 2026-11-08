@@ -6,7 +6,7 @@
     "arg-errors#4": 22,
     "arg-errors#5": 23,
     "arg-errors#6": 35,
-    "arg-errors#7": 23,
+    "arg-errors#7": 37,
     "arg-errors#8": 23,
     "arg-errors#9": 100,
     "arg-errors#10": 100,
@@ -81,7 +81,7 @@
     "bytes-format#1": 360,
     "bytes-format#2": 404,
     "bytes-format#3": 361,
-    "summary-forms#1": 401,
+    "summary-forms#1": 400,
     "summary-forms#2": 400,
     "summary-forms#3": 2395,
     "summary-forms#4": 412,
@@ -318,8 +318,8 @@
     },
     "arg-errors#7": {
       "output": {
-        "length": 23,
-        "text": "summary は使えない（1文字以上のみ）。",
+        "length": 37,
+        "text": "summary は使えない（NUL だけの値は空と同じ。1文字以上のみ）。",
         "isError": false,
         "thrown": false
       },
@@ -23022,8 +23022,8 @@
     },
     "summary-forms#1": {
       "output": {
-        "length": 401,
-        "text": "**1 件の本文を tombstone した**（理由: 一行目\n二行目\u0000です）。行そのものは残っている（list には引き続き出る）。\nアーカイブ全 5 行 → 絞り込みで 1 件\n絞り込み: sessionIds=[sess-a] / before=2026-10-01T00:02:00.000Z\nskipped: protected(墓標) 0 / alreadyRemoved 0 / newest 0 / notContained 0 / inUse(走行中) 0\nremaining（limit に溢れて対象にすらならなかった件数）: 0\n消した本文の合計: 3 バイト（消した本文の素の UTF-8 バイト数。置き場で解放した量ではなく、storedBytes とは単位が違う）\n消した id（先頭 1 件）: sess-a-2026-10-01T00-01-00-000Z.jsonl",
+        "length": 400,
+        "text": "**1 件の本文を tombstone した**（理由: 一行目\n二行目です）。行そのものは残っている（list には引き続き出る）。\nアーカイブ全 5 行 → 絞り込みで 1 件\n絞り込み: sessionIds=[sess-a] / before=2026-10-01T00:02:00.000Z\nskipped: protected(墓標) 0 / alreadyRemoved 0 / newest 0 / notContained 0 / inUse(走行中) 0\nremaining（limit に溢れて対象にすらならなかった件数）: 0\n消した本文の合計: 3 バイト（消した本文の素の UTF-8 バイト数。置き場で解放した量ではなく、storedBytes とは単位が違う）\n消した id（先頭 1 件）: sess-a-2026-10-01T00-01-00-000Z.jsonl",
         "isError": false,
         "thrown": false
       },

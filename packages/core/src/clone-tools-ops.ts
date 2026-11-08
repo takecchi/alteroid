@@ -48,6 +48,7 @@ import type { ArchiveEntry } from './store.js';
 import { STALE_TOKEN_RESTART_ADVICE } from './usage-limits.js';
 import { formatMinutesAgo } from './format-elapsed.js';
 import { chunkIdsByChars } from './chunk-ids.js';
+import { stripNul, stripNulWellFormed } from './nul-guard.js';
 import {
   describeArrayLengthViolation,
   describeBlankViolation,
@@ -610,9 +611,12 @@ function describeArchiveRemoveManyViolation(input: ArchiveRemoveManyInput): stri
   if (sessionIdsElementError !== null) return sessionIdsElementError;
   const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
   if (beforeLengthError !== null) return beforeLengthError;
+  // NUL だけの値は、空文字や空白だけの値と別の文で断る: NUL を含むことを言うため。NUL を落としたあとに空白だけになる値は、空白だけの断りのまま
   const summaryError =
-    describeStringLengthViolation('summary', summary, { min: 1 }) ??
-    describeBlankViolation('summary', summary);
+    summary.length > 0 && stripNul(summary).length === 0
+      ? `summary は使えない（NUL だけの値は空と同じ。${formatStringLengthJa({ min: 1 })}のみ）。`
+      : (describeStringLengthViolation('summary', summary, { min: 1 }) ??
+        describeBlankViolation('summary', summary));
   if (summaryError !== null) return summaryError;
   if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
     return (
@@ -1425,10 +1429,17 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
             '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
           ),
       },
-      async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
-        const input: ArchiveRemoveManyInput = { sessionIds, before, minStoredBytes, summary };
-        const violation = describeArchiveRemoveManyViolation(input);
+      async ({ sessionIds, before, minStoredBytes, summary: rawSummary, dryRun }) => {
+        const violation = describeArchiveRemoveManyViolation({
+          sessionIds,
+          before,
+          minStoredBytes,
+          summary: rawSummary,
+        });
         if (violation !== null) return text(violation);
+        // 出力の理由・日誌・tombstone で同じ文字列にするため、検証のあとで先に落とす
+        const summary = stripNulWellFormed(rawSummary);
+        const input: ArchiveRemoveManyInput = { sessionIds, before, minStoredBytes, summary };
 
         const { selection, filterText } = await selectArchiveRemoveManyTargets(stores, input);
         const funnel = renderArchiveRemoveManyFunnel(selection);
