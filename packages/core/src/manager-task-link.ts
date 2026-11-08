@@ -134,7 +134,7 @@ export class ManagerTaskLink {
           others.some(
             (job) =>
               job.id !== record.job.id &&
-              job.taskId === taskId &&
+              
               taskStatusForJob(job.status) === 'waiting',
           )
         ) {
