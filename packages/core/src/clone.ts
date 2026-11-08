@@ -68,7 +68,7 @@ import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
-import { excerpt, excerptLine } from './excerpt.js';
+import { excerpt } from './excerpt.js';
 import {
   EXTERNAL_JOURNAL_LIMIT,
   firstReportPerManager,
@@ -214,13 +214,10 @@ import {
 } from './prompt.js';
 import { DAILY_REPORT_KIND, localDate } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
-import { describeAnsweredVia } from './schema.js';
 import type {
   ApprovalSelection,
   ChatStreamEvent,
   InboxEvent,
-  HumanAction,
-  HumanActionKind,
   JournalEntry,
   JournalEntryInput,
   MemoryDocument,
@@ -264,6 +261,15 @@ import {
 } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
+import {
+  HUMAN_ACTION_WINDOW,
+  composeFreshMemoryInput,
+  describeContextWindowFoldNotice,
+  describeMemoryEditAttribution,
+  describeTaskQueuePlacement,
+  prependResumedMemoryNotice,
+  renderHumanActionSection,
+} from './clone-turn-input-text.js';
 import { TurnTimer } from './turn-timing.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -387,24 +393,6 @@ export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
 // 使い切っても諦めず、最後の間隔で拾えるまで続ける: 起動時の読み直しは1回きりで、諦めると前の器の未読（人間の発言・報告）が次の再起動まで誰にも配られないため
 const RESTORE_UNREAD_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 15_000, 60_000];
 
-const CLONE_ID_LIST_EXCERPT = 400;
-
-const HUMAN_ACTION_WINDOW = 200;
-const HUMAN_ACTION_SHOWN = 20;
-const HUMAN_ACTION_DECISION_EXCERPT = 160;
-// `Record` で全種を強いる: kind を足したときに言い方の追加を忘れると、型が落ちる前に英語の識別子が入力へ漏れるため
-const HUMAN_ACTION_LABEL: Record<HumanActionKind, string> = {
-  manager_message: '担当へ直接送った',
-  commitment_close: '台帳の行を閉じた',
-  commitment_reopen: '台帳の行を開き直した',
-  task_close: 'task を閉じた',
-  task_reopen: '閉じた task を開き直した',
-  task_move: 'task を並べ替えた',
-  schedule_remove: '定期の依頼を外した',
-  practice_remove: 'やり方を消した',
-  practice_write: 'やり方を書き直した',
-};
-
 // 外部の合図の窓（と、合成した報告の窓）の既定 2.5 秒: 外部の合図のバーストが1束に収まる桁で、人間以外の合図にだけ掛かる遅延として許せる上限のため。報告の窓は別（`REPORT_SETTLE_MS`）
 const INBOX_SETTLE_MS = 2500;
 
@@ -510,24 +498,6 @@ const REMEMBER_RETRY_MS = 200;
 
 // 合わなければ諦めて次の発火に譲る: 古い本文で走らないことが最優先のため
 const SCHEDULE_CLAIM_ROUNDS = 3;
-
-// 記憶更新の頭（#5301）。
-const MEMORY_UPDATE_HEAD =
-  '[system] 記憶が更新された（人間が直接書き換えたか、あなた自身が更新した）。' +
-  '**変わった文書だけを載せる。ここに出ていない文書は変わっていない。**' +
-  '載っている文書も、大きく変わっていなければ**変わった範囲だけ**が載る' +
-  '（省いた側は行数と文字数で名乗ってある）。' +
-  'システムプロンプトの「現在の記憶」は**このセッションを組んだ時点の索引**（要旨と節の目次）であり、' +
-  'それに続けてこれらの差分を当てたものが現在の索引である。' +
-  '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**';
-
-// 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
-const RESUMED_MEMORY_NOTICE =
-  '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
-  '**現在の記憶は、システムプロンプトの「現在の記憶」に載っているものである。** ' +
-  'この下より前の会話に「記憶が更新された」として載っている塊は、それより古い可能性がある' +
-  '（デーモンが落ちている間に人間が直していれば、正本のほうが新しい）。食い違ったら' +
-  'システムプロンプト側を採ること。確かめたければ `memory_read` で読み直せる。';
 
 // `context_window_failure` の目印と生の文言を含めない: 日誌側の道具で、人間へ返す1行に持ち込まないため（`clone-turn-failure-trace.test.ts` が測る）
 // 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
@@ -2826,24 +2796,10 @@ class Clone implements CloneHost {
     // 要約が同じ待ち行列の先頭を載せる回は、読めたときの先頭を出さない（読めなかった断りは要約に無いので残す）
     leaveHeadToDigest: boolean,
   ): Promise<{ head: string[]; placed: string[]; failed: string[] }> {
-    const idsOf = (list: readonly HumanMessage[]): string =>
-      excerptLine(list.map((pending) => `\`${pending.id}\``).join(', '), CLONE_ID_LIST_EXCERPT);
-    const placedLines =
-      placed.length === 0
-        ? []
-        : [
-            (placed.length > 1
-              ? `いま届いたこの ${placed.length} 件は task ${idsOf(placed)} として積んだ。`
-              : `いま届いたこの一件は task ${idsOf(placed)} として積んだ。`) +
-              '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
-          ];
-    const failedLines =
-      failed.length === 0
-        ? []
-        : [
-            `**⚠️ いま届いたこの ${failed.length} 件は Task として積めなかった（id: ${idsOf(failed)}）。** ` +
-              '待ち行列には載っていない。必要なら `task_add` で載せ直すこと（理由は日誌に残してある）。',
-          ];
+    const { placed: placedLines, failed: failedLines } = describeTaskQueuePlacement(
+      placed.map((pending) => pending.id),
+      failed.map((pending) => pending.id),
+    );
     let taskList: Awaited<ReturnType<Stores['tasks']['list']>>;
     try {
       taskList = await this.#stores.tasks.list();
@@ -4372,16 +4328,7 @@ class Clone implements CloneHost {
     const reopened = this.#distillMemory.takeReopenNotice(this.#sessionOrdinal);
     const reopenText = reopened === null ? '' : describeReopenNotice(reopened);
     if (!this.#distillMemory.takeContextWindowFoldNoticePending()) return reopenText;
-    return (
-      reopenText +
-      '[system] 直前のターンが文脈窓（プロンプトの長さ）に当たって失敗したので、' +
-      'このセッションは前の会話を引き継がずに開き直したものである。' +
-      '**⟹ あなたはそれまでのやりとりを文脈として持っていない。**' +
-      'ただし会話の記録そのものは消えていない（`conversation_read` で読み直せる。' +
-      '生ログはアーカイブに退避してある）。' +
-      '⚠️ 記憶（システムプロンプトの「現在の記憶」）はそのままである' +
-      '——失われたのは会話の文脈だけである。\n\n---\n\n'
-    );
+    return reopenText + describeContextWindowFoldNotice();
   }
 
   // 載せ直すのは変わった文書の、変わった範囲だけにする: 全文を置くと、載せた塊が会話の履歴として残り、直すたびに写しが増えて resume でも運ばれる（1回の費用が「変えた量」でなく「文書の大きさ」で決まる）ため。
@@ -4400,15 +4347,13 @@ class Clone implements CloneHost {
 
     const { changed, removed } = this.#distillMemory.diffAgainstRecorded(documents);
 
-    const resumeNotice = this.#distillMemory.takeResumedHistoryHasMemory()
-      ? RESUMED_MEMORY_NOTICE
-      : null;
+    const resumed = this.#distillMemory.takeResumedHistoryHasMemory();
 
     // 印は載せ直すものが無くても下ろす（`#memoryIndexRefreshPending`）: 下ろさないと、何ターンも先の無関係な更新に相乗りして載るため。
     const refreshIndex = this.#distillMemory.takeMemoryIndexRefreshPending();
 
     if (!refreshIndex && changed.length === 0 && removed.length === 0) {
-      return resumeNotice === null ? text : [resumeNotice, '', '---', '', text].join('\n');
+      return prependResumedMemoryNotice(resumed, text);
     }
 
     // 控えを差し替える前に、いまの控えを退避する: 順序を逆にすると差分が常に空になり、何も載らないのに「更新された」とだけ言うため。
@@ -4438,40 +4383,17 @@ class Clone implements CloneHost {
       ? []
       : await this.#memoryEditAttribution([...changed.map((doc) => doc.slug), ...removed], since);
 
-    const head = refreshIndex
-      ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
-        '畳まれている**（残っているとは限らない）。だから**いまの索引を丸ごと載せ直す** —— ' +
-        '下に在るのが現在の記憶の全体（要旨と節の目次）であり、システムプロンプト側の' +
-        '「現在の記憶」より新しい。食い違ったら下を採ること。' +
-        '**節の本文はどこにも載っていない——要るなら `memory_section_read` で開くこと。**'
-      : MEMORY_UPDATE_HEAD;
-
-    return [
-      ...(resumeNotice === null ? [] : [resumeNotice, '']),
-      head,
-      ...attribution,
-      // 索引の載せ直しは `seenContent` を渡さない: 渡すと「変わった範囲だけ」に縮み、潰された分を埋められないため。
-      ...(reinjectedIndex !== null
-        ? reinjectedIndex === ''
-          ? []
-          : ['', reinjectedIndex]
-        : changed.length === 0
-          ? []
-          : ['', renderMemoryDocuments(changed, { presentInMemory: documents, seenContent })]),
-      ...(removed.length === 0
-        ? []
-        : [
-            '',
-            // 名前は切らない（抜粋にしない）: 省略に落ちた名前の文書は、システムプロンプトに記載が残るので「まだ在る」と読まれるため。
-            // 長さの上限も置かない: 件数は消えた文書の数で有限（slug は 128 文字まで）で、上限を置くと省略の語が要り、同じ誤読を作るため
-            `削除された記憶: ${removed.map((slug) => `${slug}.md`).join(' / ')}`,
-          ]),
-      ...(documents.length === 0 ? ['', '（記憶は空になった）'] : []),
-      '',
-      '---',
-      '',
+    return composeFreshMemoryInput({
+      resumed,
+      refreshIndex,
+      attribution,
+      reinjectedIndex,
+      documents,
+      changed,
+      removed,
+      seenContent,
       text,
-    ].join('\n');
+    });
   }
 
   // 日誌が読めなければ1行も返さない: 書き手を推測で名指しすると、人間の書き込みでないものを人間のものと言うため。
@@ -4484,34 +4406,7 @@ class Clone implements CloneHost {
     } catch {
       return [];
     }
-    const human = new Set<string>();
-    const self = new Set<string>();
-    for (const row of rows) {
-      if (row.type !== 'memory_update') continue;
-      if (row.cause === 'human' && row.action !== 'write_failed') human.add(row.slug);
-      else if (row.cause === 'clone' || row.cause === 'distill') self.add(row.slug);
-    }
-    const humanSlugs = slugs.filter((slug) => human.has(slug));
-    const untracedSlugs =
-      rows.length === limit ? [] : slugs.filter((slug) => !human.has(slug) && !self.has(slug));
-    const list = (names: readonly string[]): string =>
-      excerptLine(names.join(' / '), CLONE_ID_LIST_EXCERPT);
-    return [
-      ...(humanSlugs.length === 0
-        ? []
-        : [
-            `**人間が書き換えた記憶: ${list(humanSlugs)}**（日誌に人間の書き込みとして残っている）。` +
-              '人間が直したのは、あなたの理解のどこかが人間の考えとずれていたからである。' +
-              '何が変わったかを読み、同じずれが他の記憶や進行中の判断・委譲に残っていないかを確かめること。' +
-              'なぜ直したのかが読み取れなければ、人間に聞いてよい。',
-          ]),
-      ...(untracedSlugs.length === 0
-        ? []
-        : [
-            `日誌に書き手が残っていない変更: ${list(untracedSlugs)}` +
-              '（人間が記憶のファイルを直接開いて直した可能性がある。あなた自身の更新なら日誌に残っている）。',
-          ]),
-    ];
+    return describeMemoryEditAttribution(rows, slugs, limit);
   }
 
   // 日誌が読めなければ1行も出さない: 読めない理由を「人間の操作は無い」と読ませないため（ターンも止めない）。
@@ -4553,38 +4448,7 @@ class Clone implements CloneHost {
     const readIds = new Set(marked.map((row) => row.id));
     const fresh = marked.filter((row) => !carriedIds.has(row.id));
     if (fresh.length === 0) return { lines: [], readIds };
-    return { lines: this.#renderHumanActionSection(fresh, rows.length), readIds };
-  }
-
-  #renderHumanActionSection(
-    marked: readonly { decision: string; action: HumanAction }[],
-    rowCount: number,
-  ): string[] {
-    // 新しい順で返るので、新しい側を残して古い順に並べ直す
-    const shown = marked.slice(0, HUMAN_ACTION_SHOWN).reverse();
-    const hidden = marked.length - shown.length;
-    const windowFull = rowCount === HUMAN_ACTION_WINDOW;
-    return [
-      '[system] 前回のターンの後に、人間が自分の手で直したことがある（日誌の decision に、人間が API から直接した操作の印が残っている）。',
-      ...shown.map(
-        ({ decision, action }) =>
-          `- ${HUMAN_ACTION_LABEL[action.kind]}: ${action.target}` +
-          `（${excerptLine(decision, HUMAN_ACTION_DECISION_EXCERPT)}）` +
-          ` 経路: ${describeAnsweredVia(action.via)}`,
-      ),
-      ...(hidden > 0
-        ? [`- ほか ${hidden} 件（\`journal_read\` の \`types: ["decision"]\` で読める）`]
-        : []),
-      ...(windowFull
-        ? ['（日誌の直近の窓だけを見た。窓の外にもあるかもしれない。これで全部とは限らない）']
-        : []),
-      '人間が自分の手で直したのは、あなたの判断か進め方のどこかが人間の考えとずれていたからである。' +
-        '何が変わったかを確かめ、そこから読み取れる基準があれば記憶に書くこと。' +
-        '人間が取り消したものを、同じ形でやり直さないこと。' +
-        'なぜそうしたのかが読み取れなければ、人間に聞いてよい。' +
-        '経路は監査の記録であって、人間がした証拠ではない' +
-        '（持ち主のトークンや認証を切った構成では、あなたの Bash からも同じ口を叩ける）。',
-    ];
+    return { lines: renderHumanActionSection(fresh, rows.length), readIds };
   }
 
   #pushInput(text: string, images: readonly AgentInputImage[] = []): void {

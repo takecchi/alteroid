@@ -18,7 +18,7 @@ import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js'
 import { inboxBacklogDedupeKey } from './inbox-backlog.js';
 import type { Inbox } from './inbox.js';
 import type { InboxEvent } from './schema.js';
-import { readAtLabel } from './situation.js';
+import { describeMergedBatchTruncation } from './clone-turn-input-text.js';
 
 // 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
 const MERGED_BATCH_SIZE_LIMIT = 50;
@@ -199,32 +199,17 @@ export class CloneBatchMerge {
     if (remainingHead > 0) {
       this.#ports.notices.set(
         'mergedBatchTruncation',
-        this.mergedBatchTruncationNoticeFor({
-          limit,
-          batchSize: taken,
-          remainingHead,
-        }),
+        describeMergedBatchTruncation(
+          {
+            limit,
+            batchSize: taken,
+            remainingHead,
+          },
+          Date.now(),
+        ),
       );
     }
     return rest;
-  }
-
-  // いつ数えた値かを名乗る: この節は `#pushInput` で会話履歴に溜まり、時刻が無いと後から読み返す側が「あと何件残っている」をどのターンのものか判定できないため
-  mergedBatchTruncationNoticeFor(truncation: {
-    readonly limit: number;
-    readonly batchSize: number;
-    readonly remainingHead: number;
-  }): string {
-    const { limit, batchSize, remainingHead } = truncation;
-    return [
-      `[system] **このターンへ束ねる合図は、上限（${String(limit)} 件）で切った束である` +
-        `（この束は ${String(batchSize)} 件。${readAtLabel(Date.now())} 時点）。**` +
-        `同じ束に入るはずの合図が、待ち行列の先頭にあと ${String(remainingHead)} 件連続して残っている。`,
-      '**1件も失われていない** —— 上限で止めただけで、外れた分は次のターンで同じ形でまた束ね直される。',
-      '',
-      '---',
-      '',
-    ].join('\n');
   }
 
   // `#heldForUsage` は外したままにする: 再試行は「新しい合図1件につき高々1回」で、束ねるとその1回が何件ぶんの仕事かが変わるため
