@@ -1081,7 +1081,7 @@ function appendExternalsSection(
 
     sections.push('', SOURCE_TALLY_HEADING);
     const bySourceRows = externalSourceTally.rows;
-    const shownBySourceRows = bySourceRows.slice(0, MAX_ITEMS);
+    const shownBySourceRows = bySourceRows.slice(0, MAX_ITEMS + 1);
     for (const row of shownBySourceRows) {
       sections.push(`- ${row.source}: ${row.count} 件`);
     }
