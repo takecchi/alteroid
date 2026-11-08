@@ -120,6 +120,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'clone-redelivery-text.ts',
     'clone-human-answer-prompt.ts',
     'clone-turn-input-text.ts',
+    'clone-turn-notices.ts',
     'tools.ts',
     'manager.ts',
   ])('%s に、消した道具の名前が残っていない', (file) => {

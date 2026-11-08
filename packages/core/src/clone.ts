@@ -71,7 +71,6 @@ import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-noti
 import { excerpt } from './excerpt.js';
 import {
   EXTERNAL_JOURNAL_LIMIT,
-  firstReportPerManager,
   hasReportFiles,
   humanConversationHeader,
   humanTurnText,
@@ -135,12 +134,9 @@ import {
 } from './daemon-self-notice.js';
 import {
   inboxCollapseKey,
-  INBOX_BACKLOG_LOUD_THRESHOLD,
   isHumanOriginated,
   removeInboxEventsAndStopDelivery,
-  summarizeInboxBacklog,
 } from './inbox-backlog.js';
-import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 export { isHumanOriginated };
 import {
   inboxEventShape,
@@ -195,21 +191,12 @@ import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extra
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
-import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
-import { describeValidity, inboxEventValidity } from './inbox-validity.js';
-import {
-  describeQuotaRecovery,
-  foldableQuotaStopTargetsOf,
-  quotaFoldNoticeOf,
-  quotaStopTargetsOf,
-  recoveredNoticeFoldOf,
-  type QuotaRecoverySummary,
-} from './quota-recovery-notice.js';
+import { describeSituationUnavailable, readAtLabel } from './situation.js';
 import { autoCloseRepliedTasks, opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
 import type { TurnReplyVia } from './task-auto-done.js';
 import { isTaskClosed } from './task.js';
-import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
-import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
+import type { AttachmentRef, TurnFailureKind } from './schema.js';
+import { DEFAULT_TOKEN_COOLDOWN_MS } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
 import {
@@ -264,6 +251,11 @@ import {
 } from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
+import {
+  CloneTurnNotices,
+  RECOVERED_FOLD_KINDS,
+  type RecoveredFoldKind,
+} from './clone-turn-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import type { TurnAttachmentLimits } from './attachment.js';
@@ -496,10 +488,6 @@ const SCHEDULE_STORE_RETRY_MS = 200;
 
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
-
-// 戻っていた担当の知らせを畳む2組（`#recoveredFoldNoticeFor`・`#foldRecoveredNotice`）。`#pump` はこの順に見る: 枠の知らせ（#4499）が先、枠以外の知らせ（#5048）が後
-const RECOVERED_FOLD_KINDS = ['quota', 'recovered'] as const;
-type RecoveredFoldKind = (typeof RECOVERED_FOLD_KINDS)[number];
 
 // 65,535 を上げない: `IN (...)` のバインドパラメータ上限で、`removeMany` の DELETE に条件を足すなら下げること
 const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
@@ -952,6 +940,17 @@ class Clone implements CloneHost {
     redeliveryState: () => this.#delivery.redeliveryState,
     heldForUsage: this.#heldForUsage,
     notices: this.#notices,
+  });
+
+  /**
+   * ターン入口の断り書き 4 本（`clone-turn-notices.ts`。いまの全体の節・前提の断り・枠の回復の1節・戻っていた担当の知らせの畳みの判定）。状態は書かない。
+   * field 初期化で作る: 口は呼ばれるまで読まない関数だけで組む（`#managers`・`#stores` は constructor の中で入る）。
+   * 呼び元（`#prepareTurn`・`#pump`）の `await`・`.catch` は元のまま: 協力者のメソッドは `async` のまま移し、外側を包み直さない。
+   */
+  readonly #turnNotices = new CloneTurnNotices({
+    managers: () => this.#managers,
+    stores: () => this.#stores,
+    queuedInMemory: () => this.#queuedInMemoryCount(),
   });
 
   readonly #distillMemory = new CloneDistillMemoryState();
@@ -1851,7 +1850,7 @@ class Clone implements CloneHost {
       // まとめ読みより前に1件ずつ見る: 束にしてから見ると、戻っていない担当の知らせ1件のために、戻った担当の知らせまで一緒に届くため（#4499）
       // 枠の短絡より後ろに置く: クローン自身が枠で止まっている間は保持し、解除されて配る時点の状態で判定するため
       for (const kind of RECOVERED_FOLD_KINDS) {
-        const folded = await this.#recoveredFoldNoticeFor(event, kind);
+        const folded = await this.#turnNotices.recoveredFoldFor(event, kind);
         if (folded !== null) {
           await this.#foldRecoveredNotice(event, folded, kind);
           await this.#settleInboxEvent(event, false);
@@ -1955,20 +1954,20 @@ class Clone implements CloneHost {
     this.#notices.set(
       'situation',
       await timer
-        .time('prepare.situation', () => this.#situationNoticeFor(batch))
+        .time('prepare.situation', () => this.#turnNotices.situationFor(batch))
         .catch((error: unknown) => {
           noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
           return describeSituationUnavailable(error);
         }),
     );
     const validityNotice = await timer.time('prepare.validity', () =>
-      this.#validityNoticeFor(batch),
+      this.#turnNotices.validityFor(batch),
     );
     // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
     // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
     this.#notices.set(
       'validity',
-      (await timer.time('prepare.quotaRecovery', () => this.#quotaRecoveryNoticeFor(batch))) +
+      (await timer.time('prepare.quotaRecovery', () => this.#turnNotices.quotaRecoveryFor(batch))) +
         validityNotice,
     );
     if (validityNotice !== '' && event.type === 'manager_message') {
@@ -2803,150 +2802,6 @@ class Clone implements CloneHost {
   // 系統3のスイッチが無効なら報告の本文を切らない（#5466 の前の形）
   #reportBodyLimit(): number {
     return this.#tokenSavingExcerpt ? MANAGER_REPORT_BODY_LIMIT : Number.POSITIVE_INFINITY;
-  }
-
-  // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
-  // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
-  // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
-  async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
-    const event = events[0];
-    if (event === undefined) return '';
-    if (event.type === 'distill') return '';
-    try {
-      const managers = await this.#managers.list();
-      const fleet = await this.#managers.runners();
-      // 読めなくても状況ごと落とさない: 鍵だけ `undefined` で渡して「読めなかった」と書かせる。`catch` を外まで広げると、鍵の読みが落ちた回に委譲の本数も器の台数も消えるため
-      const pool = await Promise.all([
-        this.#stores.tokens.list().then(
-          (rows) => rows.map(toAgentTokenView),
-          () => undefined,
-        ),
-        this.#stores.tokens.readActive().then(
-          (active) => active,
-          () => undefined,
-        ),
-        // 受信箱の滞留も個別に catch する: 委譲・器・鍵の数え上げを道連れにしないため。安い `pending()` を使う: 内訳まで返す `peekPending()` は毎ターン呼ぶ口ではないため
-        // このターンが処理している `events` 自身を引く: 消す `#forget()` はこの後（`#handle` の完了後）にしか呼ばれず、素で読むと処理中の1件が毎ターン「滞留」に数えられ、詰まっているときだけ膨らむという節の存在理由が壊れるため
-        // `oldestAt` は補正しない: `events` の `at` は「いま」に近く、本物の滞留の方が古いため。件数が0まで落ちた回は `oldestAt` ごと消す
-        this.#stores.inbox.pending().then(
-          async (
-            backlog,
-          ): Promise<{
-            count: number;
-            oldestAt?: string;
-            typeBreakdown?: InboxBacklogBreakdown;
-          }> => {
-            const count = Math.max(0, backlog.count - events.length);
-            if (count === 0) return { count: 0 };
-            // `oldestAt: backlog.oldestAt` と素に書かない: 値が `undefined` でもキー自体が生えるため
-            const base = {
-              count,
-              ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
-            };
-            // 閾値を超えた回だけ重い `peekPending()` を呼ぶ: 費用は「詰まっている」と分かった回にしか掛けないため（`clone-situation-notice.test.ts` が固定する）
-            if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
-            try {
-              const peek = await this.#stores.inbox.peekPending();
-              return {
-                ...base,
-                typeBreakdown: summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
-              };
-            } catch {
-              // 内訳が読めなくても件数は取れているので base のまま返す: 件数の行そのものを消さないため
-              return base;
-            }
-          },
-          (): 'unreadable' => 'unreadable',
-        ),
-      ]);
-      return describeSituation({
-        managers,
-        runners: fleet.runners,
-        tokens: pool[0],
-        active: pool[1],
-        at: Date.now(),
-        backlog: pool[2],
-        // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
-        // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
-        queuedInMemory: this.#queuedInMemoryCount(),
-      });
-    } catch (error) {
-      return describeSituationUnavailable(error);
-    }
-  }
-
-  // `list()` の失敗を握り潰さず呼び出し側（`#pump`）へ返す: 握り潰すと呼び出し側の `.catch()` を外しても何も赤くならないため
-  // 文言は「いまは」でなく「この断り書きを組んだ時点では」と言う: `#situationNoticeFor` とは別々の `list()` 呼び出しで、まれに食い違うため
-  // 担当ごとに最初の報告で見る: 起点の違う合図の束（`CloneBatchMerge.mixedSignalBatch`）には別々の担当の報告が混ざり、先頭だけ見ると他の担当の前提の変化が落ちるため。担当が1人の束は今までどおり先頭1件で見る
-  async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
-    // `kind` まで絞る: 質問・許可確認は `#situationNoticeFor` 側で見ており、絞らないと `list()` を1本余計に引くため
-    const firsts = firstReportPerManager(events);
-    if (firsts.length === 0) return '';
-
-    // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
-    let managers: readonly ManagerSummary[] | { readonly detail: string };
-    try {
-      managers = await this.#managers.list();
-    } catch (error) {
-      managers = { detail: reasonOf(error) };
-    }
-
-    return firsts
-      .map((event) => {
-        let now: { readonly status: JobStatus } | { readonly detail: string };
-        if ('detail' in managers) {
-          now = managers;
-        } else {
-          const found = managers.find((manager) => manager.managerId === event.managerId);
-          now =
-            found === undefined
-              ? { detail: `${event.managerId} が一覧に居ない` }
-              : { status: found.status };
-        }
-        return describeValidity(inboxEventValidity(event, now), event.managerId);
-      })
-      .join('');
-  }
-
-  // 積む側（デーモン）で畳まず、配る直前にここで見る: クローン自身が枠で止まっていた間は保持されて遅れて配られるので、積んだ時点の状態はもう古いため（#4497）
-  async #quotaRecoveryNoticeFor(events: InboxEvent[]): Promise<string> {
-    const targets = quotaStopTargetsOf(events);
-    if (targets === undefined) return '';
-    // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
-    let managers: readonly QuotaRecoverySummary[] | { readonly detail: string };
-    try {
-      managers = await this.#managers.list();
-    } catch (error) {
-      managers = { detail: reasonOf(error) };
-    }
-    return describeQuotaRecovery(targets, managers, Date.now());
-  }
-
-  // 戻っていた担当の知らせを畳んでよいか（畳むなら日誌へ写す断り書き。畳まないなら `null`）。枠の知らせ（`quota`）とそれ以外（`recovered`）の2組を1本にした。違いは入口の印と判定の関数だけ:
-  //   - quota: 印は `quotaSessionWindow` 等（`foldableQuotaStopTargetsOf`）、判定は `quotaFoldNoticeOf`。
-  //   - recovered: 印は `foldWhenBack`（#5048）、判定は `recoveredNoticeFoldOf`（`movedFromGeneration`・`attached` はこちらだけが見る）。
-  // 印の無い知らせでは一覧を引かない。一覧を引けなければ畳まない（`null`）: 確かめられないまま消すより、届けて `#quotaRecoveryNoticeFor` の「確かめられなかった」を読ませる側へ倒すため
-  async #recoveredFoldNoticeFor(
-    event: InboxEvent,
-    kind: RecoveredFoldKind,
-  ): Promise<string | null> {
-    let decide: ((managers: readonly QuotaRecoverySummary[]) => string | null) | null = null;
-    if (kind === 'quota') {
-      const targets = foldableQuotaStopTargetsOf(event);
-      if (targets !== undefined) {
-        decide = (managers) => quotaFoldNoticeOf(targets, managers, Date.now());
-      }
-    } else if (event.type === 'manager_message' && event.foldWhenBack !== undefined) {
-      decide = (managers) => recoveredNoticeFoldOf(event, managers, Date.now());
-    }
-    if (decide === null) return null;
-    let managers: readonly QuotaRecoverySummary[];
-    try {
-      managers = await this.#managers.list();
-    } catch {
-      return null;
-    }
-    return decide(managers);
   }
 
   // 書き込みの完了を待ってから消す: 待たないと短いターンでは消し込みが書き込みを追い越し、消したはずの合図が後から書かれて起動のたびに永久に配り直されるため
@@ -4654,7 +4509,7 @@ class Clone implements CloneHost {
       memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // 渡さないと `inbox_remove_many` は1件も消さずに断る
       dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
-      // `#situationNoticeFor` と同じ `#queuedInMemoryCount()` を経由する: 式を2箇所に書き写さない
+      // `CloneTurnNotices.situationFor` と同じ `#queuedInMemoryCount()` を経由する: 式を2箇所に書き写さない
       queuedInMemory: () => this.#queuedInMemoryCount(),
       // 写しの置き場はクローンの cwd の中にする: `Read` が追加の許可なしで開ける
       ...this.#attachmentCopiesDirEntry(),
