@@ -159,7 +159,6 @@ export class CloneTaskIntake {
     try {
       taskList = await this.#stores.tasks.list();
     } catch (error) {
-      noteDroppedRecord('待ち行列の読み出し', inboxEventShape(event), error);
       return {
         head: [
           `[system] **待ち行列を読めなかった（${readAtLabel(Date.now())} に試みた材料。理由: ${reasonOf(error)}）。** ` +
