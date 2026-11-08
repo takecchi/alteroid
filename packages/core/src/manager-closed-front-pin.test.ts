@@ -7,7 +7,8 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 // `Pool#handleEvent` の `case 'closed'` のうち、状態を動かさずに `#retire` で畳む 2 本
-// （`lost` 確定後の `closed` ＝ `#closeAfterLost`、`failed` 確定済みへの重複 `closed(failed)` ＝ `#closeDuplicateFailed`）を、
+// （`lost` 確定後の `closed` ＝ `closeAfterLost`、`failed` 確定済みへの重複 `closed(failed)` ＝ `closeDuplicateFailed`。
+// 切り出し前は `Pool` の `#closeAfterLost`・`#closeDuplicateFailed`、いまは `manager-closed-front.ts`）を、
 // 外から見える結果（日誌の全文と `with/role`・台帳の行・受信箱の知らせ・書き込みと知らせの順・像が畳まれたか・microtask の周回数）だけで縛る。
 // 期待の文字列は、切り出し前の作りの出力から生成して目で読んで写したもの（仕様を先に書いたものではない）。
 // 実時間では待たない: 出来事を 1 件ずつ流し、そのたびにマイクロタスクを流しきる。時計は注入する。
@@ -160,7 +161,7 @@ const LATE_DONE_NOTICE = [
   'closed の reason: 遅れて来た完了',
 ].join('\n');
 
-describe('lost 確定後の closed（#closeAfterLost）', () => {
+describe('lost 確定後の closed（closeAfterLost）', () => {
   it('closed(done) 1 回目: 日誌・知らせの全文、印の永続 → 知らせの順、status は lost のまま、像は畳まれる', async () => {
     const s = await open({ status: 'lost' });
 
@@ -228,7 +229,7 @@ describe('lost 確定後の closed（#closeAfterLost）', () => {
   );
 });
 
-describe('failed 確定済みへの重複 closed(failed)（#closeDuplicateFailed）', () => {
+describe('failed 確定済みへの重複 closed(failed)（closeDuplicateFailed）', () => {
   it('日誌の全文だけを書き、知らせも台帳の書き込みも無く、status は failed のまま、像は畳まれる', async () => {
     const s = await open({ status: 'failed' });
 

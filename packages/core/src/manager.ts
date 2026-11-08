@@ -145,6 +145,7 @@ import type {
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import { isManagerInFlight } from './job-status-running.js';
+import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import { ManagerSessionReceiver } from './manager-session.js';
@@ -1822,6 +1823,8 @@ class Pool implements ManagerPool {
   /** 担当の `parked_peers_closed` を、知らせか台帳の預けへ回す（`#handleEvent` の `case` が `handle` を直に返す）。 */
   readonly #parkedPeers: ManagerParkedPeersReceiver;
   readonly #waiting: ManagerWaitingReceiver;
+  /** `closed` の前段のうち、`lost` 確定後の `closed` と重複 `closed(failed)` を日誌へ書いて像を畳む（`#closeWithoutTransition` が `Promise` を直に返す）。 */
+  readonly #closedFront: ManagerClosedFrontReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -2176,6 +2179,13 @@ class Pool implements ManagerPool {
       emit: (managerId, kind, text, requestId, markup) =>
         this.#emit(managerId, kind, text, requestId, markup),
       nowIso: () => this.#nowIso(),
+    });
+    this.#closedFront = new ManagerClosedFrontReceiver({
+      nowIso: () => this.#nowIso(),
+      journalExchange: this.#journalExchange.bind(this),
+      persist: (record) => this.#persist(record),
+      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
+      retire: (managerId) => this.#retire(managerId),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -6715,67 +6725,16 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     event: Extract<RunnerEvent, { type: 'closed' }>,
   ): Promise<void> | false {
-    if (record.job.status === 'lost') return this.#closeAfterLost(record, event);
+    if (record.job.status === 'lost') return this.#closedFront.closeAfterLost(record, event);
     if (
       record.job.status === 'failed' &&
       event.status === 'failed' &&
       !this.#resuming.has(event.managerId)
     ) {
-      return this.#closeDuplicateFailed(event);
+      return this.#closedFront.closeDuplicateFailed(event);
     }
     if (event.selfFenced === true) return this.#closeSelfFenced(record, event);
     return false;
-  }
-
-  // `closed` の段2-1: `lost` 確定後に届いた `closed`。status は動かさず、`done` のときだけクローンへ1回知らせる。
-  async #closeAfterLost(
-    record: ManagerRecord,
-    event: Extract<RunnerEvent, { type: 'closed' }>,
-  ): Promise<void> {
-    // `lost` 確定後に届いた `closed` で status を動かさない（`stopped` の後と同じ）: `#load()` が像を作り直し、下の代入が `lost` を `done` へ書き換えてしまう。
-    // `done` のときだけクローンへ1回知らせる: `lost` は成果を誰も確かめていない状態で、成果が出ている可能性を人間に見せる必要がある。`failed` / `lost` は新しい材料が無いので日誌だけ。
-    // 「1回だけ」は `Job.lateDoneNotifiedAt`（`closed` に冪等キーが無く、台帳なので再起動をまたぐ）で持ち、印を先に永続してから出す: 二重に出るより、落ちたとき日誌から辿れるほうを採る。
-    // `selfFenced` の枝より前に置く（`lost` の委譲は引き取り直しの梯子に載せない）。
-    const notifyDone = event.status === 'done' && record.job.lateDoneNotifiedAt === undefined;
-    const notice = notifyDone
-      ? [
-          `この委譲 ${event.managerId} は \`lost\` と確定していたが、後から runner が \`closed\`（status=done）を届けた。`,
-          '台帳の状態は `lost` のまま変えていない。',
-          '**成果が出ている可能性がある** — `lost` は成果を誰も確かめていない状態なので、' +
-            '成果が実際に出ているか（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。' +
-            '確かめるまで「終わった」とも「終わっていない」とも言わない。',
-          `closed の reason: ${event.reason}`,
-        ].join('\n')
-      : undefined;
-    await this.#journalExchange(
-      'inbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （lost 確定済みのため status は動かさない）` +
-        `runner 側の終了イベント（status=${event.status}）を受け取った: ${event.reason}` +
-        (notice !== undefined
-          ? `。done なのでクローンへ知らせる: ${notice}`
-          : event.status === 'done'
-            ? '。done は既に知らせてあるので重ねて知らせない'
-            : '。受信箱へは出さない'),
-    );
-    if (notice !== undefined) {
-      record.job.lateDoneNotifiedAt = this.#nowIso();
-      await this.#persist(record);
-      this.#emit(event.managerId, 'report', notice);
-    }
-    this.#retire(event.managerId);
-  }
-
-  // `closed` の段2-2: `failed` 確定済みへ再度届いた `closed(failed)`（SSE の再送）。日誌にだけ残して像を外す。
-  async #closeDuplicateFailed(event: Extract<RunnerEvent, { type: 'closed' }>): Promise<void> {
-    // `failed` 確定済みへ同じ `closed(failed)` が再度届いても日誌にだけ残す: SSE の再接続の配り直しで、日誌の失敗行・`closed_failed` の知らせ（合流窓で「×2」）・`noteManagerFailed`（器の失敗が二重に加算され器が余計に沈む）が重なる。`closed` に冪等キーは足さない（runner とのやり取りの形が変わる）ので、デーモンの中だけで直す。
-    // resume が飛んでいる最中は重複と読まない: `send()` は resume の後で `running` を書くので台帳はまだ `failed` で、その窓の `closed(failed)` は開き直した新しいセッションがすぐ落ちた知らせでありうる。`done` / `lost` はここで扱わない。
-    await this.#journalExchange(
-      'inbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （failed 確定済みのため status は動かさず、` +
-        `知らせも器の失敗の計上も重ねない）runner 側の終了イベント（status=failed）を受け取った: ` +
-        event.reason,
-    );
-    this.#retire(event.managerId);
   }
 
   // `closed` の段2-3: 自己失効の `closed`。状態は動かさず貸し出しだけ返し、引き取りを挑み直す。

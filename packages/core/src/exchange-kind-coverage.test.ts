@@ -421,8 +421,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     recordUsage: 'failure,gauge',
   },
   'manager.ts': {
-    '#closeAfterLost': 'decision',
-    '#closeDuplicateFailed': 'decision',
     '#closeSelfFenced': 'recovery',
     '#deliverReportFromUnreplacedSession': 'reply',
     '#dropStaleSessionEvent': 'decision',
@@ -446,6 +444,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#settleResumedReattach': 'recovery',
     '#startAfterSupersedeCheck': 'reply',
     abort: 'reply',
+  },
+  // `closed` の前段のうち、`lost` 確定後の `closed` と重複 `closed(failed)` を日誌へ書いて像を畳む協力者（旧 `Pool#closeAfterLost` と `Pool#closeDuplicateFailed`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
+  'manager-closed-front.ts': {
+    closeAfterLost: 'decision',
+    closeDuplicateFailed: 'decision',
   },
   // 担当の拒否を数えて日誌・受信箱へ回す協力者（旧 `Pool#handlePermissionDenied` と `Pool#deniedOf`）。同じ検査をここへ移した。
   'manager-denial.ts': {
@@ -620,6 +623,7 @@ const EXCHANGE_SOURCES = [
   'clone-usage-ledger.ts',
   'clone.ts',
   'denial-renotify.ts',
+  'manager-closed-front.ts',
   'manager-denial.ts',
   'manager-session.ts',
   'manager-waiting.ts',
