@@ -101,7 +101,14 @@ import { CloneDenialJournal } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
 import { CloneApprovalAnswers } from './clone-approval-answers.js';
 import { buildHumanAnswerPrompt } from './clone-human-answer-prompt.js';
-import { redeliveredLiveHeadline, redeliveryNoticeFor } from './clone-redelivery-text.js';
+import {
+  describeFailedTimerRetryClause,
+  describeRestoreUnreadPassEnd,
+  describeRestoreUnreadPassStart,
+  describeStaleRedeliveryDropped,
+  redeliveredLiveHeadline,
+  redeliveryNoticeFor,
+} from './clone-redelivery-text.js';
 import { CloneGraves } from './clone-graves.js';
 import { CloneToolUseJournal } from './clone-tool-use-journal.js';
 import {
@@ -2262,20 +2269,7 @@ class Clone implements CloneHost {
     await this.#journalIncomingBody(record.event);
     await this.#journalSelf(
       'outbound',
-      `${EXCHANGE_KIND_THINNING_PREFIX}未読のまま残っていた合図を配り直したが（${record.deliveries}回目の配達` +
-        (context.alone
-          ? ''
-          : `＝器が入れ替わった回数。同じ起動で一緒に拾い直した未読が ${this.#restoredCohort} 件あり、` +
-            `配達回数は残っている未読の全行で一緒に進む — この合図の処理が落ちた回数ではない`) +
-        `、${record.at} に受け取ったもの）、` +
-        (context.completedRound === true
-          ? `その回は既に完了していた（定期の依頼の \`lastScheduledRunAt\` 以前）ので` +
-            `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
-            `直前の行に残してある。完了した回を二度走らせないための畳みで、まだ走っていない回は畳まない）: `
-          : `もう効く先の無い種類だったので` +
-            `ターンを起こさずに消した（モデルへは1文字も渡していない。本文は` +
-            `直前の行に残してある。まだ要る状況なら、この種類の合図は作り直される）: `) +
-        `${inboxEventShape(record.event)}`,
+      `${EXCHANGE_KIND_THINNING_PREFIX}${describeStaleRedeliveryDropped(record, context, this.#restoredCohort)}`,
     );
   }
 
@@ -3266,7 +3260,7 @@ class Clone implements CloneHost {
     if (total <= 0) return;
     await this.#journalSelf(
       'outbound',
-      `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを始める（claimPending が返した総数 ${total} 件）`,
+      `${EXCHANGE_KIND_GAUGE_PREFIX}${describeRestoreUnreadPassStart(total)}`,
     );
   }
 
@@ -3279,19 +3273,10 @@ class Clone implements CloneHost {
   ): Promise<void> {
     const total = decided.length;
     if (total <= 0) return;
-    const staleCount = decided
-      .slice(0, processed)
-      .filter((entry) => entry.verdict === 'stale').length;
-    const liveCount = processed - staleCount;
     // 接頭辞の参照は `#journal` 呼び出しの `text:` に直接書く: `exchange-kind-coverage.test.ts` がソースを走査して `EXCHANGE_KIND_*_PREFIX` の定数名を文字として探すため、変数経由だとこの歯を素通りする
     await this.#journalSelf(
       'outbound',
-      context.interrupted
-        ? `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しを中断した（#stopped または #inbox.closed。` +
-            `総数 ${total} 件のうち ${processed} 件を処理した＝内訳 stale ${staleCount} 件・` +
-            `live ${liveCount} 件。残り ${total - processed} 件は次の起動で拾い直す）`
-        : `${EXCHANGE_KIND_GAUGE_PREFIX}未読の拾い直しが終わった（総数 ${total} 件のうち ${processed} 件を` +
-            `処理した＝内訳 stale ${staleCount} 件・live ${liveCount} 件）`,
+      `${EXCHANGE_KIND_GAUGE_PREFIX}${describeRestoreUnreadPassEnd(decided, processed, context)}`,
     );
   }
 
@@ -3899,11 +3884,10 @@ class Clone implements CloneHost {
                 Math.min(attempts, FAILED_TURN_RETRY_DELAYS_MS.length - 1)
               ];
         // 次にいつ配り直すかを書く（#6139）: 再試行は回数で打ち切らないので、読み手が「止まった」のか「待っている」のかを取り違えないため
-        const retryClause =
-          retryDelayMs === undefined
-            ? '手で起こした回なので再試行せず、次の起動か次の定刻で配り直される'
-            : `${String(retryDelayMs / 60_000)} 分後に配り直す。成功するまで最長 ` +
-              `${String(FAILED_TURN_RETRY_DELAYS_MS.at(-1)! / 60_000)} 分ごとに配り直し続ける`;
+        const retryClause = describeFailedTimerRetryClause(
+          retryDelayMs,
+          FAILED_TURN_RETRY_DELAYS_MS.at(-1)!,
+        );
         await this.#journalSelf(
           'outbound',
           `${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 ${event.kind}（${event.at}）のターンが失敗で終わった` +
