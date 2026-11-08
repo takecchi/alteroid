@@ -189,7 +189,6 @@ export class CloneBatchMerge {
     const matchesRule = (queued: InboxEvent): boolean =>
       predicate(queued) && this.mergeable(queued);
     const rest = this.#ports.inbox().drainWhile((queued) => {
-      if (taken >= limit) return false;
       const matches = matchesRule(queued);
       if (matches) taken += 1;
       return matches;
