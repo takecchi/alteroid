@@ -1605,6 +1605,215 @@ describe('B1 要約の全文の固定 — 件数の形（counts。定期の依�
   });
 });
 
+describe('B1 要約の全文の固定 — 長い本文の切り詰め・滞留の行・窓の境目', () => {
+  const long = (label: string): string => `${label}${'あ'.repeat(300)}`;
+
+  it('各欄の長い本文を切る（依頼・報告・失敗の code/via・決めたこと・根拠・問い・回答・記憶・外部イベント・継続中の依頼・回答待ち。全文）', async () => {
+    const stores = createMemoryStores();
+    await putSchedule(stores, 'long-kind');
+    await stores.schedules.put({
+      kind: 'long-schedule',
+      spec: { type: 'daily', at: '09:00' },
+      request: long('継続中の依頼'),
+      createdAt: ago(5 * DAY),
+      updatedAt: ago(5 * DAY),
+    });
+    await putJob(stores, 'mgr-long', 'failed', {
+      request: long('依頼'),
+      lastReport: long('報告'),
+      lastFailure: { code: `code-${'c'.repeat(100)}`, via: `via-${'v'.repeat(100)}`, at: ago(MIN) },
+    });
+    await stores.jobs.putApproval({
+      id: 'ap-long',
+      createdAt: ago(2 * MIN),
+      question: long('確認'),
+    });
+    await journalAgo(stores, 3 * MIN, {
+      type: 'decision',
+      decision: long('決めたこと'),
+      grounds: long('根拠'),
+    });
+    await journalAgo(stores, 4 * MIN, {
+      type: 'escalation',
+      question: long('聞いたこと'),
+      approvalId: 'esc-long',
+      answer: long('答え'),
+    });
+    await journalAgo(stores, 5 * MIN, {
+      type: 'escalation',
+      question: long('取り下げた問い'),
+      approvalId: 'esc-long-withdrawn',
+      withdrawnAt: ago(5 * MIN),
+      withdrawnReason: long('理由'),
+    });
+    await journalAgo(stores, 6 * MIN, {
+      type: 'memory_update',
+      slug: 'values',
+      cause: 'clone',
+      action: 'write',
+      bytesBefore: 1,
+      bytesAfter: 2,
+      summary: long('記憶'),
+    });
+    await journalAgo(stores, 7 * MIN, {
+      type: 'external_event',
+      source: 'ci',
+      summary: long('外部'),
+    });
+    expect(await digestOf(stores)).toMatchInlineSnapshot(`
+      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
+
+      - 件数: 人間の発言 0 / 回答待ち 1 / エスカレーション 2 / 委譲（この期間に動いた）1 本 / 自分で決めたこと 1 / 記憶の更新 1 / 外部イベント（日誌の行数）1 / 委譲側のツール実行 0 / 自分の手（委譲せず使った道具）0 / 継続中の依頼 2
+
+      ## 待ち行列の先頭
+      - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
+
+      ## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）
+      - long-kind（毎日 09:00（ローカル時刻））long-kind の依頼
+        前回動いた時刻: （まだ一度も動いていない）
+      - long-schedule（毎日 09:00（ローカル時刻））継続中の依頼ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（106 文字省略。全 306 文字）
+        前回動いた時刻: （まだ一度も動いていない）
+
+      ## マネージャー（走行中・返事待ちから先に出す）
+      - mgr-long [failed/セッション不明] 依頼ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（102 文字省略。全 302 文字）
+        直近の報告: 報告ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（102 文字省略。全 302 文字）
+        ⚠ 直近のターンは失敗で終わっている: code-ccccccccccccccccccccccccccccccccccccccccccccccccccccccc…（45 文字省略。全 105 文字）（via: via-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv…（44 文字省略。全 104 文字）, 2026-11-01T08:59:00.000Z）。全文と次の一手は \`manager_list\` / \`manager_report\` で見る。
+
+      ## 聞かずに決めたこと
+      - 2026-11-01T08:57:00.000Z 決めたことあああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（105 文字省略。全 305 文字）（根拠: 根拠ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（222 文字省略。全 302 文字））
+
+      ## エスカレーション
+      - 聞いたことあああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（105 文字省略。全 305 文字） → 回答: 答えああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（222 文字省略。全 302 文字）（id: esc-long）
+      - 取り下げた問いあああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（107 文字省略。全 307 文字） → 取り下げ: 理由ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（222 文字省略。全 302 文字）（id: esc-long-withdrawn）
+
+      ## 人間の回答待ち（保留中。他の仕事は進めてよい）
+      - ap-long（2026-11-01T08:58:00.000Z）確認ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（102 文字省略。全 302 文字）
+
+      ## 記憶の更新
+      - values（clone/write / 1→2 バイト）記憶ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（182 文字省略。全 302 文字）
+
+      ## 届いた外部イベント
+      この件数は届いた合図の実数ではない —— 受信箱を通った合図は配達のたびに1行書かれ（配り直し・畳んでターンを起こさない回も含む）、デーモンが受信箱を通さず直接書く行（source \`runner\` / \`boot-storage-footprint\` / \`boot-tool-search\`）も混ざる。
+      - ci: 外部ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ…（182 文字省略。全 302 文字）
+
+      **発行元（source）別の件数（正確な総数。上限 \`DIGEST_SOURCE_TALLY_LIMIT\`=32 発行元まで追跡する）**
+      - ci: 1 件
+
+      **本文の形（保持した 1 件の標本。上の件数とは母数が違う）** —— 「本文の種類」は \`summary\` の完全一致で数える（末尾に畳んだ件数などの可変値が付くことがあるため、完全一致は同じ出来事を過大に分けうる。正規化はしていない）。
+      - ci: 同じ本文は 1 種。最も多い1種が 1 件
+
+      ## 使った分
+      （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
+      （台帳にまだ記録が無い。この機能を入れる前の分は残っていない）"
+    `);
+  });
+
+  it('待ち行列の先頭: 決めてほしい（needs_decision）の古い1件で滞留の行が出る。時計は止めた値（全文）', async () => {
+    const stores = createMemoryStores();
+    await addTask(stores, 'q-1');
+    await stores.tasks.add({
+      id: 'n-1',
+      createdAt: ago(9 * DAY),
+      updatedAt: ago(4 * DAY + 5 * 60 * MIN),
+      status: 'needs_decision',
+      origin: 'human',
+      title: 'title-n-1',
+      body: 'body-n-1',
+    });
+    expect(await digestOf(stores)).toMatchInlineSnapshot(`
+      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
+
+      - 件数: 人間の発言 0 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）0 本 / 自分で決めたこと 0 / 記憶の更新 0 / 外部イベント（日誌の行数）0 / 委譲側のツール実行 0 / 自分の手（委譲せず使った道具）0 / 継続中の依頼 0
+
+      ## 待ち行列の先頭
+      - 待ち行列: 開いている 2 件（queued 1 / waiting 0 / needs_decision 1）
+      - 滞留: needs_decision 1 件（最も古いのは 4日5時間前）
+      - n-1（状態: needs_decision（決めてほしい） / origin: human）title-n-1
+      - q-1（状態: queued（待ち行列） / origin: self）title-q-1
+      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
+
+      ## 使った分
+      （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
+      （台帳にまだ記録が無い。この機能を入れる前の分は残っていない）"
+    `);
+  });
+
+  it('窓の境目: 終わり（含まない）・始まり・ツール実行の層分け・人間の発言（全文）', async () => {
+    const stores = createMemoryStores();
+    // 終わり（until = NOW）ちょうどの行は含めず、1ms 前は含める
+    await journalAgo(stores, 0, { type: 'decision', decision: '終わりちょうど', grounds: 'g' });
+    await journalAgo(stores, 1, { type: 'decision', decision: '終わりの1ms前', grounds: 'g' });
+    await journalAgo(stores, 0, {
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '終わりちょうどの発言',
+    });
+    await journalAgo(stores, 1, {
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '終わりの1ms前の発言',
+    });
+    await journalAgo(stores, 2, {
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返事（数えない）',
+    });
+    await journalAgo(stores, 3, {
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: 'マネージャーの発言（数えない）',
+    });
+    for (const actor of ['clone', 'clone:distill', 'manager:mgr-1', 'worker:mgr-1:worker']) {
+      await journalAgo(stores, 5, { type: 'tool_use', actor, tool: 'Bash', input: {} });
+    }
+    // 始まり（since）ちょうどと1ms 前
+    await journalAgo(stores, NOW_MS - SINCE.getTime(), {
+      type: 'decision',
+      decision: '始まりちょうど',
+      grounds: 'g',
+    });
+    await journalAgo(stores, NOW_MS - SINCE.getTime() + 1, {
+      type: 'decision',
+      decision: '始まりの1ms前',
+      grounds: 'g',
+    });
+    // マネージャーの窓: 始まりちょうどの done は出る（畳まれる）、1ms 前の done は出ない、1ms 前でも走行中は出る
+    await putJob(stores, 'mgr-at-since', 'done', { updatedAt: SINCE.toISOString() });
+    await putJob(stores, 'mgr-before-since', 'done', {
+      updatedAt: new Date(SINCE.getTime() - 1).toISOString(),
+    });
+    await putJob(stores, 'mgr-before-since-running', 'running', {
+      updatedAt: new Date(SINCE.getTime() - 1).toISOString(),
+    });
+    expect(await buildActivityDigest(stores, { since: SINCE, until: new Date(NOW) }))
+      .toMatchInlineSnapshot(`
+      "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.000Z
+
+      - 件数: 人間の発言 1 / 回答待ち 0 / エスカレーション 0 / 委譲（この期間に動いた）2 本 / 自分で決めたこと 2 / 記憶の更新 0 / 外部イベント（日誌の行数）0 / 委譲側のツール実行 2 / 自分の手（委譲せず使った道具）2 / 継続中の依頼 0
+
+      ## 待ち行列の先頭
+      - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
+
+      ## マネージャー（走行中・返事待ちから先に出す）
+      - mgr-before-since-running [running/セッション不明] mgr-before-since-running の依頼
+      - 手が止まっている担当（done・stopped）1 本: mgr-at-since
+      依頼と直近の報告は、ここには載せていない。\`manager_list\`（\`q\` で依頼文から探せる）/ \`manager_report\`（依頼文・報告の全文）で引ける。
+
+      ## 聞かずに決めたこと
+      - 2026-10-31T15:00:00.000Z 始まりちょうど（根拠: g）
+      - 2026-11-01T08:59:59.999Z 終わりの1ms前（根拠: g）
+
+      ## 使った分
+      （台帳は日ごとに持つので、2026-11-01 の日ぶんの合計。上の期間より広い）
+      （台帳にまだ記録が無い。この機能を入れる前の分は残っていない）"
+    `);
+  });
+});
+
 describe('B1 要約の全文の固定 — 全体の形で読めない行の断りだけが在る', () => {
   it('読めない承認待ち・継続中の依頼・委譲が1行ずつ（件数の行の下に3行、各節に断り。全文）', async () => {
     const stores = createMemoryStores();
