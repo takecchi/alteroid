@@ -156,7 +156,8 @@ export class ManagerDenialReceiver {
           : 'マネージャーか作業者の手が止まっている可能性がある（どちらの層かはこの合図からは取れていない）';
     // 拒否の出所を断定しない: alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` など）の拒否も同じ `case 'permission_denied'` を通り、帰結が違う（器の分類器 / deny 規則は担い手が本当に詰むが、フックは理由と代替案が担い手へ直接返り自力で抜けられる）。「クローンに回っていない」と決めつけず、まず担い手自身が受け取った拒否文を読ませる。
     this.#ports.emit(
-      event.managerId,
+      'x',
+      
       'report',
       `${codeSpan(event.tool)} の実行が確認へ上がらずに止められた（${actorLabel} / このマネージャーで ${toolTotal} 件目・道具ごとの合計）。` +
         'この合図だけでは拒否の出所は特定できない。**まず、担い手自身に返っている拒否の理由文を読ませること**。' +
