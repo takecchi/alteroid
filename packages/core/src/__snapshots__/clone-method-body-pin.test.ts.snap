@@ -102,7 +102,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "this.#turnTimer = timer;",
   "const prepareStartedAt = Date.now();",
   "this.#notices.set('redelivery', redeliveryNoticeFor(batch, {restoredCohort: this.#restoredCohort, recordOf: (id) => this.#delivery.redeliveryState.get(id)}));",
-  "this.#notices.set('commitment', await timer .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch)) .catch((error: unknown) => {noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);",
+  "this.#notices.set('commitment', await timer .time('prepare.taskQueue', () => this.#tasks.taskQueueNoticeFor(batch)) .catch((error: unknown) => {noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);",
   "return '';}));",
   "this.#notices.set('situation', await timer .time('prepare.situation', () => this.#turnNotices.situationFor(batch)) .catch((error: unknown) => {noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);",
   "return describeSituationUnavailable(error);}));",

@@ -87,6 +87,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
     callPattern: '#journalSelf',
     with: 'self',
   },
+  'clone-task-intake.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -358,7 +363,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteUnproductiveUsageBlockFold': 'decision',
     '#noteUsageNotice': 'gauge',
     '#onPreCompact': 'failure,recovery',
-    '#openHumanTask': 'failure',
     '#plugins': 'decision,failure',
     '#pump': 'thinning',
     '#read': 'decision',
@@ -403,6 +407,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // ターン入力の組み立ての殻（旧 `Clone#withFreshMemory`）。公開メソッド `withFreshMemory` は `#` の付かない名前の行
   'clone-turn-input.ts': {
     withFreshMemory: 'gauge',
+  },
+  // Task の取り込み（旧 `Clone#openHumanTask`）。公開メソッド `openHumanTask` は `#` の付かない名前の行
+  'clone-task-intake.ts': {
+    openHumanTask: 'failure',
   },
   'manager.ts': {
     '#askedOf': 'thinning',
@@ -519,6 +527,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-task-intake.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -582,6 +594,7 @@ const EXCHANGE_SOURCES = [
   'clone-daily-report.ts',
   'clone-denial-journal.ts',
   'clone-graves.ts',
+  'clone-task-intake.ts',
   'clone-turn-input.ts',
   'clone.ts',
   'denial-renotify.ts',

@@ -47,8 +47,6 @@ import {
   restoredInboxEventVerdict,
   type RestoredInboxEventVerdict,
 } from './inbox-staleness.js';
-import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
-import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import {
   describeAnthropicRoute,
@@ -186,8 +184,8 @@ import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extra
 import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
-import { describeSituationUnavailable, readAtLabel } from './situation.js';
-import { autoCloseRepliedTasks, opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
+import { describeSituationUnavailable } from './situation.js';
+import { autoCloseRepliedTasks, opensHumanTask } from './task-auto-done.js';
 import type { TurnReplyVia } from './task-auto-done.js';
 import { isTaskClosed } from './task.js';
 import type { AttachmentRef, TurnFailureKind } from './schema.js';
@@ -257,8 +255,8 @@ import {
 } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
+import { CloneTaskIntake } from './clone-task-intake.js';
 import { CloneTurnInput } from './clone-turn-input.js';
-import { describeTaskQueuePlacement } from './clone-turn-input-text.js';
 import { TurnTimer } from './turn-timing.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -686,10 +684,6 @@ class Clone implements CloneHost {
   /** 直前に人間の発言のターンを回した会話。会話が切り替わったことを次のターンの入力で名乗るため。 */
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
-  // 人間の依頼の Task の追加のうち、まだ終わっていないもの（`#openHumanTask`）。返答のターンの終わりが待つ: 届いた直後に返答が終わると、Task がまだ無く閉じ損ねるため
-  readonly #taskOpens = new Set<Promise<void>>();
-  // Task に積めなかった人間の発言の id。断り書きが1回だけ名乗って外す（`#taskQueueNoticeFor`）: 積めなかった事実を、積んだと偽らないため
-  readonly #humanTaskFailures = new Set<string>();
   // いまのターンの間に起きた会話への返答と委譲の控え（#5469 P5 の自動 done。`#runTurn` が作り直し、`turn_ended` が読む）。
   // `Turn` に載せない: `Turn` は試験が欄を全部書いて作る型で、欄を足すと無関係の試験が壊れるため。ターンは同時に1つしか走らない
   #turnReplies: {
@@ -966,6 +960,17 @@ class Clone implements CloneHost {
     },
     this.#distillMemory,
   );
+  /**
+   * 人間の依頼の Task の取り込みと、その結果を名乗る断り書きの待ち行列の節（`clone-task-intake.ts`）。
+   * 状態は協力者の中だけで書く（取り込み中の追加 `#taskOpens`・積めなかった発言の id）。外の 2 箇所（`#closeWithdrawnTasks`・`#autoCloseRepliedTasks`）は
+   * `await Promise.all(this.#tasks.pendingOpens())` と読む: 読み口は同期で、`await` の段を増やさない。
+   * 口は呼ばれるまで読まない関数で組む（`#stores` は constructor の中で入る）。
+   * 呼び元 `#record`（`void`）・`#prepareTurn`（`await timer.time(...)`）の呼び方は元のまま: 協力者のメソッドは `async`／同期のまま移し、外側を包み直さない。
+   */
+  readonly #tasks = new CloneTaskIntake({
+    stores: () => this.#stores,
+    journal: (entry) => this.#journal(entry),
+  });
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
   readonly #childEnvBase: NodeJS.ProcessEnv;
@@ -1574,10 +1579,10 @@ class Clone implements CloneHost {
     return 'withdrawn';
   }
 
-  // 取り下げた発言の Task（受理のとき `#openHumanTask` が同じ id で開いたもの）を取り下げで閉じる。
+  // 取り下げた発言の Task（受理のとき `CloneTaskIntake.openHumanTask` が同じ id で開いたもの）を取り下げで閉じる。
   // 追加が進行中なら済むのを待つ。閉じ済み・無いものは何もしない。失敗しても取り下げは落とさず、stderr に残す
   async #closeWithdrawnTasks(ids: readonly string[]): Promise<number> {
-    await Promise.all([...this.#taskOpens]);
+    await Promise.all(this.#tasks.pendingOpens());
     let closed = 0;
     for (const id of ids) {
       try {
@@ -1937,7 +1942,7 @@ class Clone implements CloneHost {
     this.#notices.set(
       'commitment',
       await timer
-        .time('prepare.taskQueue', () => this.#taskQueueNoticeFor(batch))
+        .time('prepare.taskQueue', () => this.#tasks.taskQueueNoticeFor(batch))
         .catch((error: unknown) => {
           noteDroppedRecord('待ち行列の断り書きの組み立て', inboxEventShape(event), error);
           return '';
@@ -2655,136 +2660,9 @@ class Clone implements CloneHost {
 
   // 人間の発言だけ、合図の id と同じ id の Task を開く（#5469 P5・#5923）
   // 回答（human_answer）・マネージャーの報告・外部の出来事・timer・self_initiative は、受信箱と日誌には届くが何も開かない
-  // 開く側の失敗は post を落とさない。日誌へは「開いた」行を書かない（`#openHumanTask`）
+  // 開く側の失敗は post を落とさない。日誌へは「開いた」行を書かない（`CloneTaskIntake.openHumanTask`）
   #commit(event: InboxEvent): void {
-    if (opensHumanTask(event)) this.#openHumanTask(event);
-  }
-
-  // 人間の依頼を Task として積む（#5469 P5）。id は受信箱の合図と同じで、`TaskStore.add` の existed が配り直しでの二重を防ぐ。
-  // 失敗しても post を落とさない。進行中の追加は `#taskOpens` で控え、返答のターンの終わりが待つ
-  // 日誌へは「積んだ」行を書かない: 合図そのものが `#record` で日誌に在り、Task の id がその合図の id と同じなので辿れるため。失敗だけは stderr と日誌に残す
-  #openHumanTask(event: HumanMessage): void {
-    const opening = this.#stores.tasks
-      .add(taskFromHumanIntake(event, new Date().toISOString()))
-      .then(
-        () => undefined,
-        (error: unknown) => {
-          noteDroppedRecord('Task の自動起票', inboxEventShape(event), error);
-          this.#humanTaskFailures.add(event.id);
-          return this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_FAILURE_PREFIX}人間の依頼を Task として積めなかった（id: ${event.id}）。` +
-              `必要なら \`task_add\` で載せ直すこと（理由: ${reasonOf(error)}）。`,
-          );
-        },
-      )
-      .finally(() => {
-        this.#taskOpens.delete(opening);
-      });
-    this.#taskOpens.add(opening);
-  }
-
-  // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
-  // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
-  async #taskQueueNoticeFor(events: InboxEvent[]): Promise<string> {
-    const event = events[0];
-    if (event === undefined) return '';
-
-    // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消え、未了を渡すと畳んでいる最中に新しい仕事を始めさせるだけのため
-    if (event.type === 'distill') return '';
-
-    // Task の追加が済むのを待ってから待ち行列を読む: 待たないと、いま届いた発言の Task がまだ無い件数を名乗るため
-    await Promise.all([...this.#taskOpens]);
-    const taskEvents = events.filter(opensHumanTask);
-    const failedTaskEvents = taskEvents.filter((pending) =>
-      this.#humanTaskFailures.delete(pending.id),
-    );
-    const failedTaskIds = new Set(failedTaskEvents.map((pending) => pending.id));
-    const placedTaskEvents = taskEvents.filter((pending) => !failedTaskIds.has(pending.id));
-    const taskQueue = await this.#taskQueueNotice(
-      event,
-      placedTaskEvents,
-      failedTaskEvents,
-      tickDigestCarriesTaskQueueHead(events),
-    );
-
-    // 待ち行列の先頭を要約に任せた回（`head` が空）は、固定の1文も出さない: 1文が指す先頭の行が、この断り書きには無いため。
-    // 積んだ・積めなかった行が残る回（tick では出ない）にだけ、全体の区切りを付ける
-    if (taskQueue.head.length === 0) {
-      const rest = [...taskQueue.placed, ...taskQueue.failed];
-      return rest.length === 0 ? '' : [...rest, '', '---', ''].join('\n');
-    }
-
-    return [
-      ...taskQueue.head,
-      ...taskQueue.placed,
-      ...taskQueue.failed,
-      ...(await this.#waitingReplyLinesFor(taskEvents)),
-      '全文は `task_list`。並べ替えは `task_move`。',
-      '',
-      '---',
-      '',
-    ].join('\n');
-  }
-
-  // 人間の発言を含む束だけ、その会話を起点にした返事待ち（waiting）の task を名乗る。該当が無ければ空（1文字も増やさない）。読めなければ名乗らない（断り書き全体を落とさない）
-  async #waitingReplyLinesFor(humanEvents: readonly HumanMessage[]): Promise<string[]> {
-    if (humanEvents.length === 0) return [];
-    try {
-      const conversationIds = new Set(humanEvents.map((pending) => pending.conversationId));
-      const { entries } = await this.#stores.tasks.list();
-      const candidates = selectWaitingReplyTasks(entries, [], conversationIds);
-      if (candidates.length === 0) return [];
-      const matched = selectWaitingReplyTasks(
-        candidates,
-        await this.#stores.jobs.listJobs(),
-        conversationIds,
-      );
-      return describeWaitingReplyLines(
-        matched,
-        '返事が来たなら `task_set_status` で閉じるか queued に戻すこと（器は状態を変えない）。',
-      );
-    } catch (error) {
-      noteDroppedRecord('返事待ちの task の断り書き', 'waiting-reply', error);
-      return [];
-    }
-  }
-
-  // 断り書きの待ち行列の側（#5469 P6c）。件数と先頭の描き方は digest と同じ `describeTaskQueueHead`（写さない）
-  // 待ち行列を読めなかったときは 0 件と書かず、読めなかったと名乗る
-  async #taskQueueNotice(
-    event: InboxEvent,
-    placed: readonly HumanMessage[],
-    failed: readonly HumanMessage[],
-    // 要約が同じ待ち行列の先頭を載せる回は、読めたときの先頭を出さない（読めなかった断りは要約に無いので残す）
-    leaveHeadToDigest: boolean,
-  ): Promise<{ head: string[]; placed: string[]; failed: string[] }> {
-    const { placed: placedLines, failed: failedLines } = describeTaskQueuePlacement(
-      placed.map((pending) => pending.id),
-      failed.map((pending) => pending.id),
-    );
-    let taskList: Awaited<ReturnType<Stores['tasks']['list']>>;
-    try {
-      taskList = await this.#stores.tasks.list();
-    } catch (error) {
-      noteDroppedRecord('待ち行列の読み出し', inboxEventShape(event), error);
-      return {
-        head: [
-          `[system] **待ち行列を読めなかった（${readAtLabel(Date.now())} に試みた材料。理由: ${reasonOf(error)}）。** ` +
-            '⟹ **開いている仕事が何件あるかは、この回は判定できていない——0 件だったのでも、異常が無かったのでもない。** ' +
-            '読み直す手は `task_list` である（同じ理由で失敗するなら、失敗として返る）。',
-        ],
-        placed: placedLines,
-        failed: failedLines,
-      };
-    }
-    if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
-    const rows = describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT });
-    return {
-      head: [`[system] 待ち行列（${readAtLabel(Date.now())} に数えた材料）`, ...rows],
-      placed: placedLines,
-      failed: failedLines,
-    };
+    if (opensHumanTask(event)) this.#tasks.openHumanTask(event);
   }
 
   // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため
@@ -5648,7 +5526,7 @@ class Clone implements CloneHost {
     if (replied.size === 0) return;
     try {
       // 追加の最中の起票を待つ: 待たないと、届いた直後に終わった返答が、まだ無い task を取り逃がす
-      await Promise.all([...this.#taskOpens]);
+      await Promise.all(this.#tasks.pendingOpens());
       // 閉じる直前に測る。測れなければ閉じない（誤って閉じるより、閉じ損ねて次の返答の終わりで拾うほうが安全）
       const unreadSignalIds = new Set<string>(this.#delivery.unreadIds());
       for (const held of this.#delivery.findDeferred(() => true)) unreadSignalIds.add(held.id);
@@ -5782,19 +5660,6 @@ async function confirmationLiveness(
   const summary = summaries.find((entry) => entry.managerId === managerId);
   if (summary === undefined) return 'unknown';
   return summary.waiting.some((item) => item.requestId === requestId) ? 'live' : 'settled';
-}
-
-/**
- * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
- * 発意 tick と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
- * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`CloneBatchMerge.mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
- */
-function tickDigestCarriesTaskQueueHead(events: readonly InboxEvent[]): boolean {
-  if (events.length !== 1) return false;
-  const [event] = events;
-  if (event === undefined) return false;
-  if (event.type === 'self_initiative') return true;
-  return event.type === 'timer' && event.kind === DAILY_REPORT_KIND;
 }
 
 /** 中身を持たない「見に行け」の合図か（読まれる前の重複には情報が無い）。 */

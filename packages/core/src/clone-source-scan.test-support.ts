@@ -25,6 +25,7 @@ export const JOURNAL_SELF_SOURCES = [
   'clone-denial-journal.ts',
   'clone-approval-answers.ts',
   'clone-turn-input.ts',
+  'clone-task-intake.ts',
 ] as const;
 
 /** `packages/core/src` の下のファイルを、名前で読む（`JOURNAL_SELF_SOURCES` の走査用）。 */
