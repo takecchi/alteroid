@@ -307,6 +307,14 @@ describe('記憶の読み出しが投げた回と、差分が空でも下ろす�
     expect(fourth).toContain(UPDATE_HEAD);
     expect(fourth).not.toContain(REFRESH_HEAD);
     expect(await gaugeTexts(stores)).toHaveLength(1);
+    const exchanges = await stores.journal.list({ types: ['exchange'] });
+    expect(
+      exchanges.flatMap((row) =>
+        row.type === 'exchange' && row.text.startsWith(EXCHANGE_KIND_GAUGE_PREFIX)
+          ? [[row.with, row.role]]
+          : [],
+      ),
+    ).toEqual([['self', 'outbound']]);
     await s.clone.stop();
   });
 

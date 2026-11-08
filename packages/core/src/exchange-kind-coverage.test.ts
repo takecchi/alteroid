@@ -82,6 +82,11 @@ const EXCHANGE_HELPER_DEFINITIONS: Record<string, ExchangeHelper> = {
     callPattern: '#journalSelf',
     with: 'self',
   },
+  'clone-turn-input.ts': {
+    definition: '#journalSelf',
+    callPattern: '#journalSelf',
+    with: 'self',
+  },
   'manager.ts': {
     definition: '#journalExchange',
     callPattern: '#?journalExchange',
@@ -367,7 +372,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     // `#handleTimer` のターンの後の完了の記録を出した先（失敗の再試行の1行）
     '#settleTimerRun': 'failure',
     '#stopRunningTurn': 'decision,failure',
-    '#withFreshMemory': 'gauge',
     '#withdrawQueued': 'decision',
     '#workerLimitNotice': 'decision',
     dropQueuedInboxEvents: 'thinning',
@@ -395,6 +399,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // 日報（旧 `Clone#dailyReport`）。公開メソッド `run` は `#` の付かない名前の行
   'clone-daily-report.ts': {
     run: 'decision,failure',
+  },
+  // ターン入力の組み立ての殻（旧 `Clone#withFreshMemory`）。公開メソッド `withFreshMemory` は `#` の付かない名前の行
+  'clone-turn-input.ts': {
+    withFreshMemory: 'gauge',
   },
   'manager.ts': {
     '#askedOf': 'thinning',
@@ -507,6 +515,10 @@ const EXCHANGE_LITERALS_OUTSIDE_JOURNAL_CALLS: Record<string, Record<string, str
     '#journalSelf':
       'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
   },
+  'clone-turn-input.ts': {
+    '#journalSelf':
+      'type: exchange を書く helper の本体（`Clone` のものと同じ形）。呼び出し側（this.#journalSelf(…)）を走査が数える',
+  },
   'manager.ts': {
     '#journalExchange':
       'type: exchange を書く helper の本体。呼び出し側（this.#journalExchange(…)）を走査が数える',
@@ -570,6 +582,7 @@ const EXCHANGE_SOURCES = [
   'clone-daily-report.ts',
   'clone-denial-journal.ts',
   'clone-graves.ts',
+  'clone-turn-input.ts',
   'clone.ts',
   'denial-renotify.ts',
   'manager.ts',

@@ -37,6 +37,12 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
 ]
 `;
 
+exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-turn-input.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
+[
+  "withFreshMemory 'outbound' EXCHANGE_KIND_GAUGE_PREFIX + redactErrorText(describeMemoryIndexRefresh({slugs: documents.map((doc) => doc.slug), renderedChars: reinjectedIndex.length, totalDocuments: documents.length}), this.#env)",
+]
+`;
+
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
   "#reopenSession 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}\` + \`（操作: \${options.actor}、理由: \${options.reason}、古い session id: \` + \`\${previousSessionId ?? '不明'}、蒸留: \${options.distill ? 'する' : 'しない'}、\` + \`\${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）\`",
@@ -74,7 +80,6 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#handleTimer 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 \${event.kind} は、この発火では動かない: \${claimed.reason}\`",
   "#settleTimerRun 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 \${event.kind}（\${event.at}）のターンが失敗で終わった\` + \`ので「終わった」とは記録しない（引き受けた印は残る。\${retryClause}）: \` + outcome.reason",
   "#completeScheduledRun 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}定期の依頼 \${kind} の「終わった」を記録できなかった\` + \`（引き受けた印が残るので、次の起動で配り直される）: \${last}\`",
-  "#withFreshMemory 'outbound' EXCHANGE_KIND_GAUGE_PREFIX + redactErrorText(describeMemoryIndexRefresh({slugs: documents.map((doc) => doc.slug), renderedChars: reinjectedIndex.length, totalDocuments: documents.length}), this.#env)",
   "#resumeCandidateWithinBudget 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}resume 素材が大きすぎるので resume せず新しいセッションで始める: \${sessionId}\` + \`（\${bytes} バイト ＞ 予算 \${RESUME_SIZE_BUDGET_BYTES} バイト）\`",
   "#externalMcpServers 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで\` + \`このセッションを起こした（理由: \${reasonOf(error)}）。\` + '登録を直すには人間に PUT /mcp-servers で置き直してもらう。'",
   "#plugins 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、\` + \`\${failure.name === null ? 'plugin の一覧が読めず、plugin' : \`plugin「\${failure.name}」\`}なしで\` + \`このセッションを起こした（段: \${failure.stage}）。\`",
