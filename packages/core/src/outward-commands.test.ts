@@ -39,6 +39,7 @@ describe('OUTWARD_COMMANDS: 背景待ちでも待たずに配る「外へ出す�
     expect(OUTWARD_COMMANDS.map((words) => words.join(' '))).toEqual([
       'gh pr create',
       'gh pr merge',
+      'gh pr ready',
       'gh pr close',
       'gh pr comment',
       'gh pr review',
@@ -57,6 +58,12 @@ describe('outwardCommandsIn: コマンド文字列から外へ出すコマンド
       'gh pr merge',
     ]);
     expect(outwardCommandsIn('git push -u origin fix/x')).toEqual(['git push']);
+  });
+
+  it('gh pr ready（PR を ready にした）も外へ出す操作として見つける（#6595）', () => {
+    expect(outwardCommandsIn('gh pr ready 10152 -R takecchi/heosterra')).toEqual(['gh pr ready']);
+    expect(outwardCommandsIn('timeout 60 gh pr ready 1')).toEqual(['gh pr ready']);
+    expect(outwardCommandsIn('gh pr ready --undo 1')).toEqual(['gh pr ready']);
   });
 
   it('git の値を取る大域オプション・フルパス・timeout・先頭の NAME=value を飛ばして見つける', () => {

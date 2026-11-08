@@ -1170,6 +1170,24 @@ describe('外へ出した成果を含む報告は、背景処理の完了待ち�
     await pool.stop();
   });
 
+  it('gh pr ready を含むターンも畳まずに受信箱へ回す（#6595）', async () => {
+    const { pool, stores, inbox, fake } = await runningManualSetup();
+    const before = inbox.length;
+
+    fake.report('mgr-withhold', '#10152 を ready にした（abc1234）', 'done', {
+      awaitingBackground: AWAITING,
+      outwardActions: ['gh pr ready'],
+    });
+    await vi.waitFor(() => {
+      if (inbox.length === before) throw new Error('まだ配られていない');
+    });
+    expect((inbox.at(-1) as { text: string }).text).toContain('#10152 を ready にした（abc1234）');
+    await journalHasText(stores, '外へ出した成果を含むので受信箱へ回す');
+    await journalHasText(stores, 'outwardActions=gh pr ready');
+
+    await pool.stop();
+  });
+
   it('outwardActions が無ければ、これまでどおり畳む', async () => {
     const { pool, stores, inbox, fake } = await runningManualSetup();
     const before = inbox.length;

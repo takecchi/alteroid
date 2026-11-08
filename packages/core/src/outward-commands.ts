@@ -9,6 +9,7 @@
 export const OUTWARD_COMMANDS: readonly (readonly string[])[] = [
   ['gh', 'pr', 'create'],
   ['gh', 'pr', 'merge'],
+  ['gh', 'pr', 'ready'],
   ['gh', 'pr', 'close'],
   ['gh', 'pr', 'comment'],
   ['gh', 'pr', 'review'],
