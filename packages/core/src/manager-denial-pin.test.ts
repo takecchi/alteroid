@@ -81,6 +81,18 @@ async function open(options: { status?: Job['status'] } = {}) {
     setClock(iso: string) {
       clock = Date.parse(iso);
     },
+    /** 別件の確認（permission）を1件待たせる */
+    async ask(requestId: string, askedAt: string): Promise<void> {
+      emit?.({
+        type: 'ask',
+        managerId: JOB_ID,
+        requestId,
+        kind: 'permission',
+        summary: '別件の確認',
+        askedAt,
+      });
+      await settle();
+    },
     async deny(event: Omit<DeniedEvent, 'type' | 'managerId'>): Promise<void> {
       emit?.({ type: 'permission_denied', managerId: JOB_ID, ...event });
       await settle();
@@ -304,6 +316,69 @@ async function scenarioThinning() {
   return out;
 }
 
+/**
+ * 蓋で忘れた組の帳面（最後に止められた時刻・知らせ直しの段・直近の知らせ直しの鍵）が、数えと一緒に消えること。
+ * 知らせ直し（`renotifyStalledDenials`）と `send` の宛先の選び方（`lastDenialRenotify`）が読む側。
+ */
+async function scenarioForget() {
+  const s = await open();
+  const renotices = () =>
+    s
+      .notices()
+      .map((e) => (e.type === 'manager_message' ? e.text : ''))
+      .filter((text) => text.includes('の拒否（'))
+      .map((text) =>
+        text.endsWith(FIXED_ROUTE) ? `${text.slice(0, -FIXED_ROUTE.length)}<ROUTE>` : text,
+      );
+  const tool0 = (texts: readonly string[]) => texts.filter((t) => t.includes('`Tool0` の拒否'));
+  const T = '2026-11-01T00:00:00.000Z';
+  await s.deny({
+    toolUseId: 'f0',
+    tool: 'Tool0',
+    input: { i: 0 },
+    via: 'live',
+    actor: 'manager:mgr',
+  });
+  await s.ask('req-other', T);
+  s.setClock('2026-11-01T00:11:00.000Z');
+  await s.pool.renotifyStalledDenials();
+  await settle();
+  const first = tool0(renotices());
+  // 蓋（64 種）を越えさせて Tool0 を忘れさせる
+  for (let i = 1; i <= 64; i += 1) {
+    await s.deny({
+      toolUseId: `f${i}`,
+      tool: `Tool${i}`,
+      input: { i },
+      via: 'live',
+      actor: 'manager:mgr',
+    });
+  }
+  const forgotten = !s.pool.denials(JOB_ID).some((d) => d.tool === 'Tool0');
+  // 直近の知らせ直しの鍵が Tool0 のまま残っていれば、ここで「知らせ直しが届いている」と断られる
+  const sent = await s.pool.send(JOB_ID, 'ok', { decision: 'allow' });
+  // 最後に止められた時刻が残っていれば、Tool0 に 2 回目の知らせ直しが出る
+  s.setClock('2026-11-01T00:42:00.000Z');
+  await s.pool.renotifyStalledDenials();
+  await settle();
+  const afterForget = tool0(renotices());
+  // 同じ ms の拒否が戻ってきたとき、知らせ直しの段の帳面が残っていれば 1 回目が出ない
+  s.setClock(T);
+  await s.deny({
+    toolUseId: 'f0b',
+    tool: 'Tool0',
+    input: { i: 0 },
+    via: 'live',
+    actor: 'manager:mgr',
+  });
+  s.setClock('2026-11-01T00:11:00.000Z');
+  await s.pool.renotifyStalledDenials();
+  await settle();
+  const afterReturn = tool0(renotices());
+  await s.pool.stop();
+  return { first, forgotten, sent, afterForget, afterReturn };
+}
+
 async function scenarioSnapshot() {
   const s = await open();
   const out: unknown[] = [];
@@ -510,6 +585,24 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
     expect(out.tool0).toEqual([
       { tool: 'Tool0', count: 1, actor: 'worker', lastAt: '2026-11-01T00:00:00.000Z' },
     ]);
+  });
+
+  it('蓋で忘れた組は、最後に止められた時刻・知らせ直しの段・直近の知らせ直しの鍵も一緒に忘れる', async () => {
+    const out = await scenarioForget();
+    const renotice =
+      '[mgr-denial-pin] `Tool0` の拒否（マネージャー自身）から11分、動きが無い（知らせ直し 1/2 回目。issue #1105 C）。<ROUTE>';
+    expect(out.first).toEqual([renotice]);
+    expect(out.forgotten).toBe(true);
+    // 直近の知らせ直しの鍵が忘れた組を指したままなら、ここは「知らせ直しが届いている」という断りになる
+    expect(out.sent).toEqual({
+      outcome: 'unknown',
+      detail:
+        'req-other は runner 側で既に解けている。台帳の待ちからも外した（次の送信はこの確認への答えとしては扱われない）。',
+    });
+    // 忘れた組へは 2 回目の知らせ直しが出ない（最後に止められた時刻が残っていれば出る）
+    expect(out.afterForget).toEqual([renotice]);
+    // 同じ時刻の拒否が戻ってきたら 1 回目から数え直す（知らせ直しの段の帳面が残っていれば出ない）
+    expect(out.afterReturn).toEqual([renotice, renotice]);
   });
 
   it('最後に止められた時刻・理由の3欄・inputHead は最新1件の像で、無い回は前回分を持ち越さない', async () => {
