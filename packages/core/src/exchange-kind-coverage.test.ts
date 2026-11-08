@@ -622,12 +622,29 @@ const EXCHANGE_SOURCES = [
   'usage-wake.ts',
 ];
 
+/** exchange の日誌の道具（`#journalSelf`: Clone 系 / `#journalExchange`: Manager 系）を `this.` 越しに呼ぶソースか */
+function callsPrivateJournalHelper(source: string): boolean {
+  return /\bthis\.#journal(?:Self|Exchange)\(/.test(source);
+}
+
+describe('足し漏れ検査の判定（純関数）', () => {
+  it('`this.#journalSelf(` / `this.#journalExchange(` を含めば足し漏れの候補と判定する', () => {
+    expect(callsPrivateJournalHelper("this.#journalSelf('inbound', text);")).toBe(true);
+    expect(callsPrivateJournalHelper("this.#journalExchange('inbound', text);")).toBe(true);
+  });
+
+  it('呼び出しの字面を含まなければ判定しない', () => {
+    expect(callsPrivateJournalHelper('this.#journal({ type: "exchange" });')).toBe(false);
+    expect(callsPrivateJournalHelper('// journalExchange( の説明だけ')).toBe(false);
+  });
+});
+
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
-  it('private `#journalSelf(` を持つソースは、すべて走査の対象に載っている（Clone から協力者へ切り出したときの足し漏れを通さない）', () => {
+  it('private `#journalSelf(` / `#journalExchange(` を持つソースは、すべて走査の対象（EXCHANGE_SOURCES）に載っている（協力者へ切り出したときの足し漏れを通さない）', () => {
     const unlisted = readdirSync(CORE_SRC_DIR)
       .filter((file) => file.endsWith('.ts') && !/\.test(?:-support)?\.ts$/.test(file))
       .filter((file) => !EXCHANGE_SOURCES.includes(file))
-      .filter((file) => /\bthis\.#journalSelf\(/.test(readCoreSource(file)));
+      .filter((file) => callsPrivateJournalHelper(readCoreSource(file)));
     expect(unlisted).toEqual([]);
   });
 
