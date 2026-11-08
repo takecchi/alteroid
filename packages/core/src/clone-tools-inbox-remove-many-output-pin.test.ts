@@ -298,7 +298,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'zero-types',
     covers:
-      '未読は在るが types に当たらない: 選べる5種類の内訳（0 の種類も並ぶ）と、人間起点の行の注意。人間起点が無ければ注意は付かない。試算でも実行でも同じ。読めない行が在っても注意は付かない（この分岐には無い）',
+      '未読は在るが types に当たらない: 選べる5種類の内訳（0 の種類も並ぶ）と、人間起点の行の注意。人間起点が無ければ注意は付かない。試算でも実行でも同じ',
     seed: [
       r('m-1', 'manager_message', 10),
       r('m-2', 'manager_message', 20),
@@ -340,7 +340,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'zero-sources',
     covers:
-      'types には当たったが sources の完全一致で0件: external:・manager: の表記・部分一致や前方一致は当たらない・送信元を言えない種類（distill / timer / self_initiative）は sources を渡すと必ず外れる',
+      'types には当たったが sources の完全一致で0件（実在する送信元を多い順に言う）: external:・manager: の表記・部分一致や前方一致は当たらない・送信元を言えない種類（distill / timer / self_initiative）は sources を渡すと必ず外れる',
     seed: [
       r('x-1', 'external', 10, { source: 'token-pool' }),
       r('x-2', 'external', 20, { source: 'ci-watch' }),
@@ -370,7 +370,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'zero-before',
     covers:
-      'sources までは当たったが before より前の行が0件: 絞り込みの文字列は before も出す。+09:00 の時差・ミリ秒・基準ちょうどの1ミリ秒前',
+      'sources（無ければ types）までは当たったが before 以前の行が0件（当たった行のうち最も古い時刻を言う）: 絞り込みの文字列は before も出す。+09:00 の時差・ミリ秒・基準ちょうどの1ミリ秒前',
     seed: [
       r('x-1', 'external', 30, { source: 'a' }),
       r('x-2', 'external', 10, { source: 'a' }),
@@ -696,7 +696,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'race',
     covers:
-      '当たったのに消せなかった: 1塊の途中の id を別の経路が先に消した（一部の競合）・1塊で全件が競合・次の呼びで残りを消す。打ち消しの行は消せなかった id だけを名指しする',
+      '当たったのに消せなかった: 1塊の途中の id を別の経路が先に消した（一部の競合）・1塊で全件が競合（「1 件も消せなかった」と言い、空の消した id は出さない）・次の呼びで残りを消す。打ち消しの行は消せなかった id だけを名指しする',
     seed: [...longRows(9), r('h-1', 'human_message', 100)],
     steps: [
       {
@@ -839,7 +839,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'unreadable-with-pending',
     covers:
-      '読めない行が在る受信箱: 当たる行が在れば実行も試算も読めない行は出力に出ない（消さず・数えず）。当たらない（内訳の）分岐にも出ない。受信箱の読めない行の一覧は呼ぶ前後で同じ',
+      '読めない行が在る受信箱: 当たる行が在っても、試算・実行・0件の出力に読めない行の注意が付く（消さず・数えず）。受信箱の読めない行の一覧は呼ぶ前後で同じ',
     seed: [r('e-1', 'external', 1), r('m-1', 'manager_message', 2), r('h-1', 'human_message', 3)],
     steps: [
       {
@@ -867,6 +867,36 @@ const SCENARIOS: Scenario[] = [
       {
         args: call({ types: ['external'] }),
         writes: 'none',
+        hooks: { unreadable: [{ id: 'broken-1', reason: '壊れた行（テスト用）' }] },
+      },
+    ],
+  },
+  {
+    name: 'unreadable-race',
+    covers:
+      '読めない行が在り、当たった行の1件が競合で消せなかった: 競合の注意と読めない行の注意の両方',
+    seed: [r('e-1', 'external', 1), r('e-2', 'external', 2)],
+    steps: [
+      {
+        args: call({ types: ['external'] }),
+        writes: 'some',
+        hooks: {
+          raceFirst: ['e-1'],
+          unreadable: [{ id: 'broken-1', reason: '壊れた行（テスト用）' }],
+        },
+      },
+    ],
+  },
+  {
+    name: 'unreadable-journal-stopped',
+    covers:
+      '読めない行が在り、途中の塊（2/4）の先の日誌が書けず止めた: 止めた案内と読めない行の注意',
+    seed: longRows(8),
+    journalFailsAt: [2],
+    steps: [
+      {
+        args: call({ types: ['external'] }),
+        writes: 'some',
         hooks: { unreadable: [{ id: 'broken-1', reason: '壊れた行（テスト用）' }] },
       },
     ],
@@ -1249,8 +1279,6 @@ describe('inbox_remove_many の出力と呼んだあとの状態の固定（場�
     expect(text('zero-types#1')).toContain('manager_message 2（このほか人間起点の行が 2 件');
     expect(text('zero-types-no-human#1')).not.toContain('人間起点');
     expect(text('zero-types-human-only#1')).toContain('人間起点の行が 3 件');
-    expect(text('zero-sources#5')).toContain('distill 1 / timer 1 / external 2');
-    expect(text('zero-before#2')).toContain('絞り込みが外れている');
     // 試算
     expect(text('dry-run#1')).toContain('**試算（dryRun）。1件も消していない。**');
     expect(text('dry-run#3')).toContain('（完全一致） / before=2026-10-01T00:50:00.000Z');
@@ -1300,7 +1328,6 @@ describe('inbox_remove_many の出力と呼んだあとの状態の固定（場�
     expect(step('many-race')?.delivery.map((chunk) => chunk.length)).toEqual([11, 11]);
     expect(decisionOf('many-race', 3)).toContain('直前の行を一部打ち消す');
     expect(text('race#1')).toContain('⚠ 対象 6 件のうち 3 件は消せなかった');
-    expect(text('race#2')).toContain('**0 件を畳んだ（消した）**');
     expect(step('race#2')?.delivery).toEqual([]);
     expect(text('race-single')).toContain('⚠ 対象 3 件のうち 1 件は消せなかった');
     expect(decisionOf('race-single', 1)).toContain('直前の行を一部打ち消す');
@@ -1339,10 +1366,29 @@ describe('inbox_remove_many の出力と呼んだあとの状態の固定（場�
     expect(journal('journal-fails-retraction')).toHaveLength(1);
     expect(text('journal-fails-unconfirmed')).toBe('受信箱の削除が落ちた');
     expect(journal('journal-fails-unconfirmed')).toHaveLength(1);
-    // 読めない行（実行・試算の出力には出ない）
-    expect(text('unreadable-with-pending#1')).not.toContain('読めない');
-    expect(text('unreadable-with-pending#3')).not.toContain('読めない');
+    // 読めない行（当たる行が在っても、試算・実行・競合・日誌の失敗の出力に注意が付く。#6330）
+    expect(text('unreadable-with-pending#1')).toContain('⚠ 読めない合図が 1 件ある');
+    expect(text('unreadable-with-pending#2')).toContain('⚠ 読めない合図が 1 件ある');
+    expect(text('unreadable-with-pending#3')).toContain('⚠ 読めない合図が 2 件ある');
+    expect(text('unreadable-with-pending#4')).toContain('⚠ 読めない合図が 1 件ある');
     expect(step('unreadable-with-pending#3')?.inbox.unreadable).toHaveLength(2);
+    expect(text('unreadable-race')).toContain('⚠ 読めない合図が 1 件ある');
+    expect(text('unreadable-race')).toContain('⚠ 対象 2 件のうち 1 件は消せなかった');
+    expect(text('unreadable-journal-stopped')).toContain('⚠ 読めない合図が 1 件ある');
+    expect(text('unreadable-journal-stopped')).toContain('⚠⚠ 2/4 塊目の先の日誌が書けなかった');
+    // 0件の外れた軸（types は従来どおり。sources・before は軸ごとに言い分ける。#6330）
+    expect(text('zero-sources#1')).toContain('types では 2 件当たったが sources=[token-pool]');
+    expect(text('zero-sources#1')).toContain('実在する送信元（多い順）: external:token-pool 1');
+    expect(text('zero-sources#5')).toContain('送信元を言える行が無い');
+    expect(text('zero-before#1')).toContain('before=2026-09-30T00:00:00Z 以前の行が0件');
+    expect(text('zero-before#1')).toContain('最も古いのは 2026-10-01T00:10:00.000Z');
+    expect(text('zero-before#2')).toContain('sources までで 2 件当たったが before=');
+    expect(text('zero-types#1')).toContain('manager_message 2');
+    // 全件が競合した塊: 「0 件を畳んだ」と空の「消した id」で終わらず、消せなかったと言う
+    expect(text('race#2')).not.toContain('0 件を畳んだ');
+    expect(text('race#2')).not.toContain('消した id');
+    expect(text('race#2')).toContain('**1 件も消せなかった**');
+    expect(text('race#2')).toContain('⚠ 対象 2 件のうち 2 件は消せなかった');
     // 一覧が落ちる
     expect(text('peek-fails#1')).toBe('受信箱の一覧が読めない');
     expect(text('peek-fails#2')).toBe('受信箱の一覧が読めない');

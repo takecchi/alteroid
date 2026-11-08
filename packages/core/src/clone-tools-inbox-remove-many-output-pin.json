@@ -45,20 +45,20 @@
     "zero-types-no-human#2": 186,
     "zero-types-human-only#1": 217,
     "zero-types-human-only#2": 217,
-    "zero-sources#1": 186,
-    "zero-sources#2": 186,
-    "zero-sources#3": 186,
-    "zero-sources#4": 186,
-    "zero-sources#5": 186,
-    "zero-sources#6": 186,
-    "zero-before#1": 186,
-    "zero-before#2": 186,
-    "zero-before#3": 186,
+    "zero-sources#1": 180,
+    "zero-sources#2": 184,
+    "zero-sources#3": 189,
+    "zero-sources#4": 162,
+    "zero-sources#5": 159,
+    "zero-sources#6": 141,
+    "zero-before#1": 147,
+    "zero-before#2": 154,
+    "zero-before#3": 151,
     "dry-run#1": 222,
     "dry-run#2": 224,
     "dry-run#3": 352,
     "dry-run#4": 301,
-    "dry-run#5": 289,
+    "dry-run#5": 382,
     "dry-run#6": 235,
     "dry-run-many#1": 383,
     "dry-run-many#2": 444,
@@ -79,7 +79,7 @@
     "execute-axes#2": 241,
     "execute-axes#3": 260,
     "execute-axes#4": 255,
-    "execute-axes#5": 186,
+    "execute-axes#5": 145,
     "execute-axes#6": 219,
     "rich-rows#1": 195,
     "rich-rows#2": 209,
@@ -99,7 +99,7 @@
     "many-ok#2": 217,
     "many-race": 6293,
     "race#1": 3873,
-    "race#2": 271,
+    "race#2": 172,
     "race#3": 1364,
     "race-single": 218,
     "remove-fails#1": 10,
@@ -120,11 +120,13 @@
     "journal-fails-last-rest": 7548,
     "journal-fails-retraction": 213,
     "journal-fails-unconfirmed": 10,
-    "unreadable-with-pending#1": 212,
-    "unreadable-with-pending#2": 217,
-    "unreadable-with-pending#3": 169,
-    "unreadable-with-pending#4": 176,
-    "unreadable-with-pending#5": 217,
+    "unreadable-with-pending#1": 305,
+    "unreadable-with-pending#2": 310,
+    "unreadable-with-pending#3": 277,
+    "unreadable-with-pending#4": 269,
+    "unreadable-with-pending#5": 310,
+    "unreadable-race": 306,
+    "unreadable-journal-stopped": 2773,
     "peek-fails#1": 11,
     "peek-fails#2": 11
   },
@@ -2247,8 +2249,8 @@
     },
     "zero-sources#1": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 180,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 2 件当たったが sources=[token-pool] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: external:token-pool 1 / external:ci-watch 1",
         "isError": false,
         "thrown": false
       },
@@ -2325,8 +2327,8 @@
     },
     "zero-sources#2": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 184,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 2 件当たったが sources=[external:token] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: external:token-pool 1 / external:ci-watch 1",
         "isError": false,
         "thrown": false
       },
@@ -2403,8 +2405,8 @@
     },
     "zero-sources#3": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 189,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 2 件当たったが sources=[external:Token-Pool] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: external:token-pool 1 / external:ci-watch 1",
         "isError": false,
         "thrown": false
       },
@@ -2481,8 +2483,8 @@
     },
     "zero-sources#4": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 162,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 1 件当たったが sources=[manager:mgr-2, mgr-1] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: manager:mgr-1 1",
         "isError": false,
         "thrown": false
       },
@@ -2559,8 +2561,8 @@
     },
     "zero-sources#5": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 159,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 3 件当たったが sources=[external:token-pool] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: （送信元を言える行が無い）",
         "isError": false,
         "thrown": false
       },
@@ -2637,8 +2639,8 @@
     },
     "zero-sources#6": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\n未読 6 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 1 / timer 1 / external 2 / self_initiative 1 / manager_message 1",
+        "length": 141,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 6 件 → 絞り込みで 0 件\ntypes では 1 件当たったが sources=[z] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: （送信元を言える行が無い）",
         "isError": false,
         "thrown": false
       },
@@ -2715,8 +2717,8 @@
     },
     "zero-before#1": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\n未読 3 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 3 / self_initiative 0 / manager_message 0",
+        "length": 147,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\ntypes までで 3 件当たったが before=2026-09-30T00:00:00Z 以前の行が0件（当たった行のうち最も古いのは 2026-10-01T00:10:00.000Z）。",
         "isError": false,
         "thrown": false
       },
@@ -2761,8 +2763,8 @@
     },
     "zero-before#2": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\n未読 3 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 3 / self_initiative 0 / manager_message 0",
+        "length": 154,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\nsources までで 2 件当たったが before=2026-10-01T08:59:59+09:00 以前の行が0件（当たった行のうち最も古いのは 2026-10-01T00:10:00.000Z）。",
         "isError": false,
         "thrown": false
       },
@@ -2807,8 +2809,8 @@
     },
     "zero-before#3": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\n未読 3 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 3 / self_initiative 0 / manager_message 0",
+        "length": 151,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\ntypes までで 3 件当たったが before=2026-10-01T00:09:59.999Z 以前の行が0件（当たった行のうち最も古いのは 2026-10-01T00:10:00.000Z）。",
         "isError": false,
         "thrown": false
       },
@@ -3217,8 +3219,8 @@
     },
     "dry-run#5": {
       "output": {
-        "length": 289,
-        "text": "**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。\n未読 7 件 → 絞り込みで 5 件\n絞り込み: types=[external, manager_message]\nこの呼びで消すのは 1 件（当たったのは 5 件）。いちばん古いのは 2026-10-01T00:10:00.000Z、いちばん新しいのは 2026-10-01T00:10:00.000Z。\n対象の id（先頭 1 件）: x-1\n1回の上限（1 件）に当たったので、残り 4 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを消せる。**",
+        "length": 382,
+        "text": "**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。\n未読 7 件 → 絞り込みで 5 件\n絞り込み: types=[external, manager_message]\nこの呼びで消すのは 1 件（当たったのは 5 件）。いちばん古いのは 2026-10-01T00:10:00.000Z、いちばん新しいのは 2026-10-01T00:10:00.000Z。\n対象の id（先頭 1 件）: x-1\n1回の上限（1 件）に当たったので、残り 4 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを消せる。**\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -10691,8 +10693,8 @@
     },
     "execute-axes#5": {
       "output": {
-        "length": 186,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 5 件 → 絞り込みで 0 件\n未読 5 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 1 / external 2 / self_initiative 0 / manager_message 2",
+        "length": 145,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 5 件 → 絞り込みで 0 件\ntypes では 1 件当たったが sources=[timer] の完全一致で0件——**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: （送信元を言える行が無い）",
         "isError": false,
         "thrown": false
       },
@@ -11764,8 +11766,8 @@
     },
     "race#2": {
       "output": {
-        "length": 271,
-        "text": "**0 件を畳んだ（消した）**（理由: 全件の競合）。\n未読 4 件 → 絞り込みで 3 件\n絞り込み: types=[external]\n消した id（先頭 0 件）: \n配達の待ち行列からも外したのは 0 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）\n⚠ 対象 2 件のうち 2 件は消せなかった（この呼びの最中に他の経路が先に消した）。\n1回の上限（2 件）に当たったので、残り 1 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを消せる。**",
+        "length": 172,
+        "text": "**1 件も消せなかった**（理由: 全件の競合）。\n未読 4 件 → 絞り込みで 3 件\n絞り込み: types=[external]\n⚠ 対象 2 件のうち 2 件は消せなかった（この呼びの最中に他の経路が先に消した）。\n1回の上限（2 件）に当たったので、残り 1 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを消せる。**",
         "isError": false,
         "thrown": false
       },
@@ -12769,8 +12771,8 @@
     },
     "unreadable-with-pending#1": {
       "output": {
-        "length": 212,
-        "text": "**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。\n未読 3 件 → 絞り込みで 1 件\n絞り込み: types=[external]\nこの呼びで消すのは 1 件（当たったのは 1 件）。いちばん古いのは 2026-10-01T00:01:00.000Z、いちばん新しいのは 2026-10-01T00:01:00.000Z。\n対象の id（先頭 1 件）: e-1",
+        "length": 305,
+        "text": "**試算（dryRun）。1件も消していない。** 実際に消すには dryRun: false を渡すこと。\n未読 3 件 → 絞り込みで 1 件\n絞り込み: types=[external]\nこの呼びで消すのは 1 件（当たったのは 1 件）。いちばん古いのは 2026-10-01T00:01:00.000Z、いちばん新しいのは 2026-10-01T00:01:00.000Z。\n対象の id（先頭 1 件）: e-1\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -12823,8 +12825,8 @@
     },
     "unreadable-with-pending#2": {
       "output": {
-        "length": 217,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\n未読 3 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 1 / self_initiative 0 / manager_message 1（このほか人間起点の行が 1 件あるが、この道具では選べない）",
+        "length": 310,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 3 件 → 絞り込みで 0 件\n未読 3 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 1 / self_initiative 0 / manager_message 1（このほか人間起点の行が 1 件あるが、この道具では選べない）\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -12877,8 +12879,8 @@
     },
     "unreadable-with-pending#3": {
       "output": {
-        "length": 169,
-        "text": "**1 件を畳んだ（消した）**（理由: 片付いた）。\n未読 3 件 → 絞り込みで 1 件\n絞り込み: types=[external]\n消した id（先頭 1 件）: e-1\n配達の待ち行列からも外したのは 1 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）",
+        "length": 277,
+        "text": "**1 件を畳んだ（消した）**（理由: 片付いた）。\n未読 3 件 → 絞り込みで 1 件\n絞り込み: types=[external]\n消した id（先頭 1 件）: e-1\n配達の待ち行列からも外したのは 1 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）\n⚠ 読めない合図が 2 件ある（id: broken-1。id が取れない行が 1 件）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -12932,8 +12934,8 @@
     },
     "unreadable-with-pending#4": {
       "output": {
-        "length": 176,
-        "text": "**1 件を畳んだ（消した）**（理由: 片付いた）。\n未読 2 件 → 絞り込みで 1 件\n絞り込み: types=[manager_message]\n消した id（先頭 1 件）: m-1\n配達の待ち行列からも外したのは 1 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）",
+        "length": 269,
+        "text": "**1 件を畳んだ（消した）**（理由: 片付いた）。\n未読 2 件 → 絞り込みで 1 件\n絞り込み: types=[manager_message]\n消した id（先頭 1 件）: m-1\n配達の待ち行列からも外したのは 1 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -12972,8 +12974,8 @@
     },
     "unreadable-with-pending#5": {
       "output": {
-        "length": 217,
-        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 1 件 → 絞り込みで 0 件\n未読 1 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 0 / self_initiative 0 / manager_message 0（このほか人間起点の行が 1 件あるが、この道具では選べない）",
+        "length": 310,
+        "text": "絞り込みに当たる未読は0件だった。**1件も消していない。**\n未読 1 件 → 絞り込みで 0 件\n未読 1 件のうち絞り込みに当たる行が0件——**絞り込みが外れている。** いま未読に在る種類の内訳（選べる5種類のみ）: distill 0 / timer 0 / external 0 / self_initiative 0 / manager_message 0（このほか人間起点の行が 1 件あるが、この道具では選べない）\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
         "isError": false,
         "thrown": false
       },
@@ -13001,6 +13003,135 @@
       },
       "journal": [],
       "delivery": []
+    },
+    "unreadable-race": {
+      "output": {
+        "length": 306,
+        "text": "**1 件を畳んだ（消した）**（理由: 片付いた）。\n未読 2 件 → 絞り込みで 2 件\n絞り込み: types=[external]\n消した id（先頭 1 件）: e-2\n配達の待ち行列からも外したのは 1 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）\n⚠ 対象 2 件のうち 1 件は消せなかった（この呼びの最中に他の経路が先に消した）。\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "inbox": {
+        "entries": [],
+        "unreadable": [
+          {
+            "id": "broken-1",
+            "reason": "壊れた行（テスト用）"
+          }
+        ]
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "受信箱の未読を絞り込みで一括して畳む（消す）（1/1 塊目、この塊は 2 件）: 片付いた\n絞り込み: types=[external]\n消す id: e-1 e-2",
+          "grounds": "クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の行を一部打ち消す。受信箱の合図を消す行のうち、次の id は消していない（他経路が先に消していた）: e-1",
+          "grounds": "日誌を先に書いたが、その id を消す操作は実行されなかったため打ち消す"
+        }
+      ],
+      "delivery": [["e-2"]]
+    },
+    "unreadable-journal-stopped": {
+      "output": {
+        "length": 2773,
+        "text": "⚠⚠ 2/4 塊目の先の日誌が書けなかったので、この塊（2 件）とそれ以降は消さずに止めた（Error: 日誌が落ちた）。止める前の 1 塊は消えていて日誌にも残っている。残りは同じ絞り込みでもう一度呼べば続きから消せる。\n**2 件を畳んだ（消した）**（理由: 片付いた）。\n未読 8 件 → 絞り込みで 8 件\n絞り込み: types=[external]\n消した id（先頭 2 件）: long-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, long-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n配達の待ち行列からも外したのは 2 件（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。**既に取り出して処理中のものは取り消せない。**）\n⚠ 読めない合図が 1 件ある（id: broken-1）。壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。この道具では選べず、消していない。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "inbox": {
+        "entries": [
+          {
+            "event": {
+              "type": "external",
+              "id": "long-3-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:03:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:03:00.000Z",
+            "deliveries": 0
+          },
+          {
+            "event": {
+              "type": "external",
+              "id": "long-4-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:04:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:04:00.000Z",
+            "deliveries": 0
+          },
+          {
+            "event": {
+              "type": "external",
+              "id": "long-5-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:05:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:05:00.000Z",
+            "deliveries": 0
+          },
+          {
+            "event": {
+              "type": "external",
+              "id": "long-6-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:06:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:06:00.000Z",
+            "deliveries": 0
+          },
+          {
+            "event": {
+              "type": "external",
+              "id": "long-7-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:07:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:07:00.000Z",
+            "deliveries": 0
+          },
+          {
+            "event": {
+              "type": "external",
+              "id": "long-8-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              "at": "2026-10-01T00:08:00.000Z",
+              "source": "token-pool"
+            },
+            "at": "2026-10-01T00:08:00.000Z",
+            "deliveries": 0
+          }
+        ],
+        "unreadable": [
+          {
+            "id": "broken-1",
+            "reason": "壊れた行（テスト用）"
+          }
+        ]
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "受信箱の未読を絞り込みで一括して畳む（消す）（1/4 塊目、この塊は 2 件）: 片付いた\n絞り込み: types=[external]\n消す id: long-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx long-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "grounds": "クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）"
+        }
+      ],
+      "delivery": [
+        [
+          "long-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "long-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
+      ]
     },
     "peek-fails#1": {
       "output": {

@@ -51,6 +51,7 @@ import {
 } from './store.js';
 import {
   CLONE_REMOVABLE_INBOX_EVENT_TYPES,
+  inboxBacklogSourceFor,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   type InboxRemoveManyFilter,
@@ -685,16 +686,12 @@ function renderInboxRemoveManyFunnel(allPendingCount: number, matchedCount: numb
   return `未読 ${allPendingCount} 件 → 絞り込みで ${matchedCount} 件`;
 }
 
-function describeInboxRemoveManyZeroReason(
-  allPending: readonly InboxPendingRow[],
-  unreadableNote: string | null,
-): string {
-  if (allPending.length === 0 && unreadableNote !== null) {
-    return `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
-  }
-  if (allPending.length === 0) {
-    return '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
-  }
+// 読めない行は件数を黙って落とさない（`task_set_status_many` の `renderCloseManyUnreadableNote` と同じ）: 「これで全部だ」と読まれるため
+function renderInboxRemoveManyUnreadableNote(unreadableNote: string | null): string[] {
+  return unreadableNote === null ? [] : [`⚠ ${unreadableNote}この道具では選べず、消していない。`];
+}
+
+function describeInboxRemoveManyTypesMiss(allPending: readonly InboxPendingRow[]): string {
   const breakdown = CLONE_REMOVABLE_INBOX_EVENT_TYPES.map(
     (known) => `${known} ${allPending.filter((row) => row.event.type === known).length}`,
   ).join(' / ');
@@ -708,8 +705,84 @@ function describeInboxRemoveManyZeroReason(
   );
 }
 
-function renderInboxRemoveManyZeroResult(funnel: string, why: string): string {
-  return ['絞り込みに当たる未読は0件だった。**1件も消していない。**', funnel, why].join('\n');
+function describeInboxRemoveManySourcesMiss(
+  sources: readonly string[],
+  afterTypes: readonly InboxPendingRow[],
+): string {
+  const counts = new Map<string, number>();
+  for (const row of afterTypes) {
+    const source = inboxBacklogSourceFor(row.event);
+    if (source === undefined) continue;
+    counts.set(source, (counts.get(source) ?? 0) + 1);
+  }
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, CLOSE_MANY_SOURCES_SHOWN)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(' / ');
+  const rest = counts.size - Math.min(counts.size, CLOSE_MANY_SOURCES_SHOWN);
+  return (
+    `types では ${afterTypes.length} 件当たったが sources=[${sources.join(', ')}] の完全一致で0件——` +
+    `**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: ` +
+    `${top === '' ? '（送信元を言える行が無い）' : top}` +
+    `${rest > 0 ? ` …ほか ${rest} 種は省略` : ''}`
+  );
+}
+
+function describeInboxRemoveManyBeforeMiss(
+  before: string | undefined,
+  prior: readonly InboxPendingRow[],
+  priorAxis: 'types' | 'sources',
+): string {
+  const oldest = prior.reduce(
+    (acc, row) => (acc === undefined || Date.parse(row.at) < Date.parse(acc) ? row.at : acc),
+    undefined as string | undefined,
+  );
+  return (
+    `${priorAxis} までで ${prior.length} 件当たったが before=${before} 以前の行が0件` +
+    `（当たった行のうち最も古いのは ${oldest ?? '不明'}）。`
+  );
+}
+
+// 0件の理由を軸で名指しする（types → sources → before の順で、最初に0件になった軸）: 1つの文言では「当たるものが無かった」と「絞り込みを間違えた」が同じ顔になるため
+function describeInboxRemoveManyZeroReason(
+  allPending: readonly InboxPendingRow[],
+  filter: InboxRemoveManyFilter,
+  unreadableNote: string | null,
+): string {
+  if (allPending.length === 0 && unreadableNote !== null) {
+    return `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
+  }
+  if (allPending.length === 0) {
+    return '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
+  }
+  const { types, sources, before } = filter;
+  const afterTypes = allPending.filter((row) => matchesInboxRemoveManyFilter(row, { types }));
+  if (afterTypes.length === 0) return describeInboxRemoveManyTypesMiss(allPending);
+  const afterSources = allPending.filter((row) =>
+    matchesInboxRemoveManyFilter(row, { types, ...(sources === undefined ? {} : { sources }) }),
+  );
+  if (sources !== undefined && afterSources.length === 0) {
+    return describeInboxRemoveManySourcesMiss(sources, afterTypes);
+  }
+  return describeInboxRemoveManyBeforeMiss(
+    before,
+    sources === undefined ? afterTypes : afterSources,
+    sources === undefined ? 'types' : 'sources',
+  );
+}
+
+function renderInboxRemoveManyZeroResult(
+  funnel: string,
+  why: string,
+  unreadableNote: readonly string[],
+): string {
+  return [
+    '絞り込みに当たる未読は0件だった。**1件も消していない。**',
+    funnel,
+    why,
+    ...unreadableNote,
+  ].join('\n');
 }
 
 function renderInboxRemoveManyRestNote(rest: number, effectiveLimit: number): string[] {
@@ -735,6 +808,7 @@ function renderInboxRemoveManyDryRun(args: {
   targets: readonly InboxPendingRow[];
   matchedCount: number;
   restNote: readonly string[];
+  unreadableNote: readonly string[];
 }): string {
   const { funnel, filterText, targets, matchedCount } = args;
   return [
@@ -747,6 +821,7 @@ function renderInboxRemoveManyDryRun(args: {
       }。`,
     renderInboxRemoveManyDryRunIds(targets),
     ...args.restNote,
+    ...args.unreadableNote,
   ].join('\n');
 }
 
@@ -907,10 +982,24 @@ function renderInboxRemoveManyDone(args: {
   targetCount: number;
   state: InboxRemoveManyRunState;
   restNote: readonly string[];
+  unreadableNote: readonly string[];
 }): string {
   const { reason, funnel, filterText, targetCount, state } = args;
+  const stopped = state.stoppedNote === undefined ? [] : [state.stoppedNote];
+  // 全件が競合したときは「0 件を畳んだ」と空の「消した id」で終えず、消せなかったと言う（`renderCloseManyRacedNote` に倣い、競合の注意を本体にする）
+  if (state.removedIds.length === 0 && state.raced > 0) {
+    return [
+      ...stopped,
+      `**1 件も消せなかった**（理由: ${reason}）。`,
+      funnel,
+      `絞り込み: ${filterText}`,
+      ...renderInboxRemoveManyRacedNote(targetCount, state.raced),
+      ...args.restNote,
+      ...args.unreadableNote,
+    ].join('\n');
+  }
   return [
-    ...(state.stoppedNote === undefined ? [] : [state.stoppedNote]),
+    ...stopped,
     `**${state.removedIds.length} 件を畳んだ（消した）**（理由: ${reason}）。`,
     funnel,
     `絞り込み: ${filterText}`,
@@ -918,6 +1007,7 @@ function renderInboxRemoveManyDone(args: {
     renderInboxRemoveManyDeliveryNote(state.droppedFromDelivery),
     ...renderInboxRemoveManyRacedNote(targetCount, state.raced),
     ...args.restNote,
+    ...args.unreadableNote,
   ].join('\n');
 }
 
@@ -2055,9 +2145,18 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
         const filterText = describeInboxRemoveManyFilterText(filter);
         const funnel = renderInboxRemoveManyFunnel(allPending.length, matched.length);
 
+        const unreadableLines = renderInboxRemoveManyUnreadableNote(unreadableNote);
+
         if (matched.length === 0) {
-          const why = describeInboxRemoveManyZeroReason(allPending, unreadableNote);
-          return text(renderInboxRemoveManyZeroResult(funnel, why));
+          const why = describeInboxRemoveManyZeroReason(allPending, filter, unreadableNote);
+          // 読めた未読が0件のときは理由の文が読めない行を言っているので、注意を重ねない
+          return text(
+            renderInboxRemoveManyZeroResult(
+              funnel,
+              why,
+              allPending.length === 0 ? [] : unreadableLines,
+            ),
+          );
         }
 
         const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
@@ -2076,6 +2175,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
               targets,
               matchedCount: matched.length,
               restNote,
+              unreadableNote: unreadableLines,
             }),
           );
         }
@@ -2099,6 +2199,7 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
             targetCount: targets.length,
             state,
             restNote,
+            unreadableNote: unreadableLines,
           }),
         );
       },
