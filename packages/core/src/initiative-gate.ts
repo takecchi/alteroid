@@ -1,7 +1,5 @@
 import type { Stores } from './store.js';
-
-/** 発意 tick のターンを回した印になる日誌の行の頭（`turn-input.ts` の `describeTurnInput` が `turnInputEntry` で書く、ターンの入力の行）。 */
-const SELF_INITIATIVE_TURN_INPUT_PREFIX = 'ターンの入力: self_initiative ';
+import { SELF_INITIATIVE_TURN_INPUT_PREFIX } from './turn-input.js';
 
 /** 1日1回の点検の間隔（#5469 P6a）。 */
 export const INITIATIVE_DAILY_CHECK_MS = 24 * 60 * 60 * 1000;

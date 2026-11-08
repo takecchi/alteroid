@@ -29,6 +29,9 @@ export type TurnInput =
       digest: string;
     };
 
+/** 発意 tick のターンの入力の行の頭。書く側（`describeTurnInput`）と、読む側（`initiative-gate.ts` の「直近に回したか」）が共有する。 */
+export const SELF_INITIATIVE_TURN_INPUT_PREFIX = 'ターンの入力: self_initiative ';
+
 export function turnInputEntry(input: TurnInput): JournalEntryInput {
   return { type: 'exchange', with: 'self', role: 'inbound', text: describeTurnInput(input) };
 }
@@ -67,7 +70,7 @@ function describeTurnInput(input: TurnInput): string {
       );
     case 'self_initiative':
       return (
-        `ターンの入力: self_initiative reason=${tag(input.reason)} cause=${tag(input.cause)} ` +
+        `${SELF_INITIATIVE_TURN_INPUT_PREFIX}reason=${tag(input.reason)} cause=${tag(input.cause)} ` +
         `${size(input.digest, 'digest')}${DIGEST_NOTE}`
       );
     case 'daily_report':
