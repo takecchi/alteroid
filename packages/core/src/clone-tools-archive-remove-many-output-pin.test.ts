@@ -510,7 +510,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'summary-forms',
     covers:
-      '要約の形: 改行・NUL を含む・前後に空白・長い要約（上限は無い）・記号。出力・日誌にどう残るか（NUL は日誌で落ちる）',
+      '要約の形: 改行・NUL を含む・前後に空白・長い要約（上限は無い）・記号。出力・日誌にどう残るか（NUL は出力・日誌とも落ちる）',
     seed: chain('sess-a', 'a', 5),
     steps: [
       {
@@ -1103,6 +1103,9 @@ describe('archive_remove_many の出力と呼んだあとの状態の固定（�
     expect(text('arg-errors#2')).toContain('0 番目（0起点）が空文字');
     expect(text('arg-errors#5')).toBe('summary は使えない（1文字以上のみ）。');
     expect(text('arg-errors#6')).toContain('空白だけの値は空と同じ');
+    expect(text('arg-errors#7')).toBe(
+      'summary は使えない（NUL だけの値は空と同じ。1文字以上のみ）。',
+    );
     expect(text('arg-errors#9')).toContain('どれも渡さない呼びは断る');
     expect(text('arg-errors#11')).toContain('日時として読めない、または時差が無い');
     expect(text('arg-errors#15')).toBe('minStoredBytes -1 は使えない（0以上の整数のみ）。');
@@ -1185,6 +1188,8 @@ describe('archive_remove_many の出力と呼んだあとの状態の固定（�
     expect(text('execute-axes#3')).toContain('**5 件の本文を tombstone した**');
     expect(text('bytes-format#2')).toContain('消した本文の合計: 4,500 バイト');
     expect(decisionOf('summary-forms#1', 0)).toContain('一行目\n二行目です');
+    expect(text('summary-forms#1')).toContain('（理由: 一行目\n二行目です）');
+    expect(text('summary-forms#1')).not.toContain('\u0000');
     expect(text('summary-forms#3')).toContain(LONG_SUMMARY);
     // 複数の塊
     expect(text('many-ok#1')).toContain('この呼びで消すのは 25 件');
