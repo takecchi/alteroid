@@ -44,6 +44,11 @@ const APPROVAL_LIST_BUDGET = 8_000;
 
 const APPROVAL_QUESTION_EXCERPT = 200;
 
+// 一覧の「宛先」行に埋まる managerId・requestId の上限。超えた分は excerpt の注記で切ったと分かる:
+// 長い id が1件あると一覧の予算を1件で使い切り、古い件の詳細が押し出されるため（#6620）。
+// journal_read の見出し（#6618）の 80 字に揃える。全文読み（id 指定）では掛けない
+const APPROVAL_LISTING_ADDRESS_FIELD = 80;
+
 function describeUnreadableApproval(id: string): string {
   return `承認待ち ${id} は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。`;
 }
@@ -280,8 +285,10 @@ function renderApprovalListItems(pending: readonly PendingApproval[]): string[] 
           : `  ${summarizeQuestions(approval.questions)}（詳細は approvals_list id=<id>）`,
         approval.jobId === undefined
           ? null
-          : `  宛先: managerId: "${approval.jobId}"` +
-            (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`),
+          : `  宛先: managerId: "${excerpt(approval.jobId, APPROVAL_LISTING_ADDRESS_FIELD)}"` +
+            (approval.requestId === undefined
+              ? ''
+              : `, requestId: "${excerpt(approval.requestId, APPROVAL_LISTING_ADDRESS_FIELD)}"`),
       ],
     }),
   );

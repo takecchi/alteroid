@@ -78,6 +78,8 @@ const PAGE = 8_000;
 const QUESTION_EXCERPT = 200;
 const TITLE_EXCERPT = 60;
 const INDEX_TITLE_EXCERPT = 30;
+/** 一覧の「宛先」行の managerId・requestId の欄ごとの上限（#6620） */
+const ADDRESS_FIELD = 80;
 /** 全文読みの本文の先頭に付く見出し（`質問: `） */
 const QUESTION_HEADING = '質問: ';
 
@@ -123,8 +125,10 @@ function entryLen(a: PendingApproval): number {
         : `  ${summarizeQuestions(a.questions)}（詳細は approvals_list id=<id>）`,
       a.jobId === undefined
         ? null
-        : `  宛先: managerId: "${a.jobId}"` +
-          (a.requestId === undefined ? '' : `, requestId: "${a.requestId}"`),
+        : `  宛先: managerId: "${excerpt(a.jobId, ADDRESS_FIELD)}"` +
+          (a.requestId === undefined
+            ? ''
+            : `, requestId: "${excerpt(a.requestId, ADDRESS_FIELD)}"`),
     ],
   }).length;
 }
@@ -143,33 +147,67 @@ function standard(count: number, prefix = 'b'): PendingApproval[] {
   );
 }
 
-/** 宛先（jobId）の長さを調節して、spec の1件ぶんの字数をちょうど length にする */
-function tuneJobId(spec: PendingApproval, length: number, others: number): void {
-  const base = entryLen({ ...spec, jobId: '' });
-  const n = length - others - base;
-  if (n < 0) throw new Error(`宛先の長さが合わせられない: ${String(n)}`);
-  spec.jobId = spaced(n, 'job');
-  const total = others + entryLen(spec);
-  if (total !== length) throw new Error(`合計が目標と違う: ${String(total)} / ${String(length)}`);
+/**
+ * 宛先（jobId・requestId）の長さを複数の件に配って、specs の詳細の字数の合計をちょうど total にする。
+ * 宛先の各欄は 80 字で切られる（#6620）ので、1件で伸ばせる幅に上限が在る: 件ごとに入るだけ入れ、余りを次の件へ回す
+ */
+function distributeDest(specs: readonly PendingApproval[], total: number): void {
+  let remaining = total - sumEntries(specs);
+  if (remaining < 0) throw new Error(`宛先を足す前から目標を超えている: ${String(remaining)}`);
+  for (const spec of specs) {
+    if (remaining === 0) break;
+    const fill = (jobLen: number, reqLen: number | null): number =>
+      entryLen({
+        ...spec,
+        jobId: 'j'.repeat(jobLen),
+        ...(reqLen === null ? {} : { requestId: 'r'.repeat(reqLen) }),
+      }) - entryLen(spec);
+    const overhead = fill(0, null);
+    const cap = fill(ADDRESS_FIELD, ADDRESS_FIELD);
+    let take = Math.min(cap, remaining);
+    // 余りが「宛先の見出しだけの字数」より小さいと次の件で合わせられないので、手前で止めて余りを残す
+    if (remaining - take > 0 && remaining - take < overhead) take = remaining - overhead;
+    let found = false;
+    for (let jobLen = 0; jobLen <= ADDRESS_FIELD && !found; jobLen += 1) {
+      for (let reqLen = -1; reqLen <= ADDRESS_FIELD && !found; reqLen += 1) {
+        if (fill(jobLen, reqLen < 0 ? null : reqLen) !== take) continue;
+        spec.jobId = 'j'.repeat(jobLen);
+        if (reqLen >= 0) spec.requestId = 'r'.repeat(reqLen);
+        found = true;
+      }
+    }
+    if (!found) throw new Error(`宛先の長さが合わせられない: ${String(take)}`);
+    remaining -= take;
+  }
+  if (remaining !== 0) throw new Error(`宛先を配りきれない: ${String(remaining)}`);
+  const sum = sumEntries(specs);
+  if (sum !== total) throw new Error(`合計が目標と違う: ${String(sum)} / ${String(total)}`);
 }
 
-/** count 件の詳細の合計がちょうど target 字（最後の1件の宛先で合わせる）。後ろに extras を足す */
+/** count 件の詳細の合計がちょうど target 字（宛先を配って合わせる）。後ろに extras を足す */
 function fullTuned(
   count: number,
   target: number,
   extras: PendingApproval[] = [],
 ): PendingApproval[] {
   const specs = standard(count);
-  const last = specs[count - 1];
-  if (last === undefined) throw new Error('count が 0');
-  tuneJobId(last, target, sumEntries(specs.slice(0, -1)));
+  // 新しい件から順に配る（古い件が詳細から先に落ちる並びを、宛先が1件だけ長かった頃に近づける）
+  distributeDest([...specs].reverse(), target);
   return [...specs, ...extras];
 }
 
-/** 1件だけで詳細の字数がちょうど length 字 */
+/**
+ * 1件だけで詳細の字数がちょうど length 字。宛先は 80 字で切られるので、id の長さで合わせる
+ * （id は一覧の見出しにそのまま入る。上限は無い）
+ */
 function single(id: string, minute: number, length: number): PendingApproval {
   const spec = ap(id, minute, { question: '短い問い' });
-  tuneJobId(spec, length, 0);
+  const probe = entryLen({ ...spec, id: 'x' });
+  const idLen = length - probe + 1;
+  if (idLen < 1) throw new Error(`id の長さが合わせられない: ${String(idLen)}`);
+  spec.id = spaced(idLen, id);
+  const total = entryLen(spec);
+  if (total !== length) throw new Error(`合計が目標と違う: ${String(total)} / ${String(length)}`);
   return spec;
 }
 
@@ -201,9 +239,8 @@ function detailTuned(count: number, k: number, delta: number): PendingApproval[]
   if (used > INDEX_BUDGET) throw new Error('索引が予算を超える');
   const budget = Math.max(2_000, LIST_BUDGET - lines.join('\n').length);
   const newestFirst = [...specs].reverse();
-  const kth = newestFirst[k - 1];
-  if (kth === undefined) throw new Error('k が大きすぎる');
-  tuneJobId(kth, budget + delta, sumEntries(newestFirst.slice(0, k - 1)));
+  if (newestFirst.length < k) throw new Error('k が大きすぎる');
+  distributeDest(newestFirst.slice(0, k), budget + delta);
   return specs;
 }
 
