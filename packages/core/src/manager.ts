@@ -980,7 +980,7 @@ export interface ManagerPool {
   autoFoldUnderPressure(): Promise<void>;
   /**
    * 周回の見回りから、終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す。
-   * 報告由来の `done`（ターンの終わり）は `#syncTask` が task を動かさず、猶予（`TASK_FOLLOW_GRACE_MS`、30 分）を過ぎて静かなままのものをここが倒す。
+   * 報告由来の `done`（ターンの終わり）は `ManagerTaskLink#sync` が task を動かさず、猶予（`TASK_FOLLOW_GRACE_MS`、30 分）を過ぎて静かなままのものをここが倒す。
    * 冪等（何度呼んでも同じ結果）で、`restore()` が起動時に走らせる直しと同じ本体。止めた後は何もしない。読めない・書けないときは例外にせず stderr に残す。
    */
   repairStrandedTasks(): Promise<void>;
@@ -6848,7 +6848,7 @@ class Pool implements ManagerPool {
     const deferTerminalToClosed =
       event.unreported !== undefined && (event.status === 'failed' || event.status === 'lost');
     if (!settledByClosed && !deferTerminalToClosed) record.job.status = event.status;
-    // 背景処理の完了待ちで閉じた `done` は、台帳の `status` では idle と見分けられないので、印を別の欄に立てる（`#syncTask` が task を倒さない根拠）。
+    // 背景処理の完了待ちで閉じた `done` は、台帳の `status` では idle と見分けられないので、印を別の欄に立てる（`ManagerTaskLink#sync` が task を倒さない根拠）。
     // 背景待ちでない報告では下ろす。`done` 以外の状態へ動く書き込みは `#persist` が下ろす。
     if (event.awaitingBackground !== undefined && record.job.status === 'done') {
       record.job.awaitingBackgroundSince = this.#nowIso();

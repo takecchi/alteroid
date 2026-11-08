@@ -1137,7 +1137,7 @@ describe('報告由来の report(done) は猶予の内は waiting の task を�
   });
 });
 
-// 現状の動きの固定（pin）その 3: `Pool` の「委譲 → task の追従」（`#syncTask`・`#moveTask`・`#repairStrandedTasks`・`#persist` の `before` の読みと `endedAt`）を
+// 現状の動きの固定（pin）その 3: `Pool` の「委譲 → task の追従」（`ManagerTaskLink` の `sync`・`#moveTask`・`repairStranded`・`readBefore`・`stampEndedAt`。切り出し前は `Pool` の `#syncTask`・`#moveTask`・`#repairStrandedTasks` と `#persist` の中の `before` の読み・`endedAt`）を
 // 協力者へ切り出す前に、上の試験が縛っていなかった枝を置く。期待は今の作りの出力から生成し、目で読んで確かめた（仕様を先に書いたものではない）。
 // 上の試験が既に縛っているもの: 起こす・終わる・戻す・猶予・背景待ちの保留・起動時の直しの大筋と、日誌の本数・`target`。
 // ここで足すもの: 日誌の `decision`・`grounds` の全文、同じ task の別の委譲が走っている枝、閉じた・無い・クローンが動かした task を倒さない枝（即時の終端側）、
@@ -1162,7 +1162,7 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
   const taskLines = async (stores: Stores, needle: string): Promise<string[]> =>
     (await decisions(stores)).filter((line) => line.includes(needle));
 
-  describe('日誌の decision の全文（#moveTask）', () => {
+  describe('日誌の decision の全文（ManagerTaskLink の #moveTask）', () => {
     it('⭐ 同期の遷移は、target・decision・grounds をこの文面で残す', async () => {
       const s = await setup();
       await s.stores.tasks.add(task('t-1'));
@@ -1202,7 +1202,7 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
     });
   });
 
-  describe('同じ task に走っている別の委譲（#syncTask の others 枝）', () => {
+  describe('同じ task に走っている別の委譲（sync の others 枝）', () => {
     it('⭐ 同じ task の別の委譲が running の間は、即時の終端でも task を倒さず、日誌も書かない。最後の1本が終わると倒れる', async () => {
       const s = await setup();
       await s.stores.tasks.add(task('t-1'));
@@ -1390,7 +1390,7 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
     });
   });
 
-  describe('同期が失敗したとき（#syncTask の catch）', () => {
+  describe('同期が失敗したとき（sync の catch）', () => {
     function failingTaskGet(stores: Stores): Stores {
       return {
         ...stores,
@@ -1514,7 +1514,7 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
     });
   });
 
-  describe('見回りの境目（#repairStrandedTasks）', () => {
+  describe('見回りの境目（repairStranded）', () => {
     async function ledgerSetup(
       now: number,
       taskUpdatedAt: string = T0_ISO,
@@ -1626,6 +1626,16 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
 
       await s.pool.repairStrandedTasks();
       expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it('⭐ プールを止めた後の見回りは何もしない（猶予を過ぎた終端があっても倒さない）', async () => {
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN);
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+      await s.pool.stop();
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(await decisions(s.stores)).toEqual([]);
     });
 
     it('複数の task は task ごとに別に決める（片方の委譲が走っていても、もう片方は倒す）', async () => {
@@ -1803,7 +1813,7 @@ describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の�
     });
   });
 
-  describe('見回りが失敗したとき（#repairStrandedTasks の catch）', () => {
+  describe('見回りが失敗したとき（repairStranded の catch）', () => {
     it('⭐ 委譲の一覧を読めなければ、投げずに stderr へ「終わった委譲の task の直し」を1行残し、日誌は書かない', async () => {
       const toggle = { on: false };
       const s = await setup((stores) => ({

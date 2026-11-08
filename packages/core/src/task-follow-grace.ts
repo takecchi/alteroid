@@ -6,7 +6,7 @@ import type { Job } from './schema.js';
  * 即時に倒すと、`manager_send` で次の指示を送る会話型の委譲が、ターンごとに `waiting` と `needs_decision` を往復する。
  * クローンが 1 往復で次の `manager_send` を打つ間に収まり、かつ半日の放置にならない幅として 30 分に置いた。
  * 猶予を過ぎて静かなままなら見回り（`ManagerPool.repairStrandedTasks`）が倒すので、最悪でも「30 分遅れて今までと同じ」になる。
- * 猶予が 0 なのは `stopped`・`failed`・`lost`・`closed(done)`（セッションが畳まれた）で、これらは `#syncTask` が即時に倒す。
+ * 猶予が 0 なのは `stopped`・`failed`・`lost`・`closed(done)`（セッションが畳まれた）で、これらは `ManagerTaskLink#sync` が即時に倒す。
  */
 export const TASK_FOLLOW_GRACE_MS = 30 * 60 * 1000;
 
