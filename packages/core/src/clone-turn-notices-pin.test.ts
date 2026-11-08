@@ -9,8 +9,8 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 
-// `Clone` の「ターン入口の断り書き」4 本（いまの全体の節 `#situationNoticeFor`・前提の断り `#validityNoticeFor`・
-// 枠の回復の1節 `#quotaRecoveryNoticeFor`・戻っていた担当の知らせの畳み `#recoveredFoldNoticeFor`）を、
+// 「ターン入口の断り書き」4 本（`CloneTurnNotices` の `situationFor`・`validityFor`・`quotaRecoveryFor`・`recoveredFoldFor`。
+// 切り出す前は `Clone` の `#situationNoticeFor`・`#validityNoticeFor`・`#quotaRecoveryNoticeFor`・`#recoveredFoldNoticeFor`）を、
 // `createClone` 経由で逐語に固定する。モデルへ渡る入力（`#runTurn` が `#pushInput` へ渡す文字列）と、畳んだ回の日誌の行を観測する。
 // 切り出し（`clone-turn-notices.ts`）の前に置いた: 期待の文字列・件数は、仕様を先に書いたものではなく、
 // 切り出し前の作りの出力を `vitest -u` で生成して目で読んで確かめた値である。「今の出力から変えない」ための歯であって、文面の正しさの保証ではない。
@@ -187,7 +187,7 @@ async function putRows(stores: Stores, count: number): Promise<void> {
   }
 }
 
-describe('いまの全体の節（#situationNoticeFor）の逐語固定', () => {
+describe('いまの全体の節（situationFor）の逐語固定', () => {
   it('全部入り: 鍵の行・受信箱の滞留（このターン自身は引く）・メモリの配達待ち行列', async () => {
     const stores = createMemoryStores();
     await stores.tokens.replace([
@@ -474,7 +474,7 @@ describe('いまの全体の節（#situationNoticeFor）の逐語固定', () => 
   });
 });
 
-describe('前提の断り書き（#validityNoticeFor）の逐語固定', () => {
+describe('前提の断り書き（validityFor）の逐語固定', () => {
   const firstPrefix = async (s: Rig, event: InboxEvent): Promise<string> => {
     s.clone.post(event);
     const input = await firstInput(s);
@@ -564,7 +564,7 @@ describe('前提の断り書き（#validityNoticeFor）の逐語固定', () => {
   });
 });
 
-describe('枠の回復の1節（#quotaRecoveryNoticeFor）の逐語固定', () => {
+describe('枠の回復の1節（quotaRecoveryFor）の逐語固定', () => {
   const prefixFor = async (s: Rig, event: InboxEvent): Promise<string> => {
     s.clone.post(event);
     const input = await firstInput(s);
@@ -697,7 +697,7 @@ describe('枠の回復の1節（#quotaRecoveryNoticeFor）の逐語固定', () =
   });
 });
 
-describe('戻っていた担当の知らせの畳み（#recoveredFoldNoticeFor）の、畳んだ日誌の行の逐語固定', () => {
+describe('戻っていた担当の知らせの畳み（recoveredFoldFor）の、畳んだ日誌の行の逐語固定', () => {
   const FOLD_LINE = 'ターンを起こさずに畳んだ';
 
   async function foldedLine(list: ListFn, event: InboxEvent): Promise<string> {
@@ -862,7 +862,7 @@ describe('3 本は投げを握らない（受信箱のループが落ちる。`.
 
   const DEAD = "rejected: TypeError: Cannot use 'in' operator to search for 'detail' in undefined";
 
-  it('#validityNoticeFor（2 本目の list()）: 落ちたループは stop() が拒否で返す。モデルへは渡らず、行は未読のまま', async () => {
+  it('validityFor（2 本目の list()）: 落ちたループは stop() が拒否で返す。モデルへは渡らず、行は未読のまま', async () => {
     const result = await loopDeath(report('evt-1', 'mgr-a', { statusAtDelivery: 'running' }), 1);
     expect(result.outcome).toBe(DEAD);
     expect(result.lines.join('')).toContain('クローンの受信箱のループが例外で終わりました');
@@ -870,7 +870,7 @@ describe('3 本は投げを握らない（受信箱のループが落ちる。`.
     expect(result.pending).toBe(1);
   });
 
-  it('#quotaRecoveryNoticeFor（2 本目の list()）: 同じく落ちる', async () => {
+  it('quotaRecoveryFor（2 本目の list()）: 同じく落ちる', async () => {
     const result = await loopDeath(poolQuotaStop('evt-1', ['mgr-a']), 1);
     expect(result.outcome).toBe(DEAD);
     expect(result.lines.join('')).toContain('クローンの受信箱のループが例外で終わりました');
@@ -878,7 +878,7 @@ describe('3 本は投げを握らない（受信箱のループが落ちる。`.
     expect(result.pending).toBe(1);
   });
 
-  it('#recoveredFoldNoticeFor（#pump の 1 本目の list()）: 同じく落ちる', async () => {
+  it('recoveredFoldFor（#pump の 1 本目の list()）: 同じく落ちる', async () => {
     const result = await loopDeath(
       report('evt-1', 'mgr-a', { synthesized: true, quotaStop: true, quotaSessionWindow: true }),
       0,

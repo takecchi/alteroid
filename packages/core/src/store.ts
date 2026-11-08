@@ -1106,7 +1106,7 @@ export interface InboxStore {
 
   /**
    * 残っている未読を古い順に返す。`claimPending()` と違い配達回数を進めない（`pending()` と同じ）。
-   * 内訳（`summarizeInboxBacklog`）のために本文まで返すので、毎ターン呼ぶ口ではない: `clone.ts` の `#situationNoticeFor` は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を求めたとき）からだけ呼ぶ。
+   * 内訳（`summarizeInboxBacklog`）のために本文まで返すので、毎ターン呼ぶ口ではない: `clone-turn-notices.ts` の `situationFor` は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を求めたとき）からだけ呼ぶ。
    */
   peekPending(): Promise<InboxPeek>;
 
