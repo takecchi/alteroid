@@ -577,6 +577,17 @@ function renderCloseManyDone(args: {
   unreadableNote: readonly string[];
 }): string {
   const { status, reason, funnel, filterText, targetCount, closedIds, journaledChunks } = args;
+  // 全件が競合したときは「0 件を done にした」と空の「変えた id」で終えず、閉じられなかったと言う（`renderInboxRemoveManyDone` と同じ。競合の注意を本体にする）
+  if (closedIds.length === 0 && targetCount > 0) {
+    return [
+      `**1 件も閉じられなかった**（理由: ${reason}）。`,
+      funnel,
+      `絞り込み: ${filterText}`,
+      ...renderCloseManyRacedNote(targetCount, targetCount),
+      ...args.restNote,
+      ...args.unreadableNote,
+    ].join('\n');
+  }
   return [
     `**${closedIds.length} 件を ${status} にした**（理由: ${reason}）。`,
     funnel,

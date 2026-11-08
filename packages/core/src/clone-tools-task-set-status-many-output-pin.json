@@ -87,6 +87,9 @@
     "many-race": 6251,
     "race#1": 6175,
     "race#2": 1308,
+    "race-all#1": 151,
+    "race-all#2": 113,
+    "race-all-rest": 216,
     "close-fails-first#1": 376,
     "close-fails-first#2": 376,
     "close-fails-first#3": 8522,
@@ -11458,6 +11461,140 @@
           }
         }
       ]
+    },
+    "race-all#1": {
+      "output": {
+        "length": 151,
+        "text": "**1 件も閉じられなかった**（理由: 全件競合）。\n開いている task 3 件 → origin=[external] で 3 件\n絞り込み: origin=[external]\n⚠ 対象 3 件のうち 3 件は変えられなかった（この呼びの最中に他の経路が先に閉じた・消えた・読めない形だった）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "ext-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 ext-3",
+          "body": "本文 ext-3"
+        },
+        {
+          "id": "ext-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 ext-1",
+          "body": "本文 ext-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に別の経路が閉じた"
+        }
+      ],
+      "journal": []
+    },
+    "race-all#2": {
+      "output": {
+        "length": 113,
+        "text": "**1 件を done にした**（理由: 残り）。\n開いている task 1 件 → origin=[external] で 1 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: ext-3",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "ext-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 ext-3",
+          "body": "本文 ext-3",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "残り"
+        },
+        {
+          "id": "ext-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 ext-1",
+          "body": "本文 ext-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に別の経路が閉じた"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task を絞り込みでまとめて done にした（1/1 塊目、この塊は 1 件）: 残り\n絞り込み: origin=[external]\n変えた id: ext-3",
+          "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
+          "target": {
+            "kind": "task"
+          }
+        }
+      ]
+    },
+    "race-all-rest": {
+      "output": {
+        "length": 216,
+        "text": "**1 件も閉じられなかった**（理由: 全件競合と残り）。\n開いている task 4 件 → origin=[external] で 4 件\n絞り込み: origin=[external]\n⚠ 対象 2 件のうち 2 件は変えられなかった（この呼びの最中に他の経路が先に閉じた・消えた・読めない形だった）。\n1回の上限（2 件）に当たったので、残り 2 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "ext-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 ext-3",
+          "body": "本文 ext-3"
+        },
+        {
+          "id": "ext-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 ext-4",
+          "body": "本文 ext-4"
+        },
+        {
+          "id": "ext-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 ext-1",
+          "body": "本文 ext-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に別の経路が閉じた"
+        },
+        {
+          "id": "ext-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 ext-2",
+          "body": "本文 ext-2",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "human",
+          "closedReason": "先に別の経路が閉じた"
+        }
+      ],
+      "journal": []
     },
     "close-fails-first#1": {
       "output": {

@@ -612,6 +612,46 @@ const SCENARIOS: Scenario[] = [
       { args: call({ origin: ['external'], reason: '残り' }), writes: 'some' },
     ],
   },
+  {
+    name: 'race-all',
+    covers:
+      '対象の全件が競合（別の経路が先に閉じた・消えた・読めない形だった）: 「0 件を done にした」と空の「変えた id」で終えず、「1 件も閉じられなかった」と競合の注意で言う。日誌へは書かない。閉じられなかった行は次の呼びで閉じる',
+    seed: [
+      t('ext-1', 'external', 1),
+      t('ext-2', 'external', 2, { conv: 'conv-x' }),
+      t('ext-3', 'external', 3),
+    ],
+    steps: [
+      {
+        args: call({ origin: ['external'], reason: '全件競合' }),
+        writes: 'some',
+        hooks: {
+          closeFirst: ['ext-1'],
+          removeFirst: { 'ext-2': 'conv-x' },
+          throwUnreadable: ['ext-3'],
+        },
+      },
+      { args: call({ origin: ['external'], reason: '残り' }), writes: 'some' },
+    ],
+  },
+  {
+    name: 'race-all-rest',
+    covers:
+      '上限（limit）で絞った対象の全件が競合し、上限の外に残りがある: 「1 件も閉じられなかった」に続けて競合の注意と残りの案内を言う',
+    seed: [
+      t('ext-1', 'external', 1),
+      t('ext-2', 'external', 2),
+      t('ext-3', 'external', 3),
+      t('ext-4', 'external', 4),
+    ],
+    steps: [
+      {
+        args: call({ origin: ['external'], limit: 2, reason: '全件競合と残り' }),
+        writes: 'some',
+        hooks: { closeFirst: ['ext-1', 'ext-2'] },
+      },
+    ],
+  },
   // ---- 閉じる側が落ちる ----
   {
     name: 'close-fails-first',
@@ -1158,6 +1198,17 @@ describe('task_set_status_many の出力と呼んだあとの状態の固定（�
     expect(task('race#1', longAt(2))).toBeUndefined();
     expect(status('race#1', longAt(3))).toBe('queued');
     expect(status('race#2', longAt(3))).toBe('done');
+    // 全件が競合: 「0 件を done にした」と空の id で終えない
+    for (const key of ['race-all#1', 'race-all-rest']) {
+      expect(text(key)).not.toContain('0 件を');
+      expect(text(key)).not.toContain('変えた id');
+      expect(text(key)).toContain('**1 件も閉じられなかった**');
+      expect(journal(key)).toEqual([]);
+    }
+    expect(text('race-all#1')).toContain('⚠ 対象 3 件のうち 3 件は変えられなかった');
+    expect(text('race-all-rest')).toContain('⚠ 対象 2 件のうち 2 件は変えられなかった');
+    expect(text('race-all-rest')).toContain('残り 2 件は対象にしていない');
+    expect(status('race-all#2', 'ext-3')).toBe('done');
     // 閉じる側が落ちる
     expect(text('close-fails-first#1')).toContain(
       '⚠⚠ 一括は途中で止まった・この塊の task の書き込みが失敗した',
