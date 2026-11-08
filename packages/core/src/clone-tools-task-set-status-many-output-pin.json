@@ -72,7 +72,7 @@
     "execute-axes#3": 171,
     "execute-axes#4": 236,
     "execute-axes#5": 133,
-    "reason-forms#1": 181,
+    "reason-forms#1": 180,
     "reason-forms#2": 180,
     "reason-forms#3": 2175,
     "reason-forms#4": 134,
@@ -9291,8 +9291,8 @@
     },
     "reason-forms#1": {
       "output": {
-        "length": 181,
-        "text": "**1 件を done にした**（理由: 一行目\n二行目\u0000です）。\n開いている task 4 件 → origin=[external] で 4 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: r-1\n1回の上限（1 件）に当たったので、残り 3 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
+        "length": 180,
+        "text": "**1 件を done にした**（理由: 一行目\n二行目です）。\n開いている task 4 件 → origin=[external] で 4 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: r-1\n1回の上限（1 件）に当たったので、残り 3 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
         "isError": false,
         "thrown": false
       },

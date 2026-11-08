@@ -1131,6 +1131,13 @@ describe('task_set_status_many の出力と呼んだあとの状態の固定（�
       '絞り込み: origin=[manager] / source=[mgr-1, mgr-3]（完全一致） / q="ABC" / until=',
     );
     expect(task('reason-forms#1', 'r-1')?.closedReason).not.toContain('\u0000');
+    // NUL は task と日誌と出力で同じ文字列に揃える（#6324）。前後の空白は task_set_status と同じく trim しない
+    expect(task('reason-forms#1', 'r-1')?.closedReason).toBe('一行目\n二行目です');
+    expect(decisionOf('reason-forms#1', 0)).not.toContain('\u0000');
+    expect(decisionOf('reason-forms#1', 0)).toContain(': 一行目\n二行目です\n');
+    expect(text('reason-forms#1')).not.toContain('\u0000');
+    expect(text('reason-forms#1')).toContain('（理由: 一行目\n二行目です）');
+    expect(task('reason-forms#2', 'r-2')?.closedReason).toBe('  前後に空白  ');
     expect(text('reason-forms#3')).toContain(LONG_REASON);
     expect(text('limit-steps#1')).toContain('残り 3 件');
     expect(text('limit-steps#3')).not.toContain('残り');

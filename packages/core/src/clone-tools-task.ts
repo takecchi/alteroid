@@ -17,7 +17,7 @@ import {
 } from './progress-read.js';
 import { removeInboxChunkJournalFirst } from './removal-journal-first.js';
 import { describeProgress } from './progress-describe.js';
-import { stripNul } from './nul-guard.js';
+import { stripNul, stripNulWellFormed } from './nul-guard.js';
 import {
   taskOriginSchema,
   githubObservationInputSchema,
@@ -1905,11 +1905,13 @@ export function taskTools(context: ToolContext, shared: CloneToolsShared) {
               '残りは同じ絞り込みでもう一度呼べば続けられる',
           ),
       },
-      async ({ origin, source, q, until, status, reason, dryRun, limit }) => {
+      async ({ origin, source, q, until, status, reason: rawReason, dryRun, limit }) => {
         // 検証は `task-set-status-many.ts` の `describeTaskStatusManyViolation`
-        const input = { origin, source, q, until, status, reason, dryRun, limit };
+        const input = { origin, source, q, until, status, reason: rawReason, dryRun, limit };
         const violation = describeTaskStatusManyViolation(input);
         if (violation !== null) return text(violation);
+        // task の閉じた理由（ストアが NUL を落とす）・日誌・出力で同じ文字列にするため、検証のあとで先に落とす。前後の空白は task_set_status と同じく trim しない
+        const reason = stripNulWellFormed(rawReason);
 
         const selection = await selectTaskStatusManyTargets(stores.tasks, input);
 
