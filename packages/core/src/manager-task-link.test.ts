@@ -1137,6 +1137,753 @@ describe('報告由来の report(done) は猶予の内は waiting の task を�
   });
 });
 
+// 現状の動きの固定（pin）その 3: `Pool` の「委譲 → task の追従」（`#syncTask`・`#moveTask`・`#repairStrandedTasks`・`#persist` の `before` の読みと `endedAt`）を
+// 協力者へ切り出す前に、上の試験が縛っていなかった枝を置く。期待は今の作りの出力から生成し、目で読んで確かめた（仕様を先に書いたものではない）。
+// 上の試験が既に縛っているもの: 起こす・終わる・戻す・猶予・背景待ちの保留・起動時の直しの大筋と、日誌の本数・`target`。
+// ここで足すもの: 日誌の `decision`・`grounds` の全文、同じ task の別の委譲が走っている枝、閉じた・無い・クローンが動かした task を倒さない枝（即時の終端側）、
+// 書く前の状態を読めなかった回の見送り、同期・見回りが失敗したときの stderr と日誌、猶予・同時刻・複数の委譲の境目、`updatedAt` の読めない task。
+describe('pin: 委譲 → task の追従の枝（協力者へ切り出す前の動き）', () => {
+  const T0 = Date.parse('2026-10-29T00:00:00.000Z');
+  const T0_ISO = new Date(T0).toISOString();
+  const MIN = 60_000;
+  const closedEvent = (id: string, status: 'done' | 'lost' = 'done'): RunnerEvent =>
+    ({ type: 'closed', managerId: id, status, reason: '畳んだ' }) as RunnerEvent;
+
+  // 日誌の一覧は新しい順で返る。読む順（古い順）へ直して固定する
+  async function decisionEntries(stores: Stores) {
+    return (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) =>
+        entry.type === 'decision'
+          ? [{ decision: entry.decision, grounds: entry.grounds, target: entry.target }]
+          : [],
+      )
+      .reverse();
+  }
+  const taskLines = async (stores: Stores, needle: string): Promise<string[]> =>
+    (await decisions(stores)).filter((line) => line.includes(needle));
+
+  describe('日誌の decision の全文（#moveTask）', () => {
+    it('⭐ 同期の遷移は、target・decision・grounds をこの文面で残す', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      s.fake.push(closedEvent(started.managerId));
+      await settle();
+
+      const id = started.managerId;
+      expect(await decisionEntries(s.stores)).toEqual([
+        {
+          decision: `[${id}] task t-1 を queued から waiting にした（委譲が running）`,
+          grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
+          target: { kind: 'task', id: 't-1' },
+        },
+        {
+          decision: `[${id}] task t-1 を waiting から needs_decision にした（委譲が done）`,
+          grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
+          target: { kind: 'task', id: 't-1' },
+        },
+      ]);
+    });
+
+    it('⭐ 見回りの遷移は、倒した委譲の id と「見回り・起動時の直し」の理由をこの文面で残す', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1', 'waiting'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-old', 'failed', 't-1'));
+
+      await s.pool.repairStrandedTasks();
+      expect(await decisionEntries(s.stores)).toEqual([
+        {
+          decision:
+            '[mgr-old] task t-1 を waiting から needs_decision にした（終わった委譲に結び付いたまま waiting だった（見回り・起動時の直し））',
+          grounds: '委譲の状態に結び付いた task を追わせる（#5469 P3）',
+          target: { kind: 'task', id: 't-1' },
+        },
+      ]);
+    });
+  });
+
+  describe('同じ task に走っている別の委譲（#syncTask の others 枝）', () => {
+    it('⭐ 同じ task の別の委譲が running の間は、即時の終端でも task を倒さず、日誌も書かない。最後の1本が終わると倒れる', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      const b = await s.pool.start({ request: '別の調べ物', taskId: 't-1' });
+
+      s.fake.push(report(b.managerId, 'failed'));
+      await settle();
+      expect((await s.stores.jobs.getJob(b.managerId))?.status).toBe('failed');
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(await taskLines(s.stores, 'needs_decision')).toEqual([]);
+
+      s.fake.push(report(a.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect(await taskLines(s.stores, 'waiting から needs_decision')).toHaveLength(1);
+    });
+
+    it('別の task に走っている委譲は数えない（同じ task の別の委譲だけが止める）', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      await s.stores.tasks.add(task('t-2'));
+      const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.pool.start({ request: '別の調べ物', taskId: 't-2' });
+
+      s.fake.push(report(a.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect(await taskStatus(s.stores, 't-2')).toBe('waiting');
+    });
+
+    it('同じ task の別の委譲が waiting_human（確認待ち）でも、走っているものとして数える', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.stores.jobs.putJob(ledgerJob('mgr-ask', 'waiting_human', 't-1'));
+
+      s.fake.push(report(a.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    });
+
+    it('同じ task の別の委譲が終わっているなら、数えない', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.stores.jobs.putJob(ledgerJob('mgr-old', 'failed', 't-1'));
+
+      s.fake.push(report(a.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+  });
+
+  describe('即時の終端で倒さない task（閉じた・無い・クローンが動かした）', () => {
+    it('⭐ クローンが閉じた task は、failed・closed(done) でも動かさず、日誌も stderr も残さない', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.stores.tasks.setStatus('t-1', 'cancelled', {
+        by: 'clone',
+        at: AT,
+        reason: '要らない',
+      });
+      const before = await decisionEntries(s.stores);
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect(await taskStatus(s.stores, 't-1')).toBe('cancelled');
+      expect(await decisionEntries(s.stores)).toEqual(before);
+      expect(lines).toEqual([]);
+    });
+
+    it('⭐ 無い task は、failed でも何も書かず、stderr にも残さない', async () => {
+      const s = await setup();
+      const started = await s.pool.start({ request: '調べる', taskId: 't-ghost' });
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('failed');
+      expect(await decisions(s.stores)).toEqual([]);
+      expect(lines).toEqual([]);
+    });
+
+    it('⭐ クローンが queued へ戻した task は、failed でも waiting 以外なので倒さない', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.stores.tasks.setStatus('t-1', 'queued', { by: 'clone', at: AT });
+      const before = await decisionEntries(s.stores);
+
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('queued');
+      expect(await decisionEntries(s.stores)).toEqual(before);
+    });
+
+    it('⭐ 判断待ちの task は、終わった委譲の別の終端（closed(lost)）でも動かさない', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      const before = await decisionEntries(s.stores);
+
+      s.fake.push(closedEvent(started.managerId, 'lost'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect(await decisionEntries(s.stores)).toEqual(before);
+    });
+  });
+
+  describe('書く前の状態を読めなかった回（before が undefined）', () => {
+    function unreadableJobs(toggle: { on: boolean }) {
+      return (stores: Stores): Stores => ({
+        ...stores,
+        jobs: {
+          ...stores.jobs,
+          getJob: async (id: string) => {
+            if (toggle.on) throw new Error('台帳が読めない');
+            return stores.jobs.getJob(id);
+          },
+        },
+      });
+    }
+
+    it('⭐ 終わる側（failed）は見送り、endedAt も書かない。stderr に task と状態を添えて残す', async () => {
+      const toggle = { on: false };
+      const s = await setup(unreadableJobs(toggle));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      toggle.on = true;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      const job = await s.stores.jobs.getJob(started.managerId);
+      expect(job?.status).toBe('failed');
+      expect(job?.endedAt).toBeUndefined();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(
+        lines.some((line) =>
+          line.includes(
+            `委譲の書く前の状態を読み出せませんでした（job id=${started.managerId} task=t-1 status=failed。task の同期と endedAt を見送った）: Error: 台帳が読めない`,
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('⭐ 動き出す側（send の running）も見送る: 読めないまま waiting へ戻さない', async () => {
+      const toggle = { on: false };
+      const s = await setup(unreadableJobs(toggle));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      toggle.on = true;
+
+      await captureStderr(async () => {
+        await s.pool.send(started.managerId, '続きをお願い');
+        await settle();
+      });
+      expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it('taskId の無い委譲は、書く前の状態を読まない（読めなくても stderr に残さない）', async () => {
+      const toggle = { on: false };
+      const s = await setup(unreadableJobs(toggle));
+      const started = await s.pool.start({ request: '調べる' });
+      toggle.on = true;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect(lines.filter((line) => line.includes('書く前の状態'))).toEqual([]);
+    });
+  });
+
+  describe('同期が失敗したとき（#syncTask の catch）', () => {
+    function failingTaskGet(stores: Stores): Stores {
+      return {
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          get: async () => {
+            throw new Error('task を読めない');
+          },
+        },
+      };
+    }
+
+    it('⭐ task の setStatus が投げると、stderr と日誌の decision をこの文面で残し、委譲は終わる', async () => {
+      const failing = (stores: Stores): Stores => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          setStatus: async (id, status, options) => {
+            if (status === 'needs_decision') throw new Error('task ストアが落ちている');
+            return stores.tasks.setStatus(id, status, options);
+          },
+        },
+      });
+      const s = await setup(failing);
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      const id = started.managerId;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(closedEvent(id));
+        await settle();
+      });
+      expect(
+        lines.some((line) =>
+          line.includes(
+            `task の状態の追従を記録できませんでした（job id=${id} task=t-1 status=done）: Error: task ストアが落ちている`,
+          ),
+        ),
+      ).toBe(true);
+      const failure = (await decisionEntries(s.stores)).filter((e) =>
+        e.decision.includes('合わせられなかった'),
+      );
+      expect(failure).toEqual([
+        {
+          decision: `[${id}] task t-1 の状態を委譲（done）に合わせられなかった`,
+          grounds:
+            '委譲は止めない。終わった委譲に結び付いたまま waiting の task は、次の起動で needs_decision へ直す（#5469 P3）',
+          target: undefined,
+        },
+      ]);
+      expect((await s.stores.jobs.getJob(id))?.status).toBe('done');
+    });
+
+    it('task を読めなくても（get が投げても）同じ経路で残し、委譲は終わる', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          get: async (id: string) => {
+            if (toggle.on) throw new Error('task を読めない');
+            return stores.tasks.get(id);
+          },
+        },
+      }));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      toggle.on = true;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect(lines.some((line) => line.includes('task の状態の追従を記録できませんでした'))).toBe(
+        true,
+      );
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect((await decisions(s.stores)).some((line) => line.includes('合わせられなかった'))).toBe(
+        true,
+      );
+    });
+
+    it('同じ task の別の委譲を調べる listJobs が投げても、同じ経路で残す', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        jobs: {
+          ...stores.jobs,
+          listJobs: async () => {
+            if (toggle.on) throw new Error('一覧を読めない');
+            return stores.jobs.listJobs();
+          },
+        },
+      }));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      toggle.on = true;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect(
+        lines.some(
+          (line) =>
+            line.includes('task の状態の追従を記録できませんでした') &&
+            line.includes('一覧を読めない'),
+        ),
+      ).toBe(true);
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    });
+
+    it('taskId の無い委譲は task ストアに触れない（task ストアが読めなくても、stderr に残さない）', async () => {
+      const s = await setup(failingTaskGet);
+      const lines = await captureStderr(async () => {
+        const started = await s.pool.start({ request: '調べる' });
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect(lines).toEqual([]);
+    });
+  });
+
+  describe('見回りの境目（#repairStrandedTasks）', () => {
+    async function ledgerSetup(
+      now: number,
+      taskUpdatedAt: string = T0_ISO,
+      poolStores?: (stores: Stores) => Stores,
+    ) {
+      const clock = { at: now };
+      const s = await setup(poolStores, undefined, () => clock.at);
+      await s.stores.tasks.add({ ...task('t-1', 'waiting'), updatedAt: taskUpdatedAt });
+      return { s, clock };
+    }
+
+    it('⭐ 猶予ちょうど（now - endedAt が 30 分）で倒し、1ms 前は倒さない（done）', async () => {
+      const { s, clock } = await ledgerSetup(T0 + GRACE_MS - 1);
+      await s.stores.jobs.putJob({ ...ledgerJob('mgr-a', 'done', 't-1'), endedAt: T0_ISO });
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      clock.at = T0 + GRACE_MS;
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it('⭐ task の updatedAt が endedAt と同時刻なら倒し、1ms 後なら（クローンが置いたので）倒さない', async () => {
+      const same = await ledgerSetup(T0 + GRACE_MS + MIN, T0_ISO);
+      await same.s.stores.jobs.putJob({ ...ledgerJob('mgr-a', 'done', 't-1'), endedAt: T0_ISO });
+      await same.s.pool.repairStrandedTasks();
+      expect(await taskStatus(same.s.stores, 't-1')).toBe('needs_decision');
+
+      const later = await ledgerSetup(T0 + GRACE_MS + MIN, new Date(T0 + 1).toISOString());
+      await later.s.stores.jobs.putJob({ ...ledgerJob('mgr-a', 'done', 't-1'), endedAt: T0_ISO });
+      await later.s.pool.repairStrandedTasks();
+      expect(await taskStatus(later.s.stores, 't-1')).toBe('waiting');
+    });
+
+    it('⭐ task の updatedAt が読めなければ見送る', async () => {
+      // ストアの検証は壊れた日時を通さないので、読む側（プールの見ているストア）の戻りだけを壊す
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN, T0_ISO, (stores) => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          list: async (options) => {
+            const listed = await stores.tasks.list(options);
+            return {
+              ...listed,
+              entries: listed.entries.map((entry) => ({ ...entry, updatedAt: 'いつか' })),
+            };
+          },
+        },
+      }));
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(await decisions(s.stores)).toEqual([]);
+    });
+
+    it.each([
+      ['failed → done の並び', ['failed', 'done']],
+      ['done → failed の並び', ['done', 'failed']],
+    ] as const)(
+      '⭐ 同時刻の終端が複数なら、猶予の短い側（failed）を採る。猶予の内でも倒し、日誌には採った委譲を名乗る（%s）',
+      async (_name, order) => {
+        const { s } = await ledgerSetup(T0 + MIN);
+        for (const status of order) {
+          await s.stores.jobs.putJob({
+            ...ledgerJob(`mgr-${status}`, status, 't-1'),
+            endedAt: T0_ISO,
+          });
+        }
+
+        await s.pool.repairStrandedTasks();
+        expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+        expect(await taskLines(s.stores, '[mgr-failed] task t-1')).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      ['古い failed → 新しい done の並び', ['old', 'new']],
+      ['新しい done → 古い failed の並び', ['new', 'old']],
+    ] as const)(
+      '⭐ 終端の時刻が違えば、新しい側の猶予で決める: 古い failed（猶予 0）が過ぎていても、新しい done の猶予の内は倒さない（%s）',
+      async (_name, order) => {
+        const { s, clock } = await ledgerSetup(T0 + 60 * MIN + 10 * MIN);
+        const rows = {
+          old: { ...ledgerJob('mgr-old', 'failed', 't-1'), endedAt: T0_ISO },
+          new: {
+            ...ledgerJob('mgr-new', 'done', 't-1'),
+            endedAt: new Date(T0 + 60 * MIN).toISOString(),
+          },
+        };
+        for (const key of order) await s.stores.jobs.putJob(rows[key]);
+
+        await s.pool.repairStrandedTasks();
+        expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+        clock.at = T0 + 60 * MIN + GRACE_MS;
+        await s.pool.repairStrandedTasks();
+        expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+        expect(await taskLines(s.stores, '[mgr-new] task t-1')).toHaveLength(1);
+      },
+    );
+
+    it('結び付いていない委譲は、見回りの判定に入らない（task を持たない走っている委譲は、他の task を止めない）', async () => {
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN);
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+      const free: Job = { ...ledgerJob('mgr-free', 'running', 't-1') };
+      delete free.taskId;
+      await s.stores.jobs.putJob(free);
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it('複数の task は task ごとに別に決める（片方の委譲が走っていても、もう片方は倒す）', async () => {
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN);
+      await s.stores.tasks.add({ ...task('t-2', 'waiting'), updatedAt: T0_ISO });
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-b', 'failed', 't-2'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-c', 'running', 't-2'));
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect(await taskStatus(s.stores, 't-2')).toBe('waiting');
+    });
+
+    it('閉じた task・queued の task は、見回りも倒さない', async () => {
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN);
+      await s.stores.tasks.add({ ...task('t-q', 'queued'), updatedAt: T0_ISO });
+      await s.stores.tasks.add({ ...task('t-c', 'waiting'), updatedAt: T0_ISO });
+      await s.stores.tasks.setStatus('t-c', 'cancelled', { by: 'clone', at: T0_ISO });
+      await s.stores.jobs.putJob(ledgerJob('mgr-q', 'failed', 't-q'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-c', 'failed', 't-c'));
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-q')).toBe('queued');
+      expect(await taskStatus(s.stores, 't-c')).toBe('cancelled');
+    });
+
+    it('⭐ 走っている委譲は、古い endedAt が残っていても active として数え、task を倒さない', async () => {
+      const { s } = await ledgerSetup(T0 + GRACE_MS + MIN);
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+      await s.stores.jobs.putJob({ ...ledgerJob('mgr-run', 'running', 't-1'), endedAt: T0_ISO });
+
+      await s.pool.repairStrandedTasks();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(await decisions(s.stores)).toEqual([]);
+    });
+  });
+
+  describe('setStatus の呼び方と、台帳が読めない・書けない回の追従', () => {
+    type SetStatusCall = { id: string; status: string; options: { by: string; at: string } };
+    function spyTasks(calls: SetStatusCall[]) {
+      return (stores: Stores): Stores => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          setStatus: async (id, status, options) => {
+            calls.push({ id, status, options: { by: options.by, at: options.at } });
+            return stores.tasks.setStatus(id, status, options);
+          },
+        },
+      });
+    }
+
+    it('⭐ task は by: daemon・委譲の状態を写した時刻（注入した時計）で動かす', async () => {
+      const calls: SetStatusCall[] = [];
+      const clock = { at: T0 };
+      const s = await setup(spyTasks(calls), undefined, () => clock.at);
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      clock.at = T0 + 5 * MIN;
+      s.fake.push(closedEvent(started.managerId));
+      await settle();
+
+      expect(calls).toEqual([
+        { id: 't-1', status: 'waiting', options: { by: 'daemon', at: T0_ISO } },
+        {
+          id: 't-1',
+          status: 'needs_decision',
+          options: { by: 'daemon', at: new Date(T0 + 5 * MIN).toISOString() },
+        },
+      ]);
+    });
+
+    it('⭐ 閉じた task には setStatus を呼ばない（動き出す側も終わる側も）', async () => {
+      const calls: SetStatusCall[] = [];
+      const s = await setup(spyTasks(calls));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.stores.tasks.setStatus('t-1', 'cancelled', {
+        by: 'clone',
+        at: AT,
+        reason: '要らない',
+      });
+      calls.length = 0;
+
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      await s.pool.send(started.managerId, '続きをお願い');
+      await settle();
+      expect(calls).toEqual([]);
+    });
+
+    it('⭐ 同じ task を2本が続けて起こしても、waiting への遷移の日誌は1行だけ（動かなかったときは書かず、失敗の行も出ない）', async () => {
+      const s = await setup();
+      await s.stores.tasks.add(task('t-1'));
+      await s.pool.start({ request: '調べる', taskId: 't-1' });
+      await s.pool.start({ request: '別の調べ物', taskId: 't-1' });
+
+      expect(await taskLines(s.stores, 'queued から waiting')).toHaveLength(1);
+      expect(await taskLines(s.stores, 'task t-1')).toHaveLength(1);
+      expect(await taskLines(s.stores, '合わせられなかった')).toEqual([]);
+    });
+
+    it('⭐ 台帳に書けなくても（putJob が投げても）、task は倒す: 台帳の写しに残った自分自身を、別の走っている委譲と数えない', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        jobs: {
+          ...stores.jobs,
+          putJob: async (job: Job) => {
+            if (toggle.on) throw new Error('台帳が書けない');
+            return stores.jobs.putJob(job);
+          },
+        },
+      }));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      toggle.on = true;
+
+      const lines = await captureStderr(async () => {
+        s.fake.push(report(started.managerId, 'failed'));
+        await settle();
+      });
+      expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('running');
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect(lines.some((line) => line.includes('ジョブ台帳を記録できませんでした'))).toBe(true);
+    });
+
+    it('⭐ 台帳に無かった委譲（before が null）が終端へ入ると、task を倒し、endedAt を書く', async () => {
+      const toggle = { on: false };
+      const clock = { at: T0 };
+      const s = await setup(
+        (stores) => ({
+          ...stores,
+          jobs: {
+            ...stores.jobs,
+            getJob: async (id: string) => (toggle.on ? null : stores.jobs.getJob(id)),
+          },
+        }),
+        undefined,
+        () => clock.at,
+      );
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      toggle.on = true;
+      clock.at = T0 + 5 * MIN;
+
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect((await s.stores.jobs.getJob(started.managerId))?.endedAt).toBe(
+        new Date(T0 + 5 * MIN).toISOString(),
+      );
+    });
+
+    it('台帳に無かった委譲（before が null）が running へ入ると、task を waiting にする（動き出す側）', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        jobs: {
+          ...stores.jobs,
+          getJob: async (id: string) => (toggle.on ? null : stores.jobs.getJob(id)),
+        },
+      }));
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+      s.fake.push(report(started.managerId, 'failed'));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      toggle.on = true;
+
+      await s.pool.send(started.managerId, '続きをお願い');
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    });
+  });
+
+  describe('見回りが失敗したとき（#repairStrandedTasks の catch）', () => {
+    it('⭐ 委譲の一覧を読めなければ、投げずに stderr へ「終わった委譲の task の直し」を1行残し、日誌は書かない', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        jobs: {
+          ...stores.jobs,
+          listJobs: async () => {
+            if (toggle.on) throw new Error('一覧を読めない');
+            return stores.jobs.listJobs();
+          },
+        },
+      }));
+      toggle.on = true;
+
+      const lines = await captureStderr(() => s.pool.repairStrandedTasks());
+      expect(
+        lines.some((line) =>
+          line.includes('終わった委譲の task の直しを記録できませんでした: Error: 一覧を読めない'),
+        ),
+      ).toBe(true);
+      expect(await decisions(s.stores)).toEqual([]);
+    });
+
+    it('⭐ task ストアが投げても同じ。終わった委譲が1本も無ければ、task の一覧は読まない', async () => {
+      const toggle = { on: false };
+      const s = await setup((stores) => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          list: async (options?: Parameters<Stores['tasks']['list']>[0]) => {
+            if (toggle.on) throw new Error('task の一覧を読めない');
+            return stores.tasks.list(options);
+          },
+        },
+      }));
+      toggle.on = true;
+
+      // 終わった委譲が無い: task の一覧へ進まないので、何も残らない
+      expect(await captureStderr(() => s.pool.repairStrandedTasks())).toEqual([]);
+
+      await s.stores.tasks.add(task('t-1', 'waiting'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+      const lines = await captureStderr(() => s.pool.repairStrandedTasks());
+      expect(
+        lines.some((line) =>
+          line.includes(
+            '終わった委譲の task の直しを記録できませんでした: Error: task の一覧を読めない',
+          ),
+        ),
+      ).toBe(true);
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    });
+
+    it('task の setStatus が投げても、投げずに stderr へ残し、日誌には遷移を書かない', async () => {
+      const s = await setup((stores) => ({
+        ...stores,
+        tasks: {
+          ...stores.tasks,
+          setStatus: async () => {
+            throw new Error('task ストアが落ちている');
+          },
+        },
+      }));
+      await s.stores.tasks.add(task('t-1', 'waiting'));
+      await s.stores.jobs.putJob(ledgerJob('mgr-a', 'failed', 't-1'));
+
+      const lines = await captureStderr(() => s.pool.repairStrandedTasks());
+      expect(
+        lines.some((line) =>
+          line.includes(
+            '終わった委譲の task の直しを記録できませんでした: Error: task ストアが落ちている',
+          ),
+        ),
+      ).toBe(true);
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect(await decisions(s.stores)).toEqual([]);
+    });
+  });
+});
+
 describe('道具: manager_start の taskId', () => {
   function build(stores: Stores) {
     const started: unknown[] = [];
