@@ -423,7 +423,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager.ts': {
     '#closeAfterLost': 'decision',
     '#closeDuplicateFailed': 'decision',
-    '#closeSelfFenced': 'recovery',
     '#deliverReportFromUnreplacedSession': 'reply',
     '#dropStaleSessionEvent': 'decision',
     // `#handleEvent` の case を種類ごとのメソッドへ出したので、`#handleEvent` 自身には書き込み箇所が無い
@@ -451,6 +450,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager-denial.ts': {
     '#deniedOf': 'thinning',
     handle: 'decision',
+  },
+  // 自己失効の `closed` を受けて、貸し出しを返して引き取りの挑み直しを日誌へ書く協力者（旧 `Pool#closeSelfFenced`）。同じ検査をここへ移した。公開メソッド `closeSelfFenced` は `#` の付かない名前の行
+  'manager-self-fenced.ts': {
+    closeSelfFenced: 'recovery',
   },
   // 担当の `session` を受けて、plugin の読み込み・MCP の接続の失敗を日誌へ書く協力者（旧 `Pool#handleSession`）。同じ検査をここへ移した。
   'manager-session.ts': {
@@ -621,6 +624,7 @@ const EXCHANGE_SOURCES = [
   'clone.ts',
   'denial-renotify.ts',
   'manager-denial.ts',
+  'manager-self-fenced.ts',
   'manager-session.ts',
   'manager-waiting.ts',
   'manager.ts',

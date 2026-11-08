@@ -128,6 +128,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'manager.ts',
     'manager-task-link.ts',
     'manager-denial.ts',
+    'manager-self-fenced.ts',
     'manager-session.ts',
     'manager-tool-use.ts',
     'manager-parked-peers.ts',
