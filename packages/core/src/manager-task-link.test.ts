@@ -647,6 +647,56 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
   });
 });
 
+// 現状の動きの固定（pin）その 2: 猶予（案 C の残り）を置く前の動き。期待は今の作りの出力から確かめた（仕様を先に書いたものではない）。
+// 上の「pin: ターン終わりの report(done)…」の 1 本目（report(done) 即時）と合わせ、次の 3 本は猶予の PR の後に反転する（反転後の期待は
+// 「報告由来の report(done) と、猶予内の restore では waiting の task を倒さない」。倒れるのは猶予を過ぎた見回りだけ）。
+// 反転しないもの（即時に倒す stopped・failed・lost・closed(done)）は上の pin が持つ。
+describe('pin: 猶予を置く前の動き（猶予の PR の後に反転するもの）', () => {
+  const T0 = Date.parse('2026-10-29T00:00:00.000Z');
+  const lineCount = (lines: string[], needle: string): number =>
+    lines.filter((line) => line.includes(needle)).length;
+
+  // 反転する: 猶予の後は、1 往復目の report(done) では倒れず、日誌の「waiting から needs_decision」は 0 件・「needs_decision から waiting」も 0 件になる
+  it('(α) manager_send で起こした委譲のターンごとに、task は waiting ↔ needs_decision を往復する', async () => {
+    const clock = { at: T0 };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    clock.at += 60_000;
+    await s.pool.send(started.managerId, '続きをお願い');
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at += 60_000;
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+
+    const lines = await decisions(s.stores);
+    expect(lineCount(lines, 'waiting から needs_decision')).toBe(2);
+    expect(lineCount(lines, 'needs_decision から waiting')).toBe(1);
+  });
+
+  // 反転する: 猶予（30 分）の内の endedAt は倒さない。猶予を過ぎていれば倒す（この PR の後も同じ）
+  it('(iii) 起動時の restore は、たった今終わった done の委譲に結び付いた waiting の task も倒す', async () => {
+    const clock = { at: T0 };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add({ ...task('t-1', 'waiting'), updatedAt: new Date(T0).toISOString() });
+    await s.stores.jobs.putJob({
+      ...ledgerJob('mgr-fresh', 'done', 't-1'),
+      endedAt: new Date(T0).toISOString(),
+    });
+
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+});
+
 // 新しい仕様を先に書いた試験（案 D）。上の pin と違い、実装の前は赤く、実装の後に緑になる。
 // 背景処理の完了待ちで閉じたターンの report(done) は、委譲がまだ生きている印なので waiting の task を倒さない。
 // 保留は Job.awaitingBackgroundSince が持ち、背景待ちでない report・closed・manager_send（running）で下り、6 時間で見回りが無視する。

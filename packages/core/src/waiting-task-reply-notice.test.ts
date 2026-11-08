@@ -51,3 +51,18 @@ describe('selectWaitingReplyTasks と背景処理待ちの done', () => {
     expect(named({ status: 'running', taskId: 't' })).toBe(false);
   });
 });
+
+// pin（今の作りの出力から確かめた。仕様を先に書いたものではない）: 猶予（案 C の残り）を置く前、done の委譲は
+// たった今終わっても「結び付いていない返事待ち」と名乗られる。猶予の PR の後に反転する（猶予内の done は名乗らない）。
+describe('pin: 猶予を置く前の done の読み（猶予の PR の後に反転）', () => {
+  it('たった今 endedAt が付いた done の委譲が結び付いた waiting も、名乗る', () => {
+    const fresh: Pick<Job, 'status' | 'taskId' | 'endedAt'> = {
+      status: 'done',
+      taskId: 't',
+      endedAt: new Date(NOW - 60_000).toISOString(),
+    };
+    expect(selectWaitingReplyTasks([waitingTask], [fresh], new Set(['conv-1']), NOW)).toHaveLength(
+      1,
+    );
+  });
+});
