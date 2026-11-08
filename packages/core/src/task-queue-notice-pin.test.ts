@@ -82,6 +82,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     expect(notice).toMatchInlineSnapshot(`
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）
+      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1
@@ -114,6 +115,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     expect(digestSectionOf(digest)).toMatchInlineSnapshot(`
       "## 待ち行列の先頭
       - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）
+      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前） / waiting 1 件（最も古いのは 1時間20分前）
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1

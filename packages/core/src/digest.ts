@@ -814,7 +814,7 @@ export async function buildActivityDigest(
   sections.push(
     '',
     TASK_QUEUE_SECTION_HEADING_HEAD,
-    ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT }),
+    ...describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT, nowMs: Date.now() }),
   );
 
   sections.push(...standingSection());
