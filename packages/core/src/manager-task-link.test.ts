@@ -20,6 +20,9 @@ import { createCloneTools } from './tools.js';
 
 const AT = '2026-10-29T00:00:00.000Z';
 
+// 報告由来の report(done) から見回りが task を倒すまでの猶予（`TASK_FOLLOW_GRACE_MS` の値を書き写して固定する: 値が動いたら試験が知らせる）
+const GRACE_MS = 30 * 60_000;
+
 function task(id: string, status: Task['status'] = 'queued'): Task {
   return {
     id,
@@ -135,8 +138,11 @@ describe('委譲の状態 → task の状態', () => {
 });
 
 describe('manager_start の taskId を、委譲の状態が task へ写す', () => {
-  it('⭐ 起こした直後に task は待ちになり、委譲が終わると判断待ちに戻る。task は閉じない', async () => {
-    const s = await setup();
+  // 経緯（猶予の PR）: 以前は report(done) の直後に needs_decision を期待していた。報告由来の done（ターンの終わり）は task を即時には倒さず、
+  // 猶予（30 分）を過ぎた見回りが倒すようになったので、「終わると判断待ちに戻る」を猶予の後の見回りで確かめる形へ変えた（task が戻ること自体は変わらない）
+  it('⭐ 起こした直後に task は待ちになり、委譲が終わると（猶予の後の見回りで）判断待ちに戻る。task は閉じない', async () => {
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
 
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
@@ -145,6 +151,9 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
 
     s.fake.push(report(started.managerId));
     await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     expect((await s.stores.tasks.get('t-1'))?.closedAt).toBeUndefined();
   });
@@ -186,12 +195,16 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
   });
 
+  // 経緯（猶予の PR）: report(done) 直後の needs_decision は猶予の後の見回りで作る形へ変えた（猶予内の send は task を動かさない: 猶予の試験が持つ）。判断待ちから待ちへ戻ることは変わらない
   it('⭐ resume（終わった委譲へ send）で、判断待ちの task は待ちへ戻る', async () => {
-    const s = await setup();
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(started.managerId));
     await settle();
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
 
     await s.pool.send(started.managerId, '続きをお願い');
@@ -282,26 +295,38 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     expect(await taskStatus(s.stores, 't-1')).toBe('queued');
   });
 
-  it('⭐ 終わった後にクローンが waiting を置いた task は、同じ委譲の2度目の報告で needs_decision へ倒さない', async () => {
-    const s = await setup();
+  // 経緯（猶予の PR）: 最初の needs_decision は猶予の後の見回りで作る形へ変えた。クローンが置いた waiting を、2度目の報告も、その後の見回りも倒さないことは変わらない
+  it('⭐ 終わった後にクローンが waiting を置いた task は、同じ委譲の2度目の報告・その後の見回りで needs_decision へ倒さない', async () => {
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(started.managerId));
     await settle();
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
 
     s.fake.push(report(started.managerId));
     await settle();
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
   });
 
-  it('⭐ runner が done のセッションを持ったまま restore しても、クローンが置いた waiting を倒さない', async () => {
-    const s = await setup();
+  // 経緯（猶予の PR）: 猶予の内の restore は何も倒さないので、時計を猶予の後へ進めても倒さないことを確かめる形にした（そうしないと、猶予のせいで緑なのかクローンの置いた waiting を見たから緑なのか分からない）
+  it('⭐ runner が done のセッションを持ったまま、猶予を過ぎて restore しても、クローンが置いた waiting を倒さない', async () => {
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(started.managerId));
     await settle();
+    // 猶予の後の見回りが倒した後で、クローンが waiting を置く（倒れる前に置いても、状態が同じなので更新時刻が進まず、置いたことにならない）
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
     // 再起動した別のプール。runner は done のセッションを持っている
     const rebooted = fakeRunner();
@@ -319,6 +344,7 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
       post: () => undefined,
       runners: registry,
       profile: createProfileService({ stores: s.stores, runners: registry }),
+      now: () => clock.at,
     });
     await pool.restore();
     await settle();
@@ -361,12 +387,16 @@ describe('manager_start の taskId を、委譲の状態が task へ写す', () 
     expect(await taskStatus(s.stores, 't-1')).toBe('queued');
   });
 
+  // 経緯（猶予の PR）: needs_decision への遷移は猶予の後の見回りで起きるので、時計を進めて repairStrandedTasks を呼んでから数える（遷移の件数は変わらず 2 件）
   it('⭐ 遷移は日誌に decision で残る（動かさなかったときは残らない）', async () => {
-    const s = await setup();
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(started.managerId));
     await settle();
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
 
     const lines = (await decisions(s.stores)).filter((line) => line.includes('task t-1'));
     expect(lines).toHaveLength(2);
@@ -400,12 +430,18 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
     };
   }
 
+  // 経緯（猶予の PR）: 報告由来の report(done) は task を動かさなくなったので、同期（setStatus）が走る即時の終端 closed(done) で確かめる形へ変えた
   it('⭐ task ストアが投げても委譲は終わり、失敗は日誌に残る', async () => {
     const s = await setup(failingTasks);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
 
-    s.fake.push(report(started.managerId));
+    s.fake.push({
+      type: 'closed',
+      managerId: started.managerId,
+      status: 'done',
+      reason: '畳んだ',
+    } as RunnerEvent);
     await settle();
     expect((await s.stores.jobs.getJob(started.managerId))?.status).toBe('done');
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
@@ -537,12 +573,16 @@ describe('終端の同期が失敗したとき・デーモンが落ちたとき'
 });
 
 describe('resume で同じ task に2本が走るとき', () => {
+  // 経緯（猶予の PR）: report(done) 直後の needs_decision は、猶予の後の見回りで作る形へ変えた。最後の1本が終わった後も、猶予の後の見回りで判断待ちへ倒れる
   it('⭐ 先に終わった1本は、走っている別の委譲がある間は task を判断待ちへ倒さない', async () => {
-    const s = await setup();
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const a = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(a.managerId));
     await settle();
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
 
     // A が終わったあとに B を同じ task へ起こし、A を resume する（入口の断りを通らない経路）
@@ -558,9 +598,12 @@ describe('resume で同じ task に2本が走るとき', () => {
     expect((await s.stores.jobs.getJob(b.managerId))?.status).toBe('done');
     expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
 
-    // 最後の1本が終わると判断待ちへ
+    // 最後の1本が終わると、猶予の後の見回りで判断待ちへ
     s.fake.push(report(a.managerId));
     await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
   });
 });
@@ -571,7 +614,10 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
   const needsDecisionLine = (lines: string[]): boolean =>
     lines.some((line) => line.includes('waiting から needs_decision'));
 
-  it('report(done) が 1 本来ると、waiting の task は needs_decision へ倒れる（日誌にも残る）', async () => {
+  // 反転済み（猶予の PR）: 直前の版の期待は「report(done) が 1 本来ると、waiting の task は即時に needs_decision へ倒れる（日誌にも残る）」。
+  // 経緯: runner はターンが 1 回終わるたびに idle・背景待ち・完了を区別しない done を出し、manager_send で起こす委譲のターンごとに
+  // waiting と needs_decision を往復していた。報告由来の done は task を動かさず、猶予（30 分）を過ぎて静かなままなら見回りが倒す（倒れ先は同じ）。
+  it('反転済み: report(done) が 1 本来ても、猶予の内は waiting の task は倒れず、日誌にも出ない', async () => {
     const s = await setup();
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
@@ -579,16 +625,21 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
 
     s.fake.push(report(started.managerId));
     await settle();
-    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
-    expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(false);
   });
 
   it('waiting へ戻された task は、同じ委譲の別の report(done)（before=done）では倒れない', async () => {
-    const s = await setup();
+    const clock = { at: Date.parse('2026-10-29T00:00:00.000Z') };
+    const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
     const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
     s.fake.push(report(started.managerId));
     await settle();
+    // 猶予の後の見回りが倒した後に、クローンが waiting へ戻す
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     await s.stores.tasks.setStatus('t-1', 'waiting', { by: 'clone', at: afterNow() });
 
     s.fake.push(report(started.managerId));
@@ -599,7 +650,7 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
   // 反転済み（案 D）: 直前の版の期待は「awaitingBackground 付きの done でも needs_decision へ倒れる」。
   // 経緯: 背景処理の完了待ちで閉じたターンは委譲がまだ生きている（runner が自分で起き直す）のに、台帳が done を書くたび task が
   // waiting から needs_decision へ戻り、クローンが手で戻し直していた。背景待ちの done は task を倒さない（awaitingBackgroundSince の印）。
-  // 背景待ちでない report(done) は上の 1 本目のとおり今までどおり倒す。
+  // 背景待ちでない report(done) は、猶予の PR の後は猶予の内は倒さず、猶予を過ぎた見回りが倒す（上の 1 本目）。
   it('反転済み: awaitingBackground 付きの report(done) では waiting の task は倒れない', async () => {
     const s = await setup();
     await s.stores.tasks.add(task('t-1'));
@@ -648,16 +699,17 @@ describe('pin: ターン終わりの report(done) と終端の即時同期（案
 });
 
 // 現状の動きの固定（pin）その 2: 猶予（案 C の残り）を置く前の動き。期待は今の作りの出力から確かめた（仕様を先に書いたものではない）。
-// 上の「pin: ターン終わりの report(done)…」の 1 本目（report(done) 即時）と合わせ、次の 3 本は猶予の PR の後に反転する（反転後の期待は
-// 「報告由来の report(done) と、猶予内の restore では waiting の task を倒さない」。倒れるのは猶予を過ぎた見回りだけ）。
+// 猶予の PR で、上の「pin: ターン終わりの report(done)…」の 1 本目（report(done) 即時）と、次の 2 本の期待を反転した（元のコメントは残し、経緯を足した。
+// 反転後の期待は「報告由来の report(done) と、猶予内の restore では waiting の task を倒さない。倒れるのは猶予を過ぎた見回りだけ」）。
 // 反転しないもの（即時に倒す stopped・failed・lost・closed(done)）は上の pin が持つ。
-describe('pin: 猶予を置く前の動き（猶予の PR の後に反転するもの）', () => {
+describe('pin: 猶予を置く前の動き（猶予の PR で反転したもの）', () => {
   const T0 = Date.parse('2026-10-29T00:00:00.000Z');
   const lineCount = (lines: string[], needle: string): number =>
     lines.filter((line) => line.includes(needle)).length;
 
-  // 反転する: 猶予の後は、1 往復目の report(done) では倒れず、日誌の「waiting から needs_decision」は 0 件・「needs_decision から waiting」も 0 件になる
-  it('(α) manager_send で起こした委譲のターンごとに、task は waiting ↔ needs_decision を往復する', async () => {
+  // 反転した: 直前の版の期待は「1 往復ごとに needs_decision と waiting を往復し、日誌の『waiting から needs_decision』は 2 件・『needs_decision から waiting』は 1 件」。
+  // 猶予の後は、1 往復目の report(done) では倒れず、日誌の「waiting から needs_decision」は 0 件・「needs_decision から waiting」も 0 件になる
+  it('(α) 反転済み: manager_send で起こした委譲のターンが何回終わっても、task は waiting のまま遷移しない', async () => {
     const clock = { at: T0 };
     const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1'));
@@ -665,7 +717,7 @@ describe('pin: 猶予を置く前の動き（猶予の PR の後に反転する�
 
     s.fake.push(report(started.managerId));
     await settle();
-    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
 
     clock.at += 60_000;
     await s.pool.send(started.managerId, '続きをお願い');
@@ -675,15 +727,16 @@ describe('pin: 猶予を置く前の動き（猶予の PR の後に反転する�
     clock.at += 60_000;
     s.fake.push(report(started.managerId));
     await settle();
-    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
 
     const lines = await decisions(s.stores);
-    expect(lineCount(lines, 'waiting から needs_decision')).toBe(2);
-    expect(lineCount(lines, 'needs_decision から waiting')).toBe(1);
+    expect(lineCount(lines, 'waiting から needs_decision')).toBe(0);
+    expect(lineCount(lines, 'needs_decision から waiting')).toBe(0);
   });
 
-  // 反転する: 猶予（30 分）の内の endedAt は倒さない。猶予を過ぎていれば倒す（この PR の後も同じ）
-  it('(iii) 起動時の restore は、たった今終わった done の委譲に結び付いた waiting の task も倒す', async () => {
+  // 反転した: 直前の版の期待は「たった今終わった done の委譲に結び付いた waiting の task も、restore が needs_decision へ倒す」。
+  // 経緯: 猶予 0 のままだと、再起動のたびに（クローンが次の指示を送る前の）waiting が戻る。猶予（30 分）の内は倒さず、猶予を過ぎていれば倒す
+  it('(iii) 反転済み: 起動時の restore は、たった今終わった done の委譲に結び付いた waiting の task を倒さない（猶予を過ぎれば倒す）', async () => {
     const clock = { at: T0 };
     const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add({ ...task('t-1', 'waiting'), updatedAt: new Date(T0).toISOString() });
@@ -692,6 +745,10 @@ describe('pin: 猶予を置く前の動き（猶予の PR の後に反転する�
       endedAt: new Date(T0).toISOString(),
     });
 
+    await s.pool.restore();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at = T0 + GRACE_MS + 60_000;
     await s.pool.restore();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
   });
@@ -732,11 +789,16 @@ describe('背景処理待ちで閉じた report(done) は waiting の task を�
     expect((await s.stores.jobs.getJob(id))?.endedAt).toBeUndefined();
   });
 
-  it('(b) その後、背景待ちでない report(done) が来ると倒れ、印は下り、endedAt が書かれる', async () => {
-    const { s, id } = await startBackgroundWaiting({ at: T0 });
+  // 経緯（猶予の PR）: 背景待ちでない report(done) は、猶予の内は倒さず、猶予を過ぎた見回りが倒す形になった（印が下り endedAt が書かれることは変わらない）
+  it('(b) その後、背景待ちでない report(done) が来ると、印は下り、endedAt が書かれ、猶予の後の見回りで倒れる', async () => {
+    const clock = { at: T0 };
+    const { s, id } = await startBackgroundWaiting(clock);
 
     s.fake.push(report(id));
     await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    clock.at += GRACE_MS + 60_000;
+    await s.pool.repairStrandedTasks();
     expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
     expect(needsDecisionLine(await decisions(s.stores))).toBe(true);
     expect(await heldSince(s, id)).toBeUndefined();
@@ -829,8 +891,9 @@ describe('背景処理待ちで閉じた report(done) は waiting の task を�
     expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(false);
   });
 
-  it('(f2) 印の無い done の委譲の task は、今までどおり見回りが倒す', async () => {
-    const clock = { at: T0 };
+  // 経緯（猶予の PR）: 時計を猶予（30 分）の後へ進めた（台帳の endedAt は T0。猶予の内なら倒さない）
+  it('(f2) 印の無い done の委譲の task は、猶予を過ぎていれば今までどおり見回りが倒す', async () => {
+    const clock = { at: T0 + GRACE_MS + 60_000 };
     const s = await setup(undefined, undefined, () => clock.at);
     await s.stores.tasks.add(task('t-1', 'waiting'));
     await s.stores.jobs.putJob(ledgerJob('mgr-bg', 'done', 't-1'));
@@ -856,6 +919,221 @@ describe('背景処理待ちで閉じた report(done) は waiting の task を�
     const after = await setup(undefined, s.stores, () => T0 + HOUR);
     expect(await heldSince(after, id)).toBe(new Date(T0).toISOString());
     expect(await taskStatus(after.stores, 't-1')).toBe('waiting');
+  });
+});
+
+// 新しい仕様を先に書いた試験（案 C の残り）。上の pin と違い、実装の前は赤く、実装の後に緑になる（仕様から書いたもので、今の作りの出力から確かめたものではない）。
+// 報告由来の report(done)（ターンの終わり。背景待ちでない）は task を即時には倒さず、猶予（30 分）を過ぎて静かなままなら見回り（repairStrandedTasks）が倒す。
+// 即時に倒すのは stopped・failed・lost・closed(done)（セッションが畳まれた）で、今までどおり。
+describe('報告由来の report(done) は猶予の内は waiting の task を倒さず、猶予を過ぎた見回りが倒す（案 C の残り）', () => {
+  const MIN = 60_000;
+  // 猶予は 30 分（実装の定数の値をここへ書き写して固定する: 値が動いたら試験が知らせる）
+  const GRACE = 30 * MIN;
+  const T0 = Date.parse('2026-10-29T00:00:00.000Z');
+  const needsDecisionLine = (lines: string[]): boolean =>
+    lines.some((line) => line.includes('waiting から needs_decision'));
+  const backToWaitingLine = (lines: string[]): boolean =>
+    lines.some((line) => line.includes('needs_decision から waiting'));
+  const backgroundDone = (id: string): RunnerEvent =>
+    ({
+      ...report(id),
+      awaitingBackground: { count: 1, breakdown: 'bash×1' },
+    }) as RunnerEvent;
+
+  async function startAndReport(clock: { at: number }) {
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(report(started.managerId));
+    await settle();
+    return { s, id: started.managerId };
+  }
+
+  it('(a) 猶予内の report(done) で task は waiting のまま。日誌に「needs_decision にした」は出ず、endedAt は書かれる', async () => {
+    const { s, id } = await startAndReport({ at: T0 });
+    expect((await s.stores.jobs.getJob(id))?.status).toBe('done');
+    expect((await s.stores.jobs.getJob(id))?.endedAt).toBe(new Date(T0).toISOString());
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    expect(needsDecisionLine(await decisions(s.stores))).toBe(false);
+  });
+
+  it('(b) 猶予を過ぎて repairStrandedTasks を呼ぶと needs_decision。猶予の内では何度呼んでも倒さず、倒した後に何度呼んでも日誌は増えない', async () => {
+    const clock = { at: T0 };
+    const { s } = await startAndReport(clock);
+
+    clock.at = T0 + GRACE - MIN;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at = T0 + GRACE + MIN;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    const count = (await decisions(s.stores)).filter((l) =>
+      l.includes('waiting から needs_decision'),
+    ).length;
+    expect(count).toBe(1);
+
+    await s.pool.repairStrandedTasks();
+    expect(
+      (await decisions(s.stores)).filter((l) => l.includes('waiting から needs_decision')),
+    ).toHaveLength(1);
+  });
+
+  it('(b2) 猶予を過ぎる前にクローンが task を動かしていたら、見回りは倒さない', async () => {
+    const clock = { at: T0 };
+    const { s } = await startAndReport(clock);
+    await s.stores.tasks.setStatus('t-1', 'queued', {
+      by: 'clone',
+      at: new Date(T0 + 5 * MIN).toISOString(),
+    });
+
+    clock.at = T0 + GRACE + MIN;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('queued');
+  });
+
+  it('(c) 猶予内に manager_send が来ると task は waiting のまま。ターンを何回往復しても、日誌に遷移（倒す・戻す）が出ない', async () => {
+    const clock = { at: T0 };
+    const { s, id } = await startAndReport(clock);
+
+    for (let turn = 0; turn < 3; turn += 1) {
+      clock.at += 5 * MIN;
+      await s.pool.send(id, '続きをお願い');
+      await settle();
+      expect((await s.stores.jobs.getJob(id))?.status).toBe('running');
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect((await s.stores.jobs.getJob(id))?.endedAt).toBeUndefined();
+
+      clock.at += 5 * MIN;
+      s.fake.push(report(id));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+    }
+    const lines = (await decisions(s.stores)).filter((line) => line.includes('task t-1'));
+    expect(needsDecisionLine(lines)).toBe(false);
+    expect(backToWaitingLine(lines)).toBe(false);
+    // 起こした直後の queued → waiting の 1 件だけ
+    expect(lines).toHaveLength(1);
+  });
+
+  it('(d) 背景待ちの保留中は猶予を過ぎても倒さず、保留が下りた後の猶予で倒れる', async () => {
+    const clock = { at: T0 };
+    const s = await setup(undefined, undefined, () => clock.at);
+    await s.stores.tasks.add(task('t-1'));
+    const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+    s.fake.push(backgroundDone(started.managerId));
+    await settle();
+
+    // 猶予の 2 倍が過ぎても、保留（6 時間の内）は倒さない
+    clock.at = T0 + 2 * GRACE;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    // 保留が下りる（背景待ちでない報告）。ここから猶予を数える
+    const releasedAt = clock.at;
+    s.fake.push(report(started.managerId));
+    await settle();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at = releasedAt + GRACE - MIN;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+
+    clock.at = releasedAt + GRACE + MIN;
+    await s.pool.repairStrandedTasks();
+    expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+  });
+
+  describe('(e) 猶予 0: stopped・failed・lost・closed(done) は今までどおり即時に倒れる', () => {
+    it.each([
+      ['failed（report）', (id: string): RunnerEvent => report(id, 'failed')],
+      [
+        'lost（closed）',
+        (id: string): RunnerEvent =>
+          ({
+            type: 'closed',
+            managerId: id,
+            status: 'lost',
+            reason: '器から消えた',
+          }) as RunnerEvent,
+      ],
+      [
+        'closed(done)',
+        (id: string): RunnerEvent =>
+          ({ type: 'closed', managerId: id, status: 'done', reason: '畳んだ' }) as RunnerEvent,
+      ],
+    ])('%s', async (_name, event) => {
+      const clock = { at: T0 };
+      const s = await setup(undefined, undefined, () => clock.at);
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+      s.fake.push(event(started.managerId));
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it('stopped（abort）', async () => {
+      const clock = { at: T0 };
+      const s = await setup(undefined, undefined, () => clock.at);
+      await s.stores.tasks.add(task('t-1'));
+      const started = await s.pool.start({ request: '調べる', taskId: 't-1' });
+
+      await s.pool.abort(started.managerId);
+      await settle();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+    });
+
+    it.each(['failed', 'lost', 'stopped'] as const)(
+      '見回りも、台帳が %s の委譲の task は endedAt の直後でも倒す（同期が落ちた回の直し）',
+      async (status) => {
+        const clock = { at: T0 };
+        const s = await setup(undefined, undefined, () => clock.at);
+        await s.stores.tasks.add({
+          ...task('t-1', 'waiting'),
+          updatedAt: new Date(T0).toISOString(),
+        });
+        await s.stores.jobs.putJob({
+          ...ledgerJob('mgr-x', status, 't-1'),
+          endedAt: new Date(T0).toISOString(),
+        });
+
+        await s.pool.repairStrandedTasks();
+        expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      },
+    );
+  });
+
+  describe('(f) 起動時の restore も同じ猶予を使う', () => {
+    async function startedLedger(clock: { at: number }) {
+      const s = await setup(undefined, undefined, () => clock.at);
+      await s.stores.tasks.add({
+        ...task('t-1', 'waiting'),
+        updatedAt: new Date(T0).toISOString(),
+      });
+      await s.stores.jobs.putJob({
+        ...ledgerJob('mgr-fresh', 'done', 't-1'),
+        endedAt: new Date(T0).toISOString(),
+      });
+      return s;
+    }
+
+    it('猶予内の done は倒さない（再起動のたびに戻らない）', async () => {
+      const clock = { at: T0 + 10 * MIN };
+      const s = await startedLedger(clock);
+      await s.pool.restore();
+      await s.pool.restore();
+      expect(await taskStatus(s.stores, 't-1')).toBe('waiting');
+      expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(false);
+    });
+
+    it('猶予を過ぎていれば倒す', async () => {
+      const clock = { at: T0 + GRACE + MIN };
+      const s = await startedLedger(clock);
+      await s.pool.restore();
+      expect(await taskStatus(s.stores, 't-1')).toBe('needs_decision');
+      expect((await decisions(s.stores)).some((line) => line.includes('起動時の直し'))).toBe(true);
+    });
   });
 });
 

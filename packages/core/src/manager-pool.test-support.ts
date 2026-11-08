@@ -32,6 +32,7 @@ export function fakeManagerPool(overrides: Partial<ManagerPool> = {}): ManagerPo
     runnerReportedAnthropicRoute: () => undefined,
     autoFoldOnPlacementPressure: () => undefined,
     autoFoldUnderPressure: () => Promise.resolve(),
+    repairStrandedTasks: () => Promise.resolve(),
     transcript: notImplemented,
     unpushedWork: notImplemented,
     runningManagerOwning: () => undefined,

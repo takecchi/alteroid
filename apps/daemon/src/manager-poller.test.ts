@@ -272,6 +272,90 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
   });
 });
 
+// 新しい仕様を先に書いた試験（8 段目 task-follow）: 報告由来の done で waiting のままの task を、猶予を過ぎたら倒す見回り。60 秒ごと・冪等。
+describe('8 段目 task-follow: repairStrandedTasks() を見回りごとに呼ぶ', () => {
+  let lines: string[] = [];
+  beforeEach(() => {
+    lines = [];
+    setStderrSinkForTesting((line) => {
+      lines.push(line);
+    });
+  });
+  afterEach(() => {
+    setStderrSinkForTesting(null);
+  });
+
+  function managersWithRepair(repair: () => Promise<void> | void) {
+    const order: string[] = [];
+    const managers: ManagerPool = fakeManagerPool({
+      async probeTurnEnds() {
+        order.push('probeTurnEnds');
+      },
+      async flushWithheldReports() {
+        order.push('flushWithheldReports');
+      },
+      async settleStalledUsageWakes() {
+        order.push('settleStalledUsageWakes');
+        return [];
+      },
+      async renotifyStalledDenials() {
+        order.push('renotifyStalledDenials');
+      },
+      async deliverHeldMessages() {
+        order.push('deliverHeldMessages');
+      },
+      async repairStrandedTasks() {
+        order.push('repairStrandedTasks');
+        await repair();
+      },
+    });
+    return { managers, order };
+  }
+
+  it('見回りの 1 回ごとに 1 回呼ぶ（既定の間隔は 60 秒の見回りそのもの）', async () => {
+    const { managers, order } = managersWithRepair(() => undefined);
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    poller.stop();
+
+    expect(order.filter((name) => name === 'repairStrandedTasks')).toHaveLength(1);
+  });
+
+  it('失敗（同期・非同期）は段の名前と理由を stderr に残し、ポーラー自身は落ちない', async () => {
+    const { managers, order } = managersWithRepair(() =>
+      Promise.reject(new Error('task ストアが落ちている（模擬）')),
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    poller.stop();
+
+    expect(order).toContain('repairStrandedTasks');
+    const failed = lines.filter((line) => line.includes('task-follow'));
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toContain('task ストアが落ちている（模擬）');
+  });
+
+  it('前の段（held-messages）が投げても、8 段目は走る', async () => {
+    const order: string[] = [];
+    const managers: ManagerPool = fakeManagerPool({
+      async deliverHeldMessages() {
+        throw new Error('預かり分が配れない（模擬）');
+      },
+      async repairStrandedTasks() {
+        order.push('repairStrandedTasks');
+      },
+    });
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    poller.stop();
+
+    expect(order).toEqual(['repairStrandedTasks']);
+  });
+});
+
 describe('見回りの段の失敗は stderr に跡を残す（止めない・間引く）', () => {
   let lines: string[] = [];
   beforeEach(() => {

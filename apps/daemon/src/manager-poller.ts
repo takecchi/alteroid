@@ -31,7 +31,7 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     );
   };
 
-  // 段ごとに印を打つ（#4485）: 見回りは印の無いまま 60 秒ごとに5段を回すので、どれかの段の同期の処理がループを止めても、
+  // 段ごとに印を打つ（#4485）: 見回りは印の無いまま 60 秒ごとに8段（rescue-refs・auto-fold・turn-ends・withheld-reports・usage-wakes・denials・held-messages・task-follow）を回すので、どれかの段の同期の処理がループを止めても、
   // 止まった窓の「直前の印」が直前に通った別の出来事（runner の tool_use など）に見えていたため
   const step = (label: string, run: () => Promise<unknown> | undefined): Promise<void> => {
     notePhase(`poller:${label}`);
@@ -65,6 +65,8 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
         .then(() => step('usage-wakes', () => options.managers.settleStalledUsageWakes()))
         .then(() => step('denials', () => options.managers.renotifyStalledDenials()))
         .then(() => step('held-messages', () => options.managers.deliverHeldMessages()))
+        // 報告由来の `done` で waiting のまま残した task を、猶予（30 分）を過ぎてから倒す。冪等で、台帳を数えるだけなので連鎖の末尾に置く
+        .then(() => step('task-follow', () => options.managers.repairStrandedTasks()))
         .finally(() => {
           notePhase('poller:done');
         })

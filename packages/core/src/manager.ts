@@ -164,6 +164,7 @@ import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from '.
 import { isAwaitingBackgroundHold } from './job-awaiting-background.js';
 import { isManagerInFlight } from './job-status-running.js';
 import { isTaskClosed, taskStatusForJob } from './task.js';
+import { TASK_FOLLOW_GRACE_MS } from './task-follow-grace.js';
 import {
   carryKnownBranches,
   isUnpushedWorkObservationAtLeastAsNewAs,
@@ -980,6 +981,12 @@ export interface ManagerPool {
    * 1つの runner の失敗で残りを止めない。
    */
   autoFoldUnderPressure(): Promise<void>;
+  /**
+   * 周回の見回りから、終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す。
+   * 報告由来の `done`（ターンの終わり）は `#syncTask` が task を動かさず、猶予（`TASK_FOLLOW_GRACE_MS`、30 分）を過ぎて静かなままのものをここが倒す。
+   * 冪等（何度呼んでも同じ結果）で、`restore()` が起動時に走らせる直しと同じ本体。止めた後は何もしない。読めない・書けないときは例外にせず stderr に残す。
+   */
+  repairStrandedTasks(): Promise<void>;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
@@ -3635,6 +3642,11 @@ class Pool implements ManagerPool {
 
   autoFoldUnderPressure(): Promise<void> {
     return this.#autoFold.underPressure();
+  }
+
+  async repairStrandedTasks(): Promise<void> {
+    if (this.#stopped) return;
+    await this.#repairStrandedTasks();
   }
 
   runnerPidsSaturation(runnerId: string): PidsSaturation | undefined {
@@ -7159,7 +7171,7 @@ class Pool implements ManagerPool {
     event: Extract<RunnerEvent, { type: 'closed' }>,
   ): Promise<void> {
     this.#applyClosedToJob(record, event);
-    await this.#persist(record);
+    await this.#persist(record, { sessionClosed: true });
     this.#notePidsSaturationAtClose(record, event);
     const markedByClosed =
       event.status === 'failed' ? await this.#noteClosedFailure(record, event) : undefined;
@@ -7720,7 +7732,14 @@ class Pool implements ManagerPool {
     this.#synthesized.queue(...args);
   }
 
-  async #persist(record: ManagerRecord): Promise<void> {
+  /**
+   * `options.sessionClosed`: セッションが畳まれた書き込み（`#closeJob` だけが真）。`done` でも終わった委譲として task を即時に倒す。
+   * 偽の `done` は報告由来（ターンの終わり）で、task を動かさず `endedAt` だけ書き、猶予を過ぎた見回りが倒す（`TASK_FOLLOW_GRACE_MS`）。
+   */
+  async #persist(
+    record: ManagerRecord,
+    options: { readonly sessionClosed?: boolean } = {},
+  ): Promise<void> {
     record.job.updatedAt = this.#nowIso();
     // `done` 以外へ動く書き込み（`manager_send` の `running`・`ask` の `waiting_human`・`failed` など）は背景待ちの保留を下ろす。状態を変える経路は多く、個別に下ろすと1つ漏れた経路の印だけが残るので、書き込みの1本の口に置く
     if (record.job.status !== 'done') delete record.job.awaitingBackgroundSince;
@@ -7776,20 +7795,26 @@ class Pool implements ManagerPool {
       // ジョブ台帳が書けなくてもマネージャーは走らせるが、黙って消さない: 失敗は台帳にも日誌にも跡を残さない。
       noteDroppedRecord('ジョブ台帳', `job id=${record.job.id} status=${record.job.status}`, error);
     }
-    await this.#syncTask(record, before);
+    await this.#syncTask(record, before, options.sessionClosed === true);
   }
 
   /**
    * 委譲の状態を、結び付いた task（`Job.taskId`）へ写す（#5469 P3）。**状態を持たない規則**で、台帳に書く前の委譲の状態（`before`）と task の今の状態だけで決める:
    * - 動き出す（台帳に無かった／終わっていた委譲が `running` へ入る: 起こした直後・resume）: 閉じていない task を `waiting` にする
-   * - 終わる（動いていた／台帳に無かった委譲が done / failed / lost / stopped へ入る）: `waiting` の task だけを `needs_decision` にする。クローンが `queued` へ戻した task や、閉じた task には触れない
+   * - 終わる（動いていた／台帳に無かった委譲が failed / lost / stopped / closed(done)＝セッションが畳まれた へ入る）: `waiting` の task だけを即時に `needs_decision` にする。クローンが `queued` へ戻した task や、閉じた task には触れない
+   * - 報告由来の done（ターンの終わり。`sessionClosed` が偽）: task を動かさない（`endedAt` は `#persist` が書く）。idle・背景待ち・完了を区別できず、即時に倒すと
+   *   `manager_send` のたびに `waiting` と `needs_decision` を往復するため。猶予（`TASK_FOLLOW_GRACE_MS`）を過ぎて静かなままなら `#repairStrandedTasks`（見回り）が倒す
    * 動いている最中の書き込み（報告・確認要求など）と、終わった後の書き込みでは何もしない。クローンが動かした task を、委譲の次の書き込みで戻さないため。
    * 書き込みの1本の口（`#persist`）に置く: 委譲の状態を変える経路は多く、個別に呼ぶと1つ漏れた経路の task だけが動かない。
    * best-effort: task が書けなくても委譲と台帳は止めない。失敗は日誌へ残し、終わった委譲に結び付いたまま `waiting` の task は
    * 次の起動で `#repairStrandedTasks` が直す。
    * `before` が `undefined` のとき（直前の状態を読めなかった）は動き出しの側を見送る: 読めないまま task を `waiting` に戻すと、クローンの動かした状態を潰しうる。
    */
-  async #syncTask(record: ManagerRecord, before: JobStatus | null | undefined): Promise<void> {
+  async #syncTask(
+    record: ManagerRecord,
+    before: JobStatus | null | undefined,
+    sessionClosed: boolean,
+  ): Promise<void> {
     const taskId = record.job.taskId;
     if (taskId === undefined) return;
     const target = taskStatusForJob(record.job.status);
@@ -7803,9 +7828,9 @@ class Pool implements ManagerPool {
       const ending =
         before === null || (before !== undefined && taskStatusForJob(before) === 'waiting');
       if (!ending) return;
-      // 背景処理の完了待ちで閉じた `done` は、委譲がまだ生きている（runner が自分で起き直す。台帳は知らない）ので task を倒さない。
-      // 上限（6 時間）を過ぎた印は `isAwaitingBackgroundHold` が偽にするので、見回りの側で抜ける
-      if (isAwaitingBackgroundHold(record.job, this.#now())) return;
+      // 報告由来の `done` は task を倒さず、猶予を過ぎた見回りに任せる。背景処理の完了待ちで閉じた `done`（委譲がまだ生きている。
+      // runner が自分で起き直し、台帳は知らない）もここに含まれる。保留の上限（6 時間）は見回りの側（`isAwaitingBackgroundHold`）が持つ
+      if (record.job.status === 'done' && !sessionClosed) return;
     }
     try {
       const task = await this.#stores.tasks.get(taskId);
@@ -7860,8 +7885,13 @@ class Pool implements ManagerPool {
 
   /**
    * 終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す（#5469 P3）。
-   * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。`restore()` が呼ばれるたびに走る
-   * （起動のほか、takeOver・トークンの回復からも呼ばれる）ので、何度走っても同じ結果になるよう書いてある。
+   * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。さらに、報告由来の `done`（ターンの終わり）で
+   * `#syncTask` が見送った task を、猶予を過ぎてから倒す本体でもある。`restore()` が呼ばれるたび（起動のほか、takeOver・トークンの回復）と、
+   * 見回りの 8 段目（`repairStrandedTasks()`。60 秒ごと）から走るので、何度走っても同じ結果になるよう書いてある。
+   * 猶予（`TASK_FOLLOW_GRACE_MS`）: 最後に終端へ入った委譲が `done` なら、その `endedAt` から猶予を過ぎるまで直さない
+   * （`manager_send` が間に合えば `running` へ戻って task は動かない）。`failed`・`lost`・`stopped` は猶予 0。
+   * `done` の中の `closed(done)`（セッションが畳まれた）は台帳の上で報告由来と見分けられないので、ここでは猶予を掛ける: 即時に倒すのは
+   * `#syncTask` の側で済んでいて、ここへ来るのは同期が落ちた回だけ（猶予のぶん遅れて直るだけで、害は無い）。
    * 走っている委譲が1本でも結び付いていれば直さない。結び付いた委譲のうち最後に終端へ入ったもの（`Job.endedAt` が最も新しい）より後に
    * task が更新されていれば、クローンが置いた `waiting`（`task_set_status`）なので直さない。
    * `updatedAt` は使わない: 終わった後の書き込みでも進むので、基準にすると呼ばれるたびに判定が狂う。
@@ -7873,7 +7903,7 @@ class Pool implements ManagerPool {
     try {
       const active = new Set<string>();
       const skip = new Set<string>();
-      const lastFinished = new Map<string, { id: string; at: number }>();
+      const lastFinished = new Map<string, { id: string; at: number; graceMs: number }>();
       const nowMs = this.#now();
       for (const job of await this.#stores.jobs.listJobs()) {
         if (job.taskId === undefined) continue;
@@ -7888,21 +7918,26 @@ class Pool implements ManagerPool {
           skip.add(job.taskId);
           continue;
         }
+        const graceMs = job.status === 'done' ? TASK_FOLLOW_GRACE_MS : 0;
         const seen = lastFinished.get(job.taskId);
-        if (seen === undefined || at > seen.at) lastFinished.set(job.taskId, { id: job.id, at });
+        // 終端の時刻が同じなら猶予の短い側を採る（即時の終端を、同時刻の `done` の猶予に待たせない）
+        if (seen === undefined || at > seen.at || (at === seen.at && graceMs < seen.graceMs)) {
+          lastFinished.set(job.taskId, { id: job.id, at, graceMs });
+        }
       }
       if (lastFinished.size === 0) return;
       for (const task of (await this.#stores.tasks.list()).entries) {
         const last = lastFinished.get(task.id);
         if (last === undefined || skip.has(task.id) || active.has(task.id)) continue;
         if (task.status !== 'waiting') continue;
+        if (nowMs - last.at < last.graceMs) continue;
         const taskAt = Date.parse(task.updatedAt);
         if (Number.isNaN(taskAt) || taskAt > last.at) continue;
         await this.#moveTask(
           task.id,
           'needs_decision',
           last.id,
-          '終わった委譲に結び付いたまま waiting だった（起動時の直し）',
+          '終わった委譲に結び付いたまま waiting だった（見回り・起動時の直し）',
         );
       }
     } catch (error) {

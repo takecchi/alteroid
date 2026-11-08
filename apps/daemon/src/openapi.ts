@@ -1772,6 +1772,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     autoFoldUnderPressure() {
       throw new Error('spec 生成専用のスタブ: 逼迫の見回りで畳まない');
     },
+    repairStrandedTasks() {
+      throw new Error('spec 生成専用のスタブ: task の見回りで直さない');
+    },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');
     },

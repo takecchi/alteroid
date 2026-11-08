@@ -52,17 +52,46 @@ describe('selectWaitingReplyTasks と背景処理待ちの done', () => {
   });
 });
 
+// 新しい仕様を先に書いた試験（案 C の残り。今の作りの出力から確かめたものではない）:
+// 猶予（30 分）の内の done は、走っている委譲と同じに読む（見回りがまだ倒さない waiting を、結び付いていない返事待ちと名乗らない）。
+describe('(h) selectWaitingReplyTasks と猶予内の done', () => {
+  const MIN = 60 * 1000;
+  const endedAgo = (ms: number): Pick<Job, 'status' | 'taskId' | 'endedAt'> => ({
+    status: 'done',
+    taskId: 't',
+    endedAt: new Date(NOW - ms).toISOString(),
+  });
+  const namedWith = (job: Pick<Job, 'status' | 'taskId' | 'endedAt'>): boolean =>
+    selectWaitingReplyTasks([waitingTask], [job], new Set(['conv-1']), NOW).length === 1;
+
+  it('猶予の内の done の委譲が結び付いた waiting は、名乗らない', () => {
+    expect(namedWith(endedAgo(29 * MIN))).toBe(false);
+  });
+
+  it('猶予を過ぎた done は、名乗る（見回りが倒す側と揃える）', () => {
+    expect(namedWith(endedAgo(31 * MIN))).toBe(true);
+  });
+
+  it('endedAt の無い done は名乗る（今までどおり）', () => {
+    expect(namedWith({ status: 'done', taskId: 't' })).toBe(true);
+  });
+
+  it('failed の委譲は、終わった直後でも名乗る（猶予 0）', () => {
+    expect(namedWith({ ...endedAgo(MIN), status: 'failed' })).toBe(true);
+  });
+});
+
 // pin（今の作りの出力から確かめた。仕様を先に書いたものではない）: 猶予（案 C の残り）を置く前、done の委譲は
-// たった今終わっても「結び付いていない返事待ち」と名乗られる。猶予の PR の後に反転する（猶予内の done は名乗らない）。
-describe('pin: 猶予を置く前の done の読み（猶予の PR の後に反転）', () => {
-  it('たった今 endedAt が付いた done の委譲が結び付いた waiting も、名乗る', () => {
+// たった今終わっても「結び付いていない返事待ち」と名乗られる。猶予の PR で反転した（猶予内の done は名乗らない。反転前の期待は toHaveLength(1)）。
+describe('pin: 猶予を置く前の done の読み（猶予の PR で反転）', () => {
+  it('反転済み: たった今 endedAt が付いた done の委譲が結び付いた waiting は、名乗らない', () => {
     const fresh: Pick<Job, 'status' | 'taskId' | 'endedAt'> = {
       status: 'done',
       taskId: 't',
       endedAt: new Date(NOW - 60_000).toISOString(),
     };
     expect(selectWaitingReplyTasks([waitingTask], [fresh], new Set(['conv-1']), NOW)).toHaveLength(
-      1,
+      0,
     );
   });
 });
