@@ -878,3 +878,37 @@ describe('peer（Codex）の札（#4122）', () => {
     );
   });
 });
+
+describe('どの担当がどの鍵で動いているか（#6646）', () => {
+  it('マネージャーとクローンの札に、鍵のラベルを載せる', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        clone: { state: 'idle', token: { tokenId: 'tok-2', label: 'bob@example.test' } },
+        managers: [{ ...MANAGER, token: { tokenId: 'tok-1', label: 'alice@example.test' } }],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent?.token).toBe('bob@example.test');
+    expect(scene.managers[0]?.agent?.token).toBe('alice@example.test');
+  });
+
+  it('ラベルが無い鍵は id の頭8文字で言う', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({ managers: [{ ...MANAGER, token: { tokenId: '1598aba0-087e-461a' } }] }),
+      NOW,
+    );
+    expect(scene.managers[0]?.agent?.token).toBe('1598aba0');
+  });
+
+  it('鍵が分からない担当は欄を作らない（現役や空文字で埋めない）。作業者の札にも鍵を言わない', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: [{ ...MANAGER, workers: [{ agentType: 'worker' }] }],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent).not.toHaveProperty('token');
+    expect(scene.managers[0]?.agent).not.toHaveProperty('token');
+    expect(scene.managers[0]?.workers[0]?.agent).not.toHaveProperty('token');
+  });
+});

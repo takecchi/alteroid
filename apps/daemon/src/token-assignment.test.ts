@@ -247,3 +247,81 @@ describe('同じコンテナには同じ鍵を割り当て続ける（#6642）',
     expect((await b.assign('mgr-4', { container: 'runner-1' }))?.tokenId).toBe('b');
   });
 });
+
+describe('使用率が測れない鍵でも、偏りを戻す（#6649）', () => {
+  const CONTAINERS = ['runner-1', 'runner-2', 'runner-3', 'runner-4', 'runner-5', 'runner-6'];
+
+  function tokenOfContainer(b: ReturnType<typeof book>['b'], unit: string): string | undefined {
+    return b.target(unit)?.tokenId;
+  }
+
+  it('一度の停止で全コンテナが片方へ寄っても、止まった鍵が戻れば、新しい作業から半々へ戻り、そこで止まる', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)]);
+    for (const container of CONTAINERS) await b.assign(`${container}:m0`, { container });
+    // 最初は散る（測れない鍵どうしは割り当て中の数で選ぶ）
+    const first = CONTAINERS.map((c) => tokenOfContainer(b, `${c}:m0`));
+    expect(first.filter((id) => id === 'a')).toHaveLength(3);
+
+    // a が止まり、持ち主が b へ移る → 全コンテナが b
+    state.tokens = [token('a', 0, { cooldownUntil: AT + 60_000 }), token('b', 1)];
+    await b.evacuate('a');
+    for (const container of CONTAINERS) {
+      expect((await b.assign(`${container}:m1`, { container }))?.tokenId).toBe('b');
+    }
+
+    // a が戻る → 新しい作業を起こしたコンテナから a へ戻る
+    state.tokens = [token('a', 0), token('b', 1)];
+    const next: string[] = [];
+    for (const container of CONTAINERS) {
+      next.push((await b.assign(`${container}:m2`, { container }))?.tokenId ?? '');
+    }
+    expect(next.filter((id) => id === 'a')).toHaveLength(3);
+    expect(next.filter((id) => id === 'b')).toHaveLength(3);
+
+    // 半々になった後は、もう移さない（行ったり来たりしない）
+    const again: string[] = [];
+    for (const container of CONTAINERS) {
+      again.push((await b.assign(`${container}:m3`, { container }))?.tokenId ?? '');
+    }
+    expect(again).toEqual(next);
+  });
+
+  it('差が 1 なら移さない（キャッシュを捨てるほどの偏りではない）', async () => {
+    const { b } = book([token('a', 0), token('b', 1)]);
+    // runner-1 → a、runner-2 → b、runner-3 → a（割り当て中の数で選ばれる）
+    await b.assign('m1', { container: 'runner-1' });
+    await b.assign('m2', { container: 'runner-2' });
+    await b.assign('m3', { container: 'runner-3' });
+    expect(['m1', 'm2', 'm3'].map((u) => b.target(u)?.tokenId)).toEqual(['a', 'b', 'a']);
+
+    // runner-1 の次の作業: a に 2、b に 1 → 差 1 なので a のまま
+    expect((await b.assign('m4', { container: 'runner-1' }))?.tokenId).toBe('a');
+  });
+
+  it('動いている作業（再開）は、偏っていても止まるまで替えない', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)]);
+    for (const container of CONTAINERS.slice(0, 4))
+      await b.assign(`${container}:m0`, { container });
+    state.tokens = [token('a', 0, { cooldownUntil: AT + 60_000 }), token('b', 1)];
+    await b.evacuate('a');
+    state.tokens = [token('a', 0), token('b', 1)];
+
+    expect((await b.assign('runner-1:m0', { prior: 'b', container: 'runner-1' }))?.tokenId).toBe(
+      'b',
+    );
+  });
+
+  it('測れる鍵は今どおり使用率の閾値で決める（コンテナの数では移さない）', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)], { loads: { a: 10, b: 10 } });
+    for (const container of CONTAINERS.slice(0, 4))
+      await b.assign(`${container}:m0`, { container });
+    state.tokens = [token('a', 0, { cooldownUntil: AT + 60_000 }), token('b', 1)];
+    await b.evacuate('a');
+    state.tokens = [token('a', 0), token('b', 1)];
+
+    // b は 10% で閾値未満なので、4 コンテナが寄っていても使い続ける
+    for (const container of CONTAINERS.slice(0, 4)) {
+      expect((await b.assign(`${container}:m1`, { container }))?.tokenId).toBe('b');
+    }
+  });
+});

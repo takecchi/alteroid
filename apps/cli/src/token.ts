@@ -58,6 +58,14 @@ interface TokensView {
   version?: string;
   // 鍵ごとの枠の最後の観測（#6633）。欄が無いのは古いデーモン
   loads?: TokenLoad[];
+  // いまその鍵で動いている担当（#6646）。欄が無いのは数えられなかったか古いデーモン
+  usedBy?: TokenHolder[];
+}
+
+interface TokenHolder {
+  tokenId: string;
+  kind: string;
+  managerId?: string;
 }
 
 // 表示に要る形だけを持つ（`AccountUsageState` の全部は写さない）
@@ -240,6 +248,8 @@ export async function tokenListCommand(): Promise<void> {
     const status = describeStatus(token, now);
     if (status !== null) stdout.write(`   ${status}\n`);
     if (view.loads !== undefined) stdout.write(`   ${describeTokenLoad(view.loads, token.id)}\n`);
+    if (view.usedBy !== undefined)
+      stdout.write(`   ${describeTokenHolders(view.usedBy, token.id)}\n`);
   }
 }
 
@@ -537,4 +547,17 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     throw new Error(`${path} が失敗しました (${String(response.status)})`);
   }
   return response.json();
+}
+
+// 0 件を「誰も使っていない」と書く: 欄が在るのは数えられた回だけなので、空は本当に空である（#6646）
+// 委譲の名前は地図と同じ頭8文字: 画面ごとに形が違うと、同じ委譲だと突き合わせられないため
+export function describeTokenHolders(holders: readonly TokenHolder[], tokenId: string): string {
+  const mine = holders.filter((holder) => holder.tokenId === tokenId);
+  if (mine.length === 0) return '使用中: いまこの鍵で動いている担当は無い';
+  const names = mine.map((holder) =>
+    holder.kind === 'clone'
+      ? 'クローン'
+      : (holder.managerId?.slice(0, 8) ?? `知らない担当（${holder.kind}）`),
+  );
+  return `使用中: ${names.join(' / ')}`;
 }

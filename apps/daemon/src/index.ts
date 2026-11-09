@@ -1289,6 +1289,10 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     cloneModel: self.models.clone,
+    // 割り当てが在ればそれ、無ければ現役（クローンは割り当てが無いとき現役の鍵で走る）
+    cloneTokenId: () =>
+      tokenAssignments.target(CLONE_ASSIGNMENT_UNIT)?.tokenId ??
+      agentTokenHolder.identity()?.tokenId,
     journalEvents: journalBus,
     workerToolEvents: workerToolBus,
     storageProbe: storage.probe,

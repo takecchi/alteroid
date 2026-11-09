@@ -72,6 +72,30 @@ function describeTokenPolicyChanges(changes: readonly TokenPolicyChange[]): stri
     .join('、');
 }
 
+type TokenHolder = NonNullable<z.infer<typeof tokensListResponseSchema>['usedBy']>[number];
+
+// 進行中の委譲だけを数える: 終わった委譲も起こしたときの鍵を覚えているが、「いま使っている」とは言えないため
+// 数えられなければ欄ごと出さない: 一覧（鍵の行）を道連れにせず、空配列で「誰も使っていない」とも言わないため
+async function tokenHoldersOf(deps: AppDeps): Promise<TokenHolder[] | undefined> {
+  let managers: Awaited<ReturnType<AppDeps['clone']['managers']['list']>>;
+  try {
+    managers = await deps.clone.managers.list();
+  } catch {
+    return undefined;
+  }
+  const holders: TokenHolder[] = [];
+  const cloneTokenId = deps.cloneTokenId?.();
+  if (cloneTokenId !== undefined) holders.push({ tokenId: cloneTokenId, kind: 'clone' });
+  for (const manager of managers) {
+    if (manager.tokenId === undefined) continue;
+    const inProgress =
+      (manager.status === 'running' && manager.live) || manager.status === 'waiting_human';
+    if (!inProgress) continue;
+    holders.push({ tokenId: manager.tokenId, kind: 'manager', managerId: manager.managerId });
+  }
+  return holders;
+}
+
 export function tokensRoutes(deps: AppDeps) {
   return (
     new Hono<{ Variables: AuthVariables }>()
@@ -95,7 +119,9 @@ export function tokensRoutes(deps: AppDeps) {
             ' `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない' +
             '古いデーモン。読めなくても一覧は道連れにしない。' +
             '`loads` は鍵ごとの枠の最後の観測（デーモンのメモリにだけ在る。#6633）で、' +
-            '測っていない鍵の行は無い（0% で埋めない）。',
+            '測っていない鍵の行は無い（0% で埋めない）。' +
+            '`usedBy` はいまその鍵で動いている担当（クローンと、進行中の委譲。#6646）。' +
+            '鍵はセッションを起こしたときのもので、分からない担当は載らない。数えられなかったときは欄ごと無い。',
           responses: {
             200: jsonResponse(
               'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
@@ -130,11 +156,13 @@ export function tokensRoutes(deps: AppDeps) {
             };
           }
           const loads = deps.tokenLoads?.();
+          const usedBy = await tokenHoldersOf(deps);
           return c.json(
             tokensListResponseSchema.parse({
               ...view,
               ...activeFields,
               ...(loads === undefined ? {} : { loads }),
+              ...(usedBy === undefined ? {} : { usedBy }),
             }),
           );
         },

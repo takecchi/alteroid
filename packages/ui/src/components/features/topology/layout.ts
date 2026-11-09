@@ -11,8 +11,10 @@ export interface TopologyDetail {
 }
 
 // 欄が無いことは「不明」: 既定のモデルで埋めない
+// `token` は鍵の名前（#6646）。欄が無いのは「分からない」。鍵を言うのはクローンとマネージャーの札だけ（作業者は親と同じ鍵で走る）
 export interface TopologyAgent {
   model?: string;
+  token?: string;
 }
 
 export interface TopologyWorker {

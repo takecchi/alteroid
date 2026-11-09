@@ -442,6 +442,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       waiting: true,
       awaitingBackground: true,
       tokenGeneration: true,
+      tokenId: true,
       activeTokenGeneration: true,
       tokenGenerationUnknownReason: true,
       liveBackgroundTasks: true,
@@ -8815,6 +8816,8 @@ describe('認証トークンのプール', () => {
       version: expect.any(String),
       // 空のプールの既定構成は「現役の指名がまだ一度も無い」状態でもある（#5457。欄の追加だけで、既存の欄は変えない）
       activeNever: true,
+      // 動いている担当が居ないので空（#6646。欄の追加だけで、既存の欄は変えない）
+      usedBy: [],
     });
   });
 

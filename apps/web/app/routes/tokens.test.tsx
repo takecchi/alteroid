@@ -1744,3 +1744,50 @@ describe('/tokens 画面 — 日誌が書けず保存しなかった 500（#2886
     expect(screen.queryByText(HINT)).toBeNull();
   });
 });
+
+describe('/tokens 画面 — どの担当がその鍵で動いているか（#6646）', () => {
+  const ROWS = [
+    { id: 't-a', label: 'alice', order: 0, sha256: 'a'.repeat(12), source: 'stored' },
+    { id: 't-b', label: 'bob', order: 1, sha256: 'b'.repeat(12), source: 'stored' },
+  ];
+
+  function rowOf(label: string): HTMLElement {
+    const row = screen.getByText(label).closest('li');
+    if (row === null) throw new Error(`行が無い: ${label}`);
+    return row;
+  }
+
+  it('現役の印の横に「〇〇で使用中」を担当ごとに出す（委譲は地図と同じ頭8文字）', async () => {
+    stubScreen({
+      tokens: ROWS,
+      activeFields: {
+        active: { tokenId: 't-a', generation: 1, rotatedAt: '2026-11-09T00:00:00.000Z' },
+        usedBy: [
+          { tokenId: 't-a', kind: 'manager', managerId: 'mgr-01ad099a-3525' },
+          { tokenId: 't-b', kind: 'clone' },
+          { tokenId: 't-b', kind: 'manager', managerId: 'mgr-b4d06dc6-8f45' },
+        ],
+      },
+    });
+
+    renderTokens();
+    await waitForPoolLoaded();
+    await screen.findByText('alice');
+
+    expect(within(rowOf('alice')).getByText('現役')).toBeTruthy();
+    expect(within(rowOf('alice')).getByText('mgr-01ad で使用中')).toBeTruthy();
+    expect(within(rowOf('bob')).getByText('クローンで使用中')).toBeTruthy();
+    expect(within(rowOf('bob')).getByText('mgr-b4d0 で使用中')).toBeTruthy();
+    expect(within(rowOf('alice')).queryByText('クローンで使用中')).toBeNull();
+  });
+
+  it('usedBy の欄が無い（古いデーモン・数えられない）ときは何も出さない', async () => {
+    stubScreen({ tokens: ROWS });
+
+    renderTokens();
+    await waitForPoolLoaded();
+    await screen.findByText('alice');
+
+    expect(screen.queryByText(/で使用中/)).toBeNull();
+  });
+});

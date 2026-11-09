@@ -103,6 +103,8 @@ describe('配り方 balanced: 委譲ごとに割り当てた鍵で起こす（#6
     expect(summary?.tokenGeneration).toBe(assignment.targets.get(managerId)?.generation);
     expect(summary?.activeTokenGeneration).toBe(summary?.tokenGeneration);
     expect(summary?.activeTokenGeneration).not.toBe(ACTIVE.generation);
+    // 一覧は、起こしたときの鍵の id を名乗る（#6646。地図とトークンの画面の「使用中」の出所）
+    expect(summary?.tokenId).toBe('tok-b');
     await pool.stop();
   });
 
@@ -124,6 +126,7 @@ describe('配り方 balanced: 委譲ごとに割り当てた鍵で起こす（#6
     expect((await stores.jobs.getJob(managerId))?.tokenAssignment).toBeUndefined();
     const summary = (await pool.list()).find((entry) => entry.managerId === managerId);
     expect(summary?.tokenGeneration).toBe(ACTIVE.generation);
+    expect(summary?.tokenId).toBe(ACTIVE.tokenId);
     await pool.stop();
   });
 

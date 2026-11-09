@@ -434,6 +434,10 @@ export function createAppContext(deps: AppDeps) {
     storage: topologyStorage,
     modelsOf: (summary) => managerModelsOf(clone.managers, summary),
     ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
+    // ラベルだけを写す: 行は値を持つので、地図の側へ行ごと渡さない
+    tokenLabels: async () =>
+      new Map((await stores.tokens.list()).map((token) => [token.id, token.label] as const)),
+    ...(deps.cloneTokenId === undefined ? {} : { cloneTokenId: deps.cloneTokenId }),
   });
   const topologyTickMs = 2000;
   const topologyDebounceMs = 200;
