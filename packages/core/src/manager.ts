@@ -6761,7 +6761,7 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     event: Extract<RunnerEvent, { type: 'closed' }>,
   ): Promise<void> {
-    this.#closedApply.applyClosedToJob(record, event);
+    await this.#closedApply.applyClosedToJob(record, event);
     await this.#persist(record, { sessionClosed: true });
     // `runnerId` が無い分は無実の器を沈めないために数えない。印の判定（`failed` / `lost`・構造化された値だけ）と知らせる順（eagain → fork-denied）は `pidsSaturationSignsOf` が持つ。
     if (record.job.runnerId !== undefined) {
