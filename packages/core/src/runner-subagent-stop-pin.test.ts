@@ -1331,6 +1331,157 @@ describe('note・emit が投げたとき（catch）', () => {
   });
 });
 
+describe('待ちの解け方（#waitForBackgroundTasks）', () => {
+  const stopInput = (id: string) => ({
+    ...STOP_BASE,
+    agent_id: 'agent-1',
+    background_tasks: [bg(id)],
+  });
+
+  async function flag(promise: Promise<unknown>): Promise<{ done: boolean }> {
+    const state = { done: false };
+    void promise.then(() => {
+      state.done = true;
+    });
+    return state;
+  }
+
+  it('background_tasks_changed に載っていたものが載らなくなったら解ける。載ったことが無ければ、載っていないだけでは解けない', async () => {
+    const rig = await open();
+    await register(rig, 'bg-never', 'agent-1');
+    await register(rig, 'bg-seen', 'agent-1');
+    const never = await flag(fireStop(rig, stopInput('bg-never')));
+    rig.started.liveTasks([]);
+    await tick();
+    const neverAfterEmpty = never.done;
+
+    const seen = await flag(fireStop(rig, stopInput('bg-seen')));
+    rig.started.liveTasks(['bg-seen']);
+    await tick();
+    const seenWhileLive = seen.done;
+    rig.started.liveTasks([]);
+    await tick();
+    expect({ neverAfterEmpty, seenWhileLive, seenAfterGone: seen.done }).toMatchInlineSnapshot(`
+      {
+        "neverAfterEmpty": false,
+        "seenAfterGone": true,
+        "seenWhileLive": false,
+      }
+    `);
+  });
+
+  it('待ちの上限の 1 ミリ秒前までは解けず、ちょうどで timeout になる', async () => {
+    const rig = await open();
+    await register(rig, 'bg-1', 'agent-1');
+    vi.useFakeTimers();
+    try {
+      const state = await flag(fireStop(rig, stopInput('bg-1')));
+      await vi.advanceTimersByTimeAsync(SUBAGENT_BACKGROUND_WAIT_MS - 1);
+      const before = state.done;
+      const notesBefore = subagentNotes(rig.events).length;
+      await vi.advanceTimersByTimeAsync(1);
+      expect({
+        before,
+        notesBefore,
+        after: state.done,
+        notesAfter: subagentNotes(rig.events).length,
+      }).toMatchInlineSnapshot(`
+        {
+          "after": true,
+          "before": false,
+          "notesAfter": 1,
+          "notesBefore": 0,
+        }
+      `);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('#markProgressed を呼ばない（resume の作り直しで観測）', () => {
+  // SubagentStop だけを受けた resume は「まだ手が動いていない」ままなので、そのあとセッションが黙って落ちると作り直す（resume_failed）。
+  // 対照: 観測が手が動いた印を立てるなら、作り直さず closed で終わる。
+  async function resumeThenStop(
+    makeInput: (rig: Rig) => Promise<Record<string, unknown>>,
+  ): Promise<{ resumeFailed: number; closed: number; sessions: number }> {
+    const events: RunnerEvent[] = [];
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: dir,
+      emit: (event) => events.push(event),
+      queryFn: fn,
+      env: {},
+    });
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-dead',
+      cwd: dir,
+      request: '最初の依頼',
+      // 素材を 1 件渡す: 空だと作り直さない理由が `#progressed` だと確かめられない
+      entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+    });
+    const first = await vi.waitFor(() => {
+      const found = started[0];
+      if (found === undefined) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+    const rig = { started: first, events };
+    await fireStop(rig, await makeInput(rig));
+    await tick();
+    first.finish();
+    await vi.waitFor(() => {
+      if (!events.some((e) => e.type === 'resume_failed' || e.type === 'closed')) {
+        throw new Error('resume_failed も closed もまだ来ていない');
+      }
+    });
+    return {
+      resumeFailed: events.filter((e) => e.type === 'resume_failed').length,
+      closed: events.filter((e) => e.type === 'closed').length,
+      sessions: started.length,
+    };
+  }
+
+  // 起こし直す・打ち切る回は、所有者を表へ載せる PostToolUse（Bash）が先に手が動いた印を立てるので、この方法では観測できない
+  it('診断の回だけ受けても、落ちれば作り直す', async () => {
+    expect(
+      await resumeThenStop(async () => ({
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [bg('bg-orphan')],
+      })),
+    ).toMatchInlineSnapshot(`
+      {
+        "closed": 0,
+        "resumeFailed": 1,
+        "sessions": 2,
+      }
+    `);
+  });
+
+  it('読み取りに失敗した回だけ受けても、落ちれば作り直す', async () => {
+    expect(
+      await resumeThenStop(async () => {
+        const input: Record<string, unknown> = { ...STOP_BASE, agent_id: 'agent-1' };
+        Object.defineProperty(input, 'background_tasks', {
+          enumerable: true,
+          get(): never {
+            throw new Error('boom');
+          },
+        });
+        return input;
+      }),
+    ).toMatchInlineSnapshot(`
+      {
+        "closed": 0,
+        "resumeFailed": 1,
+        "sessions": 2,
+      }
+    `);
+  });
+});
+
 describe('周回（await の位置・回数を動かさない）', () => {
   async function observe(
     rig: Rig,
