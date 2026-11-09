@@ -293,6 +293,9 @@ async function settle(): Promise<void> {
 }
 
 async function only(rig: Rig): Promise<ReportEvent> {
+  // 出し箱にファイルが在る回は、実際のファイル I/O の後に report が出る: 固定の回数（6 周）では、負荷の高い CI で間に合わないことがある。
+  // report が出るまで、回数の上限つきで回す（実時間の締め切りは足さない。上限は 6 周の 100 倍）。出た後は settle で 2 本目が無いことも見る
+  for (let i = 0; i < 600 && reportsOf(rig).length === 0; i += 1) await tick();
   await settle();
   const [report] = reportsOf(rig);
   if (report === undefined || reportsOf(rig).length !== 1) throw new Error('report が1本ではない');
