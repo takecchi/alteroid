@@ -432,7 +432,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#noteAmbiguousSighting': 'failure',
     '#noteClosedFailure': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
-    '#noticeSilentDone': 'decision',
     '#notifyResumeFallback': 'recovery',
     '#notifyUnresumable': 'failure',
     '#recordDelivery': 'reply',
@@ -447,6 +446,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager-closed-front.ts': {
     closeAfterLost: 'decision',
     closeDuplicateFailed: 'decision',
+  },
+  // `closed` の段3が呼ぶ、report 無しの `closed(done)` の知らせ（旧 `Pool#noticeSilentDone`）。同じ検査をここへ移した。公開メソッド `noticeSilentDone` は `#` の付かない名前の行
+  'manager-closed-notice.ts': {
+    noticeSilentDone: 'decision',
   },
   // 担当の拒否を数えて日誌・受信箱へ回す協力者（旧 `Pool#handlePermissionDenied` と `Pool#deniedOf`）。同じ検査をここへ移した。
   'manager-denial.ts': {
@@ -630,6 +633,7 @@ const EXCHANGE_SOURCES = [
   'clone.ts',
   'denial-renotify.ts',
   'manager-closed-front.ts',
+  'manager-closed-notice.ts',
   'manager-denial.ts',
   'manager-note.ts',
   'manager-self-fenced.ts',
