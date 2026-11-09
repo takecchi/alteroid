@@ -137,14 +137,24 @@ interface Rig {
 
 type Ask = Extract<RunnerEvent, { type: 'ask' }>;
 type Settled = Extract<RunnerEvent, { type: 'settled' }>;
-const asksOf = (events: readonly RunnerEvent[]): Ask[] =>
+/** `sessionGeneration` は実行ごとに違う UUID なので、在ることだけ確かめて落とす。 */
+function withoutGeneration<T extends { sessionGeneration?: string }>(
+  event: T,
+): Omit<T, 'sessionGeneration'> {
+  const { sessionGeneration, ...rest } = event;
+  expect(typeof sessionGeneration).toBe('string');
+  return rest;
+}
+const rawAsksOf = (events: readonly RunnerEvent[]): Ask[] =>
   events.filter((event): event is Ask => event.type === 'ask');
-const settledOf = (events: readonly RunnerEvent[]): Settled[] =>
-  events.filter((event): event is Settled => event.type === 'settled');
+const asksOf = (events: readonly RunnerEvent[]): Omit<Ask, 'sessionGeneration'>[] =>
+  rawAsksOf(events).map((event) => withoutGeneration(event));
+const settledOf = (events: readonly RunnerEvent[]): Omit<Settled, 'sessionGeneration'>[] =>
+  events
+    .filter((event): event is Settled => event.type === 'settled')
+    .map((event) => withoutGeneration(event));
 
-async function open(
-  options: { throwOn?: (event: RunnerEvent) => boolean } = {},
-): Promise<Rig> {
+async function open(options: { throwOn?: (event: RunnerEvent) => boolean } = {}): Promise<Rig> {
   const events: RunnerEvent[] = [];
   const trace: string[] = [];
   const { fn, started } = fakeRunnerSdk();
@@ -264,7 +274,6 @@ describe('ask の全欄', () => {
           "kind": "permission",
           "managerId": "mgr-1",
           "requestId": "req-1",
-          "sessionGeneration": "a7889d79-9870-432f-91bf-c80b66fa2969",
           "summary": "Bash の実行許可: {"command":"echo hi"}
       理由: 危ない操作",
           "type": "ask",
@@ -276,7 +285,7 @@ describe('ask の全欄', () => {
         "ask:waiting_human",
       ]
     `);
-    expect(Object.keys(asksOf(rig.events)[0] ?? {})).toMatchInlineSnapshot(`
+    expect(Object.keys(rawAsksOf(rig.events)[0] ?? {})).toMatchInlineSnapshot(`
       [
         "type",
         "managerId",
@@ -325,7 +334,6 @@ describe('ask の全欄', () => {
           "kind": "question",
           "managerId": "mgr-1",
           "requestId": "req-q",
-          "sessionGeneration": "4a93f96d-5ad7-490f-a682-0a48cb810122",
           "summary": "どちらにする？
       - **A**
       - **B**",
@@ -345,7 +353,6 @@ describe('ask の全欄', () => {
           "kind": "permission",
           "managerId": "mgr-1",
           "requestId": "tu-hook-1",
-          "sessionGeneration": "64b81b46-f628-4cf6-894a-35b486afd71b",
           "summary": "分類器が manager:mgr-1 の Bash 呼び出しを拒否した。この1回だけ許可しますか。
 
       答えたあと: allow しても、この呼び出しは自動では撃ち直されない。撃ち直すかは担い手が決める（拒否文が再試行を禁じていると撃ち直されないことがある）。allow すると、同じ入力の1回だけを10分通す一時規則がこのセッションに足される（そのセッションの他の作業者にも効く。#4905）。allow の後は、担当・作業者へ「撃ち直すなら入力を1字も変えないこと。それでも拒否されたら、別の手（入力を変える・手順を分ける・人間に頼む）を取ること」と伝える。この規則で分類器を通れるかは実機では確かめていない。同じ呼び出しがそれでも拒否されても、確認は重ねて上げない。
@@ -737,7 +744,6 @@ describe('settle（settled の欄・畳み）', () => {
         {
           "managerId": "mgr-1",
           "requestId": "s1",
-          "sessionGeneration": "a44181f6-956e-4ae0-8b5c-6034782911e2",
           "type": "settled",
         },
       ]
@@ -779,7 +785,6 @@ describe('settle（settled の欄・畳み）', () => {
           {
             "managerId": "mgr-1",
             "requestId": "w1",
-            "sessionGeneration": "5d9435e4-1bee-4ee1-89f8-9edc72940292",
             "type": "settled",
             "withdrawn": {
               "reason": "デーモンから停止を指示された。",
@@ -788,7 +793,6 @@ describe('settle（settled の欄・畳み）', () => {
           {
             "managerId": "mgr-1",
             "requestId": "w2",
-            "sessionGeneration": "5d9435e4-1bee-4ee1-89f8-9edc72940292",
             "type": "settled",
             "withdrawn": {
               "reason": "デーモンから停止を指示された。",
@@ -816,7 +820,6 @@ describe('settle（settled の欄・畳み）', () => {
           {
             "managerId": "mgr-1",
             "requestId": "tu-w",
-            "sessionGeneration": "702495f4-b858-4f88-9ffd-d9e67cbbee10",
             "type": "settled",
             "withdrawn": {
               "reason": "デーモンから停止を指示された。",
@@ -876,13 +879,11 @@ describe('中断（signal）', () => {
           {
             "managerId": "mgr-1",
             "requestId": "p1",
-            "sessionGeneration": "590a7cf4-6d7f-4f08-b5ef-b6ebcb11123a",
             "type": "settled",
           },
           {
             "managerId": "mgr-1",
             "requestId": "p2",
-            "sessionGeneration": "590a7cf4-6d7f-4f08-b5ef-b6ebcb11123a",
             "type": "settled",
           },
         ],
@@ -1014,7 +1015,6 @@ describe('中断（signal）', () => {
           {
             "managerId": "mgr-1",
             "requestId": "tu-abort",
-            "sessionGeneration": "1178cff0-59f6-41f2-9d67-352862dfc44c",
             "type": "settled",
           },
         ],
@@ -1031,7 +1031,10 @@ describe('中断（signal）', () => {
     controller.abort();
     const called = hook(rig, 'tu-pre', { signal: controller.signal });
     await until(called.done);
-    expect({ order: rig.events.filter((e) => e.type === 'ask' || e.type === 'settled').map((e) => e.type), value: called.value() }).toMatchInlineSnapshot(`
+    expect({
+      order: rig.events.filter((e) => e.type === 'ask' || e.type === 'settled').map((e) => e.type),
+      value: called.value(),
+    }).toMatchInlineSnapshot(`
       {
         "order": [
           "ask",
@@ -1050,7 +1053,11 @@ describe('周回数（マイクロタスク）', () => {
     const rig = await open();
     const called = canUse(rig, 'Bash', BASH, { requestId: 'lap' });
     const askLaps = await lapsUntil(() => asksOf(rig.events).length > 0);
-    const answering = rig.host.answer('mgr-1', { requestId: 'lap', message: 'ok', decision: 'allow' });
+    const answering = rig.host.answer('mgr-1', {
+      requestId: 'lap',
+      message: 'ok',
+      decision: 'allow',
+    });
     const settledLaps = await lapsUntil(() => settledOf(rig.events).length > 0);
     const resultLaps = await lapsUntil(called.done);
     await answering;
@@ -1067,7 +1074,11 @@ describe('周回数（マイクロタスク）', () => {
     const rig = await open();
     const called = hook(rig, 'tu-lap');
     const askLaps = await lapsUntil(() => asksOf(rig.events).length > 0);
-    const answering = rig.host.answer('mgr-1', { requestId: 'tu-lap', message: 'ok', decision: 'allow' });
+    const answering = rig.host.answer('mgr-1', {
+      requestId: 'tu-lap',
+      message: 'ok',
+      decision: 'allow',
+    });
     const settledLaps = await lapsUntil(() => settledOf(rig.events).length > 0);
     const hookLaps = await lapsUntil(called.done);
     await answering;
@@ -1104,7 +1115,11 @@ describe('emit が同期で投げたとき', () => {
       }
     `);
     // 残った確認は、答えれば普通に解ける
-    const outcome = await rig.host.answer('mgr-1', { requestId: 'tx', message: 'ok', decision: 'allow' });
+    const outcome = await rig.host.answer('mgr-1', {
+      requestId: 'tx',
+      message: 'ok',
+      decision: 'allow',
+    });
     expect({ outcome, waiting: waitingIds(rig), status: statusOf(rig) }).toMatchInlineSnapshot(`
       {
         "outcome": {
@@ -1219,7 +1234,10 @@ function approvingAppServer(decisions: unknown[]): AgentChildProcess {
           });
           send({
             method: 'turn/completed',
-            params: { threadId: 'thr-peer', turn: { id: 'turn-1', status: 'completed', items: [] } },
+            params: {
+              threadId: 'thr-peer',
+              turn: { id: 'turn-1', status: 'completed', items: [] },
+            },
           });
         }
         continue;
@@ -1328,7 +1346,7 @@ async function setupPeer(options: { throwOnSettled?: boolean } = {}) {
     arguments: { provider: 'codex', prompt: '掃除して' },
   })) as { content: { text: string }[] };
   const approvalId = /approval_id=(appr-[0-9a-f]+)/.exec(first.content[0]?.text ?? '')?.[1];
-  const asks = (): Ask[] => asksOf(events);
+  const asks = (): Ask[] => rawAsksOf(events);
   const noticeCount = (): number =>
     sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length;
   return { host: peerRunner, client, events, approvalId, asks, noticeCount, decisions };
@@ -1344,7 +1362,7 @@ describe('peer の確認（source つきの ask）', () => {
     await until(() => s.asks().length > 0);
     const [ask] = s.asks();
     expect({
-      ...ask,
+      ...(ask === undefined ? {} : withoutGeneration(ask)),
       requestId: ask?.requestId.replace(/peer:codex:[^:]+:/, 'peer:codex:<session>:'),
     }).toMatchInlineSnapshot(`
       {
@@ -1352,7 +1370,6 @@ describe('peer の確認（source つきの ask）', () => {
         "kind": "permission",
         "managerId": "mgr-1",
         "requestId": "peer:codex:<session>:cmd-1",
-        "sessionGeneration": "ed1fa898-e981-408c-be6e-1f0a84e496af",
         "source": {
           "provider": "codex",
           "type": "peer",
@@ -1374,12 +1391,18 @@ describe('peer の確認（source つきの ask）', () => {
       ]
     `);
     expect(s.host.list()[0]?.status).toBe('waiting_human');
-    await s.host.answer('mgr-1', { requestId: ask?.requestId ?? '', message: 'いいよ', decision: 'allow' });
+    await s.host.answer('mgr-1', {
+      requestId: ask?.requestId ?? '',
+      message: 'いいよ',
+      decision: 'allow',
+    });
     await pending;
     await until(() => s.host.list()[0]?.status === 'running');
     expect({
       status: s.host.list()[0]?.status,
-      settled: settledOf(s.events).map((event) => event.requestId.replace(/peer:codex:[^:]+:/, 'peer:codex:<session>:')),
+      settled: settledOf(s.events).map((event) =>
+        event.requestId.replace(/peer:codex:[^:]+:/, 'peer:codex:<session>:'),
+      ),
       decisions: s.decisions,
     }).toMatchInlineSnapshot(`
       {
@@ -1418,7 +1441,11 @@ describe('peer の知らせ（確認待ちの間に溜め、決着の後に届�
     const s = await waitingWithBufferedNotice();
     for (let i = 0; i < 20; i += 1) await tick();
     const before = s.noticeCount();
-    await s.host.answer('mgr-1', { requestId: s.asks()[0]?.requestId ?? '', message: 'いいよ', decision: 'allow' });
+    await s.host.answer('mgr-1', {
+      requestId: s.asks()[0]?.requestId ?? '',
+      message: 'いいよ',
+      decision: 'allow',
+    });
     await until(() => s.noticeCount() >= 1);
     expect({ before, afterAnswer: s.noticeCount() >= 1 }).toMatchInlineSnapshot(`
       {
@@ -1432,7 +1459,11 @@ describe('peer の知らせ（確認待ちの間に溜め、決着の後に届�
   it('settled の emit が投げたときは、知らせは届かない（届けるのは settled の送出より後）', async () => {
     const s = await waitingWithBufferedNotice({ throwOnSettled: true });
     const rejected = await s.host
-      .answer('mgr-1', { requestId: s.asks()[0]?.requestId ?? '', message: 'いいよ', decision: 'allow' })
+      .answer('mgr-1', {
+        requestId: s.asks()[0]?.requestId ?? '',
+        message: 'いいよ',
+        decision: 'allow',
+      })
       .then(
         () => false,
         () => true,
