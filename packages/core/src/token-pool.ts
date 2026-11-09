@@ -16,12 +16,23 @@ export const DEFAULT_TOKEN_ROTATION_POLICY: TokenRotationPolicy = 'free_exhauste
 // いちばん短い枠の単位（5時間）に寄せる: 早く起きすぎるほうが安全側で、長すぎると開いた枠を寝過ごすため。Anthropic 側の枠の仕様の主張ではない
 export const DEFAULT_TOKEN_COOLDOWN_MS = 5 * 60 * 60 * 1000;
 
+export const tokenDistributionSchema = z.enum(['failover', 'balanced']);
+export type TokenDistribution = z.infer<typeof tokenDistributionSchema>;
+
 export const tokenRotationSettingsSchema = z.object({
   rotateOn: tokenRotationPolicySchema,
   cooldownMs: z.number().int().positive(),
+  // `.default()` にしない: 未設定（キー無し）を failover と読み、既存の行・ファイルのバイト列を1文字も変えないため
+  distribution: tokenDistributionSchema.optional(),
   updatedAt: z.string().optional(),
 });
 export type TokenRotationSettings = z.infer<typeof tokenRotationSettingsSchema>;
+
+export function distributionOf(
+  settings: Pick<TokenRotationSettings, 'distribution'>,
+): TokenDistribution {
+  return settings.distribution ?? 'failover';
+}
 
 export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {
   rotateOn: DEFAULT_TOKEN_ROTATION_POLICY,
@@ -477,7 +488,7 @@ export function classifyTokenPoolChange(
 }
 
 export interface TokenPolicyChange {
-  field: 'rotateOn' | 'cooldownMs';
+  field: 'rotateOn' | 'cooldownMs' | 'distribution';
   from: string | undefined;
   to: string;
 }
@@ -485,7 +496,7 @@ export interface TokenPolicyChange {
 // 冷却の長短は判断せず広げる側（日誌先）に倒す: 安全側のため。after.rotateOn が off なら冷却を変えていても狭める側: 回さないので冷却は効かないため
 export function classifyTokenPolicyChange(
   before: TokenRotationSettings | undefined,
-  after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>,
+  after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs' | 'distribution'>,
 ): { changes: TokenPolicyChange[]; widens: boolean } {
   const changes: TokenPolicyChange[] = [];
   if (before === undefined || before.rotateOn !== after.rotateOn) {
@@ -498,5 +509,17 @@ export function classifyTokenPolicyChange(
       to: String(after.cooldownMs),
     });
   }
-  return { changes, widens: changes.length > 0 && after.rotateOn !== 'off' };
+  const distributionChanged = distributionOf(before ?? {}) !== distributionOf(after);
+  if (distributionChanged) {
+    changes.push({
+      field: 'distribution',
+      from: before === undefined ? undefined : distributionOf(before),
+      to: distributionOf(after),
+    });
+  }
+  // distribution は balanced へ変える側が広げる側（日誌が先）: 鍵の割り当てが作業単位ごとに変わり、枠の消費の様子が変わるため。failover へ戻すのは狭める側
+  const widensByDistribution = distributionChanged && distributionOf(after) === 'balanced';
+  const widensByRotation =
+    changes.some((change) => change.field !== 'distribution') && after.rotateOn !== 'off';
+  return { changes, widens: widensByDistribution || widensByRotation };
 }

@@ -1585,6 +1585,19 @@ describe('FsTokenPoolStore', () => {
     expect(await stores.tokens.readSettings()).toEqual(written);
   });
 
+  it('配り方（distribution）も設定の往復で落ちない。未設定ならキーを持たない', async () => {
+    const unset = await stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 1_000 });
+    expect('distribution' in (await stores.tokens.readSettings())).toBe(false);
+    expect(await stores.tokens.readSettings()).toEqual(unset);
+
+    const balanced = await stores.tokens.writeSettings({
+      rotateOn: 'off',
+      cooldownMs: 1_000,
+      distribution: 'balanced',
+    });
+    expect(await stores.tokens.readSettings()).toEqual(balanced);
+  });
+
   it('invalidatedAt / invalidatedReason も往復する（3つ目の状態を落とさない）', async () => {
     await stores.tokens.replace([
       {

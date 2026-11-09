@@ -120,5 +120,6 @@ export const HELP_EXAMPLES = {
     'alteroid token policy                                  # いまの設定を見る',
     'alteroid token policy free_exhausted                   # 無料枠が尽きたら回す',
     'alteroid token policy off --cooldown-ms 18000000       # 回さない。冷却の既定は5時間',
+    'alteroid token policy --distribution balanced          # 作業単位ごとに空いている鍵を割り当てる',
   ),
 } as const;

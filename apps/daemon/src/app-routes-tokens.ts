@@ -467,7 +467,9 @@ export function tokensRoutes(deps: AppDeps) {
           description:
             '省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・' +
             '変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。' +
-            '`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。',
+            '`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。' +
+            '`distribution` は `balanced` なら作業単位ごとに空いている鍵を割り当てる（既定は `failover`）。' +
+            '`balanced` へ変える変更は日誌が先、`failover` へ戻す変更は保存が先。',
           responses: {
             200: jsonResponse('更新後の設定。', tokenRotationSettingsSchema),
             500: journalWriteFailedResponse(

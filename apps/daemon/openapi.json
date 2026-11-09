@@ -33295,6 +33295,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -33728,6 +33732,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -33917,6 +33925,10 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "distribution": {
+                              "type": "string",
+                              "enum": ["failover", "balanced"]
                             },
                             "updatedAt": {
                               "type": "string"
@@ -34154,6 +34166,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -34329,7 +34345,7 @@
         "operationId": "putTokensPolicy",
         "tags": ["tokens"],
         "summary": "回す契機・冷却の既定を変える",
-        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。",
+        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。`distribution` は `balanced` なら作業単位ごとに空いている鍵を割り当てる（既定は `failover`）。`balanced` へ変える変更は日誌が先、`failover` へ戻す変更は保存が先。",
         "responses": {
           "200": {
             "description": "更新後の設定。",
@@ -34346,6 +34362,10 @@
                       "type": "integer",
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "distribution": {
+                      "type": "string",
+                      "enum": ["failover", "balanced"]
                     },
                     "updatedAt": {
                       "type": "string"
@@ -34427,6 +34447,10 @@
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991
+                  },
+                  "distribution": {
+                    "type": "string",
+                    "enum": ["failover", "balanced"]
                   }
                 }
               }

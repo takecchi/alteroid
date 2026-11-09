@@ -80,4 +80,35 @@ describe('classifyTokenPolicyChange（#2742）', () => {
     expect(r.changes).toHaveLength(2);
     expect(r.widens).toBe(true);
   });
+  it('配り方を balanced へ変えるのは広げる側（rotateOn が off でも）', () => {
+    const r = classifyTokenPolicyChange(before, {
+      rotateOn: 'free_exhausted',
+      cooldownMs: 1000,
+      distribution: 'balanced',
+    });
+    expect(r.changes).toEqual([{ field: 'distribution', from: 'failover', to: 'balanced' }]);
+    expect(r.widens).toBe(true);
+    const off = classifyTokenPolicyChange(
+      { ...before, rotateOn: 'off' },
+      { rotateOn: 'off', cooldownMs: 1000, distribution: 'balanced' },
+    );
+    expect(off.widens).toBe(true);
+  });
+  it('配り方を failover へ戻すのは狭める側。未設定と failover は差分にならない', () => {
+    const balanced = { ...before, distribution: 'balanced' } as const;
+    const back = classifyTokenPolicyChange(balanced, {
+      rotateOn: 'free_exhausted',
+      cooldownMs: 1000,
+      distribution: 'failover',
+    });
+    expect(back.changes).toEqual([{ field: 'distribution', from: 'balanced', to: 'failover' }]);
+    expect(back.widens).toBe(false);
+    expect(
+      classifyTokenPolicyChange(before, {
+        rotateOn: 'free_exhausted',
+        cooldownMs: 1000,
+        distribution: 'failover',
+      }),
+    ).toEqual({ changes: [], widens: false });
+  });
 });

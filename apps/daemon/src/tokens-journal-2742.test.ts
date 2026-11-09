@@ -235,6 +235,37 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
     expect((await put(app, '/tokens/policy', { cooldownMs: 1234 })).status).toBe(500);
     expect(await stores.tokens.readSettings()).toEqual(before);
   });
+
+  it('配り方を balanced へ: 日誌が先。書けなければ保存せず 500', async () => {
+    const { stores, app } = await seed({ journalDown: true });
+    const before = await stores.tokens.readSettings();
+    const response = await put(app, '/tokens/policy', { distribution: 'balanced' });
+    expect(response.status).toBe(500);
+    expect(await stores.tokens.readSettings()).toEqual(before);
+  });
+
+  it('配り方を balanced へ: 日誌が書ければ保存され、日誌に distribution の変更が出る', async () => {
+    const { stores, app } = await seed();
+    const response = await put(app, '/tokens/policy', { distribution: 'balanced' });
+    expect(response.status).toBe(200);
+    expect((await stores.tokens.readSettings()).distribution).toBe('balanced');
+    const text = await journalText(stores);
+    expect(text).toContain('distribution');
+    expect(text).toContain('balanced');
+  });
+
+  it('配り方を failover へ戻す: 保存が先。日誌が書けなくても保存する', async () => {
+    const { stores, app } = await seed({ journalDown: true });
+    await stores.tokens.writeSettings({
+      rotateOn: 'free_exhausted',
+      cooldownMs: 1000,
+      distribution: 'balanced',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const response = await put(app, '/tokens/policy', { distribution: 'failover' });
+    expect(response.status).toBe(200);
+    expect((await stores.tokens.readSettings()).distribution).toBe('failover');
+  });
 });
 
 describe('日誌が書けなかった 500 の本文（#2742 の続き）', () => {

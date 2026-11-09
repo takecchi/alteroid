@@ -10,6 +10,7 @@ import {
   type AgentToken,
   type AgentTokenInput,
   type AgentTokenView,
+  type TokenDistribution,
   type TokenFailureObservation,
   type TokenRotationPolicy,
   type TokenRotationSettings,
@@ -53,7 +54,7 @@ interface ReplaceOptions {
 interface SetSettingsOptions {
   beforeWrite?: (change: {
     before: TokenRotationSettings | undefined;
-    after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>;
+    after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs' | 'distribution'>;
   }) => Promise<void>;
 }
 
@@ -85,6 +86,7 @@ export interface TokenPoolService {
     patch: {
       rotateOn?: TokenRotationPolicy;
       cooldownMs?: number;
+      distribution?: TokenDistribution;
     },
     options?: SetSettingsOptions,
   ): Promise<TokenRotationSettings>;
@@ -288,7 +290,11 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
       serial(async () => writeOne(id, (token) => markTokenUsable(token, now().toISOString()))),
 
     setSettings: (
-      patch: { rotateOn?: TokenRotationPolicy; cooldownMs?: number },
+      patch: {
+        rotateOn?: TokenRotationPolicy;
+        cooldownMs?: number;
+        distribution?: TokenDistribution;
+      },
       setOptions: SetSettingsOptions = {},
     ) =>
       serial(async () => {
@@ -298,9 +304,11 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         try {
           const current = await stores.tokens.readSettings();
           before = current;
+          const distribution = patch.distribution ?? current.distribution;
           next = {
             rotateOn: patch.rotateOn ?? current.rotateOn,
             cooldownMs: patch.cooldownMs ?? current.cooldownMs,
+            ...(distribution === undefined ? {} : { distribution }),
             updatedAt,
           };
         } catch (error) {
@@ -312,7 +320,12 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           ) {
             throw error;
           }
-          next = { rotateOn: patch.rotateOn, cooldownMs: patch.cooldownMs, updatedAt };
+          next = {
+            rotateOn: patch.rotateOn,
+            cooldownMs: patch.cooldownMs,
+            ...(patch.distribution === undefined ? {} : { distribution: patch.distribution }),
+            updatedAt,
+          };
         }
         await setOptions.beforeWrite?.({ before, after: next });
         const written = await stores.tokens.writeSettings(next);

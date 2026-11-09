@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
-import { agentTokens, sessionEntries } from './schema.js';
+import { agentTokenSettings, agentTokens, sessionEntries } from './schema.js';
 import { PgSessionStore } from './session-store.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
@@ -320,6 +320,41 @@ describe('PgTokenPoolStore', () => {
       updatedAt: '2026-08-24T00:00:00.000Z',
     });
     expect(await stores.tokens.readSettings()).toEqual(written);
+  });
+
+  it('配り方は 未設定 ↔ null、balanced ↔ balanced で往復し、未設定へ戻すとキーも消える', async () => {
+    const unset = await stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 111 });
+    expect(await stores.tokens.readSettings()).toEqual(unset);
+    expect('distribution' in (await stores.tokens.readSettings())).toBe(false);
+
+    const balanced = await stores.tokens.writeSettings({
+      rotateOn: 'off',
+      cooldownMs: 111,
+      distribution: 'balanced',
+    });
+    expect(await stores.tokens.readSettings()).toEqual(balanced);
+    expect((await stores.tokens.readSettings()).distribution).toBe('balanced');
+
+    await stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 111 });
+    expect('distribution' in (await stores.tokens.readSettings())).toBe(false);
+  });
+
+  it('distribution 列が壊れていると、欄名だけを名指して投げる（値は出さない）', async () => {
+    await db.insert(agentTokenSettings).values({
+      id: 'default',
+      rotateOn: 'off',
+      cooldownMs: 1000,
+      distribution: 'round-robin-secret',
+    });
+
+    let message = '';
+    try {
+      await stores.tokens.readSettings();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('不正な欄: distribution');
+    expect(message).not.toContain('round-robin-secret');
   });
 
   it('migrate を2回通しても壊れない（冪等）。記録済みの行を消さない', async () => {
