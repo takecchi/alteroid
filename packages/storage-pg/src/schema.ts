@@ -500,6 +500,13 @@ export const agentTokens = pgTable('agent_tokens', {
   // どちらも null を許し、`default now()` で埋め直さない: 埋めると「いま作られた」という嘘になる。
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
+  // 週の枠のリセット（#6651）。3列は組で書き、組で消す
+  weeklyResetAt: bigint('weekly_reset_at', { mode: 'number' }),
+  weeklyResetZone: text('weekly_reset_zone'),
+  weeklyResetObservedAt: timestamp('weekly_reset_observed_at', {
+    withTimezone: true,
+    mode: 'date',
+  }),
 });
 
 // `agent_tokens` に `active` の列を置かない: 2行が同時に現役だと主張する形が作れる。

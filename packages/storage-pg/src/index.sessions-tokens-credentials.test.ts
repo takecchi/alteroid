@@ -210,6 +210,30 @@ describe('PgTokenPoolStore', () => {
     expect(await stores.tokens.list()).toEqual([]);
   });
 
+  it('週の枠のリセット（weeklyReset）も往復する。控えていない行は欄を持たない（#6651）', async () => {
+    await stores.tokens.replace([
+      {
+        id: 'tok-a',
+        label: 'a',
+        value: 'tok-aaa',
+        order: 0,
+        weeklyReset: {
+          at: 1794402000000,
+          zone: 'Asia/Tokyo',
+          observedAt: '2026-11-09T12:00:00.000Z',
+        },
+      },
+      { id: 'tok-b', label: 'b', value: 'tok-bbb', order: 1 },
+    ]);
+    const [a, b] = await stores.tokens.list();
+    expect(a?.weeklyReset).toEqual({
+      at: 1794402000000,
+      zone: 'Asia/Tokyo',
+      observedAt: '2026-11-09T12:00:00.000Z',
+    });
+    expect(b).not.toHaveProperty('weeklyReset');
+  });
+
   it('invalidatedAt / invalidatedReason も往復する（3つ目の状態を落とさない）', async () => {
     await stores.tokens.replace([
       {

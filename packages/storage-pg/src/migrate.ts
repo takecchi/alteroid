@@ -316,6 +316,11 @@ export const STATEMENTS = [
   // 既定値を付けない: 既存の行は「出所を言えない」のであって「推測だった」のではない。
   `alter table agent_tokens add column if not exists cooldown_source text`,
 
+  // 週の枠のリセット（#6651）。3列とも null を許す: 観測していない鍵は「無い」であって既定値ではないため。3列は組で書き、組で消す
+  `alter table agent_tokens add column if not exists weekly_reset_at bigint`,
+  `alter table agent_tokens add column if not exists weekly_reset_zone text`,
+  `alter table agent_tokens add column if not exists weekly_reset_observed_at timestamptz`,
+
   // `agent_tokens` の列にしない: 2行が同時に現役だと主張する形を作らない。
   `create table if not exists agent_token_active (
      id text primary key,

@@ -1791,3 +1791,39 @@ describe('/tokens 画面 — どの担当がその鍵で動いているか（#66
     expect(screen.queryByText(/で使用中/)).toBeNull();
   });
 });
+
+describe('/tokens 画面 — 週の枠のリセット（#6651）', () => {
+  it('控えた行は「毎週 何曜 何時（時間帯）」と次の回を、推測だと断って出す', async () => {
+    stubScreen({
+      tokens: [
+        {
+          id: 't-a',
+          label: 'alice',
+          order: 0,
+          sha256: 'a'.repeat(12),
+          source: 'stored',
+          // JST 11/11（水）22:00
+          weeklyReset: {
+            at: Date.parse('2026-11-11T13:00:00.000Z'),
+            zone: 'Asia/Tokyo',
+            observedAt: '2026-11-09T12:00:00.000Z',
+          },
+        },
+        { id: 't-b', label: 'bob', order: 1, sha256: 'b'.repeat(12), source: 'stored' },
+      ],
+    });
+
+    renderTokens();
+    await waitForPoolLoaded();
+    await screen.findByText('alice');
+
+    const alice = screen.getByText('alice').closest('li') as HTMLElement;
+    expect(within(alice).getByText('週の枠のリセット')).toBeTruthy();
+    expect(
+      within(alice).getByText(/毎週 水曜 22:00（Asia\/Tokyo）。次は .*上限の文言から読んだ推測/),
+    ).toBeTruthy();
+    // 控えていない行には出さない（既定の曜日で埋めない）
+    const bob = screen.getByText('bob').closest('li') as HTMLElement;
+    expect(within(bob).queryByText('週の枠のリセット')).toBeNull();
+  });
+});

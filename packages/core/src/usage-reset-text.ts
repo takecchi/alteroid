@@ -204,3 +204,24 @@ export function parseNoticeResetAt(
   if (candidate <= options.at || candidate > options.at + options.withinMs) return undefined;
   return candidate;
 }
+
+// 週の枠を言う語（#6651）。`quota-stop-notice.ts` の `LONG_WINDOW_WORDS` は月・支出上限も含むので使い回さない: 毎週の予定として控えるのは週の枠だけのため
+const WEEKLY_WINDOW_WORDS = /\bweekly\b|\bseven[- ]day\b|\b7-day\b/i;
+
+/** 上限の文言から読んだ、週の枠のリセット（#6651）。`at` は観測したリセットの瞬間、`zone` は文言の時間帯。 */
+export interface NoticeWeeklyReset {
+  at: number;
+  zone: string;
+}
+
+/**
+ * 週の枠の上限の文言（`You've hit your weekly limit · resets Nov 11, 10pm (Asia/Tokyo)`）から、リセットの瞬間と時間帯を読む。
+ * 週の枠を言っていない・日付付きの時刻が無い・8日より先なら `undefined`（毎週の予定として控えない）。
+ */
+export function parseNoticeWeeklyReset(text: string, at: number): NoticeWeeklyReset | undefined {
+  if (!WEEKLY_WINDOW_WORDS.test(text)) return undefined;
+  const zone = RESETS_DATED_PATTERN.exec(text)?.[6];
+  if (zone === undefined) return undefined;
+  const resetAt = parseNoticeResetDatedAt(text, { at, withinMs: DATED_RESET_LOOKAHEAD_MS });
+  return resetAt === undefined ? undefined : { at: resetAt, zone };
+}

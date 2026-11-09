@@ -67,6 +67,7 @@ import {
   DISTRIBUTION_OPTIONS,
   ROTATE_ON_OPTIONS,
   tokenAvailabilityAt,
+  weeklyResetSchedule,
 } from './tokens-describe';
 import { RotationHistory } from './tokens-rotation-history';
 
@@ -393,6 +394,8 @@ function TokenRow({
   holders?: readonly TokenHolder[];
 }) {
   const load = loads === undefined ? undefined : describeTokenLoad(loads, token.id);
+  const weekly =
+    token.weeklyReset === undefined ? undefined : weeklyResetSchedule(token.weeklyReset);
   const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
@@ -530,6 +533,18 @@ function TokenRow({
                 },
               ]
             : []),
+          // 観測していない鍵は行を出さない（#6651）: 既定の曜日で埋めると、知らない予定を名乗るため
+          ...(token.weeklyReset === undefined
+            ? []
+            : [
+                {
+                  label: '週の枠のリセット',
+                  value:
+                    weekly === undefined
+                      ? `時間帯 ${token.weeklyReset.zone} を読めない（観測した回: ${formatEpochMs(token.weeklyReset.at)}）`
+                      : `${weekly.schedule}。次は ${formatEpochMs(weekly.nextAt)}（上限の文言から読んだ推測。${formatDateTime(token.weeklyReset.observedAt)} に観測）`,
+                },
+              ]),
           {
             label: '断られた記録',
             value: !rejected ? (

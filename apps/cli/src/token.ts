@@ -28,6 +28,8 @@ interface AgentTokenView {
   createdAt?: string;
   updatedAt?: string;
   recovery?: 'time' | 'action' | 'unknown';
+  // 週の枠のリセット（#6651）。欄が無いのは観測していないか古いデーモン
+  weeklyReset?: { at: number; zone: string; observedAt: string };
 }
 
 interface TokenRotationSettings {
@@ -247,6 +249,9 @@ export async function tokenListCommand(): Promise<void> {
     if (stamps !== null) stdout.write(`   ${stamps}\n`);
     const status = describeStatus(token, now);
     if (status !== null) stdout.write(`   ${status}\n`);
+    if (token.weeklyReset !== undefined) {
+      stdout.write(`   ${describeWeeklyReset(token.weeklyReset, now)}\n`);
+    }
     if (view.loads !== undefined) stdout.write(`   ${describeTokenLoad(view.loads, token.id)}\n`);
     if (view.usedBy !== undefined)
       stdout.write(`   ${describeTokenHolders(view.usedBy, token.id)}\n`);
@@ -560,4 +565,34 @@ export function describeTokenHolders(holders: readonly TokenHolder[], tokenId: s
       : (holder.managerId?.slice(0, 8) ?? `知らない担当（${holder.kind}）`),
   );
   return `使用中: ${names.join(' / ')}`;
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
+
+// 推測だと同じ行で言う（#6651）: 実測の隣に判定を並べると、行ごと実測として読まれるため
+export function describeWeeklyReset(
+  weeklyReset: { at: number; zone: string; observedAt: string },
+  now: number,
+): string {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: weeklyReset.zone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(weeklyReset.at));
+  } catch {
+    return `週の枠のリセット: 時間帯 ${weeklyReset.zone} を読めない（観測した回 ${new Date(weeklyReset.at).toISOString()}）`;
+  }
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(
+    parts.find((part) => part.type === 'weekday')?.value ?? '',
+  );
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '??';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '??';
+  const weeksAhead = now <= weeklyReset.at ? 0 : Math.ceil((now - weeklyReset.at) / WEEK_MS);
+  const next = new Date(weeklyReset.at + weeksAhead * WEEK_MS).toISOString();
+  return `週の枠のリセット: 毎週 ${WEEKDAY_JA[weekday] ?? '?'}曜 ${hour}:${minute}（${weeklyReset.zone}）。次は ${next}（上限の文言から読んだ推測。${weeklyReset.observedAt} に観測）`;
 }
