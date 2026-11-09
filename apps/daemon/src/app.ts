@@ -101,6 +101,8 @@ export interface AppDeps {
   codexAuth?: CodexChatgptAuthService;
   // 回さない: ここが生やすのは器の読み書きの口だけで、検知・切替は無い。
   tokens?: TokenPoolService;
+  // 鍵ごとの枠の観測（#6633）。無ければ `GET /tokens` は `loads` を載せない
+  tokenLoads?: () => readonly { tokenId: string; state: AccountUsageState }[];
   // 無ければ `storage.state` は `unknown`: 確かめる手段が無いことを `ok` に化けさせない。毎リクエストでは叩かない。
   storageProbe?: () => Promise<void>;
   clearSessionLog?: () => Promise<number>;

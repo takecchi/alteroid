@@ -33214,7 +33214,7 @@
         "operationId": "getTokens",
         "tags": ["tokens"],
         "summary": "認証トークンのプールと設定を読む",
-        "description": "プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す（受け入れ基準7: プールが空の既定構成の挙動を変えない）。回す契機・冷却の設定が壊れていて読めないときも 200 を返す——`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。プールの行が読めない（版ずれ・手編集）ものが在るときだけ、`rowsUnreadable`（件数と、id・ラベル・不正な欄名。**値は含まない**）が載る。**壊れた行であって、消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。現役の指名（いま効いている鍵）は3つの状態を別の欄で返す: 在るとき `active`（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（何も撒いていない。器の環境変数へは倒れない）ときは `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない古いデーモン。読めなくても一覧は道連れにしない。",
+        "description": "プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す（受け入れ基準7: プールが空の既定構成の挙動を変えない）。回す契機・冷却の設定が壊れていて読めないときも 200 を返す——`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。プールの行が読めない（版ずれ・手編集）ものが在るときだけ、`rowsUnreadable`（件数と、id・ラベル・不正な欄名。**値は含まない**）が載る。**壊れた行であって、消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。現役の指名（いま効いている鍵）は3つの状態を別の欄で返す: 在るとき `active`（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（何も撒いていない。器の環境変数へは倒れない）ときは `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない古いデーモン。読めなくても一覧は道連れにしない。`loads` は鍵ごとの枠の最後の観測（デーモンのメモリにだけ在る。#6633）で、測っていない鍵の行は無い（0% で埋めない）。",
         "responses": {
           "200": {
             "description": "プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。行が読めないものが在るときは `rowsUnreadable` も載る。現役の指名は `active` / `activeNever` / `activeUnreadable` のどれか1つが載る。",
@@ -33381,6 +33381,241 @@
                       },
                       "required": ["reason"],
                       "additionalProperties": false
+                    },
+                    "loads": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "tokenId": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["state"],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "ok"
+                                  },
+                                  "usage": {
+                                    "type": "object",
+                                    "properties": {
+                                      "at": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      "plan": {
+                                        "type": "string"
+                                      },
+                                      "organization": {
+                                        "type": "string"
+                                      },
+                                      "apiProvider": {
+                                        "type": "string",
+                                        "enum": [
+                                          "firstParty",
+                                          "bedrock",
+                                          "vertex",
+                                          "foundry",
+                                          "anthropicAws",
+                                          "anthropicGoogleCloud",
+                                          "mantle",
+                                          "gateway",
+                                          "unrecognized"
+                                        ]
+                                      },
+                                      "apiKeySource": {
+                                        "type": "string",
+                                        "enum": [
+                                          "ANTHROPIC_API_KEY",
+                                          "apiKeyHelper",
+                                          "/login managed key",
+                                          "none",
+                                          "user",
+                                          "project",
+                                          "org",
+                                          "temporary",
+                                          "oauth",
+                                          "unrecognized"
+                                        ]
+                                      },
+                                      "tokenSourcePresence": {
+                                        "type": "string",
+                                        "enum": ["not_returned", "present", "empty"]
+                                      },
+                                      "limitsAvailable": {
+                                        "type": "boolean"
+                                      },
+                                      "windows": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "five_hour",
+                                                "seven_day",
+                                                "seven_day_opus",
+                                                "seven_day_sonnet",
+                                                "seven_day_overage_included",
+                                                "overage"
+                                              ]
+                                            },
+                                            "utilization": {
+                                              "type": "number",
+                                              "minimum": 0
+                                            },
+                                            "resetsAt": {
+                                              "type": "integer",
+                                              "exclusiveMinimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "status": {
+                                              "type": "string",
+                                              "enum": ["allowed", "allowed_warning", "rejected"]
+                                            }
+                                          },
+                                          "required": ["kind"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "extraUsage": {
+                                        "type": "object",
+                                        "properties": {
+                                          "enabled": {
+                                            "type": "boolean"
+                                          },
+                                          "monthlyLimit": {
+                                            "type": "number",
+                                            "minimum": 0
+                                          },
+                                          "usedCredits": {
+                                            "type": "number",
+                                            "minimum": 0
+                                          },
+                                          "utilization": {
+                                            "type": "number",
+                                            "minimum": 0
+                                          },
+                                          "currency": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["enabled"],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["at", "limitsAvailable", "windows"],
+                                    "additionalProperties": false
+                                  },
+                                  "refreshFailure": {
+                                    "type": "object",
+                                    "properties": {
+                                      "since": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      "at": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      "reason": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["since", "at", "reason"],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": ["state", "usage"],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "failed"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["state", "at", "reason"],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  },
+                                  "cause": {
+                                    "type": "string",
+                                    "enum": ["not_logged_in", "non_first_party", "undetermined"]
+                                  },
+                                  "apiKeySource": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ANTHROPIC_API_KEY",
+                                      "apiKeyHelper",
+                                      "/login managed key",
+                                      "none",
+                                      "user",
+                                      "project",
+                                      "org",
+                                      "temporary",
+                                      "oauth",
+                                      "unrecognized"
+                                    ]
+                                  },
+                                  "accountKeys": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": ["state", "at", "reason"],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "required": ["tokenId", "state"],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": ["tokens"],

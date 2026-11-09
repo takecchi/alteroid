@@ -93,7 +93,9 @@ export function tokensRoutes(deps: AppDeps) {
             '現役の指名（いま効いている鍵）は3つの状態を別の欄で返す: 在るとき `active`' +
             '（`tokenId`・`generation`・`rotatedAt`）、まだ一度も無い（何も撒いていない。器の環境変数へは倒れない）ときは' +
             ' `activeNever: true`、読めないときは `activeUnreadable.reason`。どれも無いのは現役を返さない' +
-            '古いデーモン。読めなくても一覧は道連れにしない。',
+            '古いデーモン。読めなくても一覧は道連れにしない。' +
+            '`loads` は鍵ごとの枠の最後の観測（デーモンのメモリにだけ在る。#6633）で、' +
+            '測っていない鍵の行は無い（0% で埋めない）。',
           responses: {
             200: jsonResponse(
               'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
@@ -127,7 +129,14 @@ export function tokensRoutes(deps: AppDeps) {
               activeUnreadable: { reason: redactErrorText(error.message, process.env) },
             };
           }
-          return c.json(tokensListResponseSchema.parse({ ...view, ...activeFields }));
+          const loads = deps.tokenLoads?.();
+          return c.json(
+            tokensListResponseSchema.parse({
+              ...view,
+              ...activeFields,
+              ...(loads === undefined ? {} : { loads }),
+            }),
+          );
         },
       )
 
