@@ -292,11 +292,17 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 6; i += 1) await tick();
 }
 
-async function only(rig: Rig): Promise<ReportEvent> {
-  // 出し箱にファイルが在る回は、実際のファイル I/O の後に report が出る: 固定の回数（6 周）では、負荷の高い CI で間に合わないことがある。
-  // report が出るまで、回数の上限つきで回す（実時間の締め切りは足さない。上限は 6 周の 100 倍）。出た後は settle で 2 本目が無いことも見る
+/**
+ * 出し箱にファイルが在る回は、実際のファイル I/O の後に report が出る: 固定の回数（6 周）では、負荷の高い CI で間に合わないことがある。
+ * report が出るまで、回数の上限つきで回す（実時間の締め切りは足さない。上限は 6 周の 100 倍）。出た後は settle で 2 本目が出ないことも見る。
+ */
+async function untilReport(rig: Rig): Promise<void> {
   for (let i = 0; i < 600 && reportsOf(rig).length === 0; i += 1) await tick();
   await settle();
+}
+
+async function only(rig: Rig): Promise<ReportEvent> {
+  await untilReport(rig);
   const [report] = reportsOf(rig);
   if (report === undefined || reportsOf(rig).length !== 1) throw new Error('report が1本ではない');
   return report;
@@ -845,7 +851,7 @@ describe('report が見える周回数（出し箱が空なら await を挟ま�
     const rig = await open({ outbox: true });
     writeFileSync(join(rig.outboxDir, 'a.txt'), 'a');
     const rounds = await roundsUntilReport(rig);
-    await settle();
+    await untilReport(rig);
     expect({
       roundsWithinMicrotasks: rounds,
       afterIo: reportsOf(rig).map((report) => report.files?.map((file) => file.name)),
