@@ -47,6 +47,8 @@ export {
   type TokenCandidateVerdict,
 } from './token-candidate.js';
 export {
+  CONTAINER_AFFINITY_MAX_LOAD,
+  keepsContainerToken,
   selectBalancedToken,
   tokenLoadScoreOf,
   type BalancedTokenPickInput,
@@ -521,6 +523,7 @@ export {
   activeAgentTokenSchema,
   tokenRotationSettingsSchema,
   tokenDistributionSchema,
+  DEFAULT_TOKEN_DISTRIBUTION,
   distributionOf,
   type TokenDistribution,
   type ActiveAgentToken,

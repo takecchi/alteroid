@@ -1,5 +1,6 @@
 import {
   fingerprintOf,
+  keepsContainerToken,
   selectBalancedToken,
   tokenAvailabilityAt,
   tokenLoadScoreOf,
@@ -39,6 +40,9 @@ export const CLONE_ASSIGNMENT_UNIT = 'clone';
 /**
  * 配り方 `balanced` の割り当ての帳面（#6633）。デーモンのメモリにだけ持つ（委譲の割り当ては job に id だけ残し、引き取りで `adopt` し直す）。
  *
+ * **同じ担当（コンテナ）には、できるかぎり同じ鍵を割り当て続ける**（#6642。キャッシュはアカウントをまたがないため）。
+ * 散らし方を変える前に `.claude/skills/token-pool/SKILL.md` の「配り方」の節を読むこと。
+ *
  * 世代は割り当てのたびに単調に増やす（`max(前+1, now)`）: 同じ鍵を冷却明けにもう一度割り当てた後に、
  * 前の在任期間の遅れた枠の知らせが届いても、いまの割り当ての知らせと取り違えないため（現役の世代と同じ考え方）。
  */
@@ -46,8 +50,12 @@ export interface TokenAssignmentBook {
   /**
    * 作業単位に鍵を割り当てる。`failover` のとき・通る鍵が1本も無いときは `undefined`（器の現役で走る＝従来どおり）。
    * `prior` の鍵が通るなら替えない（作業の途中で鍵を替えない）。いま持っている割り当てがその鍵なら世代も替えない。
+   * 新しく選ぶときは `container`（省けば作業単位そのもの）がいま使っている鍵を、混み具合が閾値未満なら使い続ける（#6642）。
    */
-  assign(unitId: string, hint?: { prior?: string }): Promise<AssignedToken | undefined>;
+  assign(
+    unitId: string,
+    hint?: { prior?: string; container?: string },
+  ): Promise<AssignedToken | undefined>;
   target(unitId: string): AssignmentIdentity | undefined;
   /** クローンの env へ重ねる値（同期で読む口。値はここからセッションの env へだけ渡る）。 */
   valueOf(unitId: string): string | undefined;
@@ -109,7 +117,51 @@ export function createTokenAssignmentBook(
   ): token is AgentToken & { value: string } =>
     token?.value !== undefined && tokenAvailabilityAt(token, at) === 'ready';
 
+  // コンテナ（runner・クローン）ごとの「いま使っている鍵」（#6642）。作業単位が畳まれても消さない: 次の作業が同じ鍵へ寄れるため
+  const containerOf = new Map<string, string>();
+  const containerToken = new Map<string, string>();
+
+  const containerKey = (unitId: string) => containerOf.get(unitId) ?? unitId;
+
+  // 記録が無い（再起動の後）ときは、そのコンテナの作業単位がいちばん多く持っている鍵を採る: 引き取った委譲が前の鍵のまま走っているため
+  const containerTokenOf = (container: string, unitId: string): string | undefined => {
+    const recorded = containerToken.get(container);
+    if (recorded !== undefined) return recorded;
+    const counts = new Map<string, number>();
+    for (const [unit, assigned] of assignments) {
+      if (unit === unitId || containerKey(unit) !== container) continue;
+      counts.set(assigned.tokenId, (counts.get(assigned.tokenId) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    for (const [tokenId, count] of counts) {
+      if (best === undefined || count > (counts.get(best) ?? 0)) best = tokenId;
+    }
+    return best;
+  };
+
   const pick = (
+    tokens: readonly AgentToken[],
+    unitId: string,
+    at: number,
+    exclude?: readonly string[],
+  ): (AgentToken & { value: string }) | undefined => {
+    const container = containerKey(unitId);
+    const preferredId = containerTokenOf(container, unitId);
+    const preferred = tokens.find((token) => token.id === preferredId);
+    if (
+      usable(preferred, at) &&
+      !(exclude ?? []).includes(preferred.id) &&
+      keepsContainerToken(loadScores().get(preferred.id))
+    ) {
+      containerToken.set(container, preferred.id);
+      return preferred;
+    }
+    const picked = pickBalanced(tokens, unitId, at, exclude);
+    if (picked !== undefined) containerToken.set(container, picked.id);
+    return picked;
+  };
+
+  const pickBalanced = (
     tokens: readonly AgentToken[],
     unitId: string,
     at: number,
@@ -162,6 +214,7 @@ export function createTokenAssignmentBook(
         assignments.delete(unitId);
         return undefined;
       }
+      if (hint.container !== undefined) containerOf.set(unitId, hint.container);
       const tokens = await options.readTokens();
       const at = now();
       const current = assignments.get(unitId);
@@ -194,6 +247,7 @@ export function createTokenAssignmentBook(
     },
     release(unitId) {
       assignments.delete(unitId);
+      containerOf.delete(unitId);
     },
     evacuate(tokenId) {
       return moveHolders((assigned) => assigned.tokenId === tokenId);

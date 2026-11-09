@@ -735,7 +735,7 @@ export async function main(): Promise<void> {
   // 鍵ごとの枠の帳面（#6633）: 現役は下の probe が、それ以外は `tokenLoadSampler` が書く
   const tokenLoadBook = createTokenLoadBook();
 
-  // 配り方 balanced の割り当て（#6633）。設定が読めないときは failover と読む（割り当てない＝従来どおり現役で走る）
+  // 配り方 balanced の割り当て（#6633）。設定が読めないときは既定（balanced）と読む: 通る鍵が1本なら全員がその鍵を使うので、読めなくても仕事は止まらない
   const tokenAssignments = createTokenAssignmentBook({
     readTokens: () => stores.tokens.list(),
     balanced: async () =>

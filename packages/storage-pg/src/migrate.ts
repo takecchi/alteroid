@@ -301,7 +301,7 @@ export const STATEMENTS = [
      updated_at timestamptz
    )`,
 
-  // 既定値を付けない: null は「未設定」で failover と読む。既存の行を書き換えないため。
+  // 既定値を付けない: null は「未設定」で既定（balanced）と読む。既存の行を書き換えないため。
   `alter table agent_token_settings add column if not exists distribution text`,
 
   // `default now()` を付けない: 既に入っている行が「いま作られた」ことになる。

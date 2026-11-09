@@ -15,6 +15,23 @@ export function tokenLoadScoreOf(state: AccountUsageState | undefined): number |
   return utilizations.length === 0 ? undefined : Math.max(...utilizations);
 }
 
+/**
+ * 同じコンテナ（runner・クローン）の鍵を使い続ける上限の混み具合（#6642。オーナーの決定 2026-11-09）。
+ *
+ * 鍵を替えた直後の1回目はプロンプトキャッシュが効かない（キャッシュはアカウントをまたがない）ので、
+ * 新しい作業はコンテナがいま使っている鍵へ寄せ、この値を超えたときだけ空いている鍵へ移す。
+ * 止まるのを防ぐのはこの値ではなく「止まった鍵の持ち主を移す」側なので、高めに置いてよい。
+ */
+export const CONTAINER_AFFINITY_MAX_LOAD = 90;
+
+/**
+ * コンテナの鍵を、新しい作業にもそのまま使ってよいか（#6642）。
+ * 測っていない鍵は使い続ける: キャッシュを優先し、止まったときは移す側が拾うため。
+ */
+export function keepsContainerToken(loadScore: number | undefined): boolean {
+  return loadScore === undefined || loadScore < CONTAINER_AFFINITY_MAX_LOAD;
+}
+
 export interface BalancedTokenPickInput {
   tokens: readonly AgentToken[];
   at: number;

@@ -755,7 +755,7 @@ describe('alteroid token policy', () => {
 
     const put = sent.find((call) => call.method === 'PUT' && call.url.endsWith('/tokens/policy'));
     expect(put?.body).toEqual({ distribution: 'balanced' });
-    expect(read()).toContain('配り方: balanced（未設定なら failover（既定））');
+    expect(read()).toContain('配り方: balanced（未設定なら balanced（既定））');
   });
 
   it('--distribution が許された値でなければ、通信の前に投げる', async () => {
@@ -765,7 +765,8 @@ describe('alteroid token policy', () => {
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 
-  it('引数無しの表示と token list の頭に、未設定の配り方は failover と出る', async () => {
+  // #6642 で反転: 元は「未設定の配り方は failover と出る」。既定が balanced になった
+  it('引数無しの表示と token list の頭に、未設定の配り方は balanced（既定）と出る', async () => {
     setReply('GET', '/tokens', {
       status: 200,
       body: { tokens: [], settings: { rotateOn: 'off', cooldownMs: 42 } },
@@ -776,7 +777,7 @@ describe('alteroid token policy', () => {
     await tokenListCommand();
 
     const text = read();
-    expect(text.match(/配り方: failover（未設定なら failover（既定））/g)).toHaveLength(2);
+    expect(text.match(/配り方: balanced（未設定なら balanced（既定））/g)).toHaveLength(2);
   });
 
   it('引数無しで、設定が読めない応答なら落ちずに理由を出す', async () => {

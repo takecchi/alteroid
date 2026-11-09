@@ -22,16 +22,22 @@ export type TokenDistribution = z.infer<typeof tokenDistributionSchema>;
 export const tokenRotationSettingsSchema = z.object({
   rotateOn: tokenRotationPolicySchema,
   cooldownMs: z.number().int().positive(),
-  // `.default()` にしない: 未設定（キー無し）を failover と読み、既存の行・ファイルのバイト列を1文字も変えないため
+  // `.default()` にしない: 未設定（キー無し）は distributionOf で既定（balanced。#6642 のオーナーの決定）と読み、既存の行・ファイルのバイト列を1文字も変えないため
   distribution: tokenDistributionSchema.optional(),
   updatedAt: z.string().optional(),
 });
 export type TokenRotationSettings = z.infer<typeof tokenRotationSettingsSchema>;
 
+/**
+ * 配り方の既定（#6642。オーナーの決定 2026-11-09: 複数の鍵があるときの分散は既定で有効）。
+ * 通る鍵が1本だけなら balanced でも全員がその鍵を使うので、鍵が1本の構成の挙動は failover と変わらない。
+ */
+export const DEFAULT_TOKEN_DISTRIBUTION: TokenDistribution = 'balanced';
+
 export function distributionOf(
   settings: Pick<TokenRotationSettings, 'distribution'>,
 ): TokenDistribution {
-  return settings.distribution ?? 'failover';
+  return settings.distribution ?? DEFAULT_TOKEN_DISTRIBUTION;
 }
 
 export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {

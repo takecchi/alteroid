@@ -525,7 +525,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         '登録・無効化は人間の手（alteroid token / PUT /tokens）に属する。',
         '枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。',
         '回った履歴のほうは journal_read types=token_rotation で引ける。',
-        '配り方 balanced では作業単位（委譲・クローンのセッション）ごとに空いている鍵を割り当て、枠に当たった鍵の持ち主だけを別の鍵へ移す。',
+        '配り方 balanced では同じコンテナ（runner・クローン）に同じ鍵を使い続け（キャッシュのため）、混み具合が 90% を超えたら新しい作業から空いている鍵へ移す。枠に当たった鍵の持ち主だけを別の鍵へ移す。',
       ].join(' '),
       {
         cursor: z

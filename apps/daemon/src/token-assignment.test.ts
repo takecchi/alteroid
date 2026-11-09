@@ -24,15 +24,19 @@ function book(
   tokens: AgentToken[],
   options: { balanced?: boolean; loads?: Record<string, number>; now?: () => number } = {},
 ) {
-  const state = { balanced: options.balanced ?? true, tokens, now: options.now ?? (() => AT) };
-  const loads = Object.entries(options.loads ?? {}).map(([tokenId, u]) => ({
-    tokenId,
-    state: usage(u),
-  }));
+  // 枠の観測は state から毎回読む: 試験の途中で混み具合を動かすため（#6642）
+  const state = {
+    balanced: options.balanced ?? true,
+    tokens,
+    now: options.now ?? (() => AT),
+    loads: options.loads ?? ({} as Record<string, number>),
+  };
+  const loads = () =>
+    Object.entries(state.loads).map(([tokenId, u]) => ({ tokenId, state: usage(u) }));
   const b = createTokenAssignmentBook({
     readTokens: async () => state.tokens,
     balanced: async () => state.balanced,
-    loads: () => loads,
+    loads,
     now: () => state.now(),
   });
   return { b, state };
@@ -155,5 +159,91 @@ describe('割り当ての帳面（#6633）', () => {
     state.balanced = false;
     expect(await b.assign('mgr-1', { prior: 'a' })).toBeUndefined();
     expect(b.target('mgr-1')).toBeUndefined();
+  });
+});
+
+describe('同じコンテナには同じ鍵を割り当て続ける（#6642）', () => {
+  it('同じ runner の新しい委譲は、別の鍵が空いていてもコンテナの鍵へ寄せる（閾値未満のあいだ）', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)], { loads: { a: 10, b: 50 } });
+    expect((await b.assign('mgr-1', { container: 'runner-1' }))?.tokenId).toBe('a');
+    // a のほうが混んでも、閾値（90%）未満なら寄せ続ける
+    state.loads = { a: 89, b: 5 };
+    expect((await b.assign('mgr-2', { container: 'runner-1' }))?.tokenId).toBe('a');
+    expect((await b.assign('mgr-3', { container: 'runner-1' }))?.tokenId).toBe('a');
+  });
+
+  it('対照: コンテナを渡さなければ、今までどおり空いている鍵へ散る', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)], { loads: { a: 10, b: 50 } });
+    expect((await b.assign('mgr-1'))?.tokenId).toBe('a');
+    state.loads = { a: 89, b: 5 };
+    expect((await b.assign('mgr-2'))?.tokenId).toBe('b');
+  });
+
+  it('コンテナの鍵が閾値に達したら、新しい委譲だけ空いている鍵へ移り、以後はその鍵へ寄せる。動いている委譲は移さない', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)], { loads: { a: 10, b: 50 } });
+    await b.assign('mgr-1', { container: 'runner-1' });
+    state.loads = { a: 90, b: 50 };
+
+    expect((await b.assign('mgr-2', { container: 'runner-1' }))?.tokenId).toBe('b');
+    // 再開（prior）は止まるまで替えない
+    expect((await b.assign('mgr-1', { prior: 'a', container: 'runner-1' }))?.tokenId).toBe('a');
+    // b が a より混んできても、閾値未満なら b に寄せ続ける（行ったり来たりしない）
+    state.loads = { a: 10, b: 60 };
+    expect((await b.assign('mgr-3', { container: 'runner-1' }))?.tokenId).toBe('b');
+  });
+
+  it('測っていない鍵は閾値未満とみなし、使い続ける', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1)]);
+    expect((await b.assign('mgr-1', { container: 'runner-1' }))?.tokenId).toBe('a');
+    state.loads = { b: 0 };
+    expect((await b.assign('mgr-2', { container: 'runner-1' }))?.tokenId).toBe('a');
+  });
+
+  it('別のコンテナ（別の runner・クローン）は、それぞれの鍵を持つ', async () => {
+    const { b } = book([token('a', 0), token('b', 1)]);
+    const clone = await b.assign(CLONE_ASSIGNMENT_UNIT);
+    const first = await b.assign('mgr-1', { container: 'runner-1' });
+    const second = await b.assign('mgr-2', { container: 'runner-1' });
+    expect(clone?.tokenId).toBe('a');
+    expect(first?.tokenId).toBe('b');
+    expect(second?.tokenId).toBe('b');
+  });
+
+  it('鍵が止まったら、同じコンテナの持ち主はまとまって同じ移り先へ移る', async () => {
+    const { b, state } = book([token('a', 0), token('b', 1), token('c', 2)]);
+    for (const id of ['mgr-1', 'mgr-2', 'mgr-3']) await b.assign(id, { container: 'runner-1' });
+    expect(new Set(['mgr-1', 'mgr-2', 'mgr-3'].map((id) => b.target(id)?.tokenId))).toEqual(
+      new Set(['a']),
+    );
+    state.tokens = [token('a', 0, { cooldownUntil: AT + 60_000 }), token('b', 1), token('c', 2)];
+
+    const result = await b.evacuate('a');
+
+    expect(new Set(result.moved.map((move) => move.to.tokenId)).size).toBe(1);
+    expect(result.moved).toHaveLength(3);
+    // 次の新しい委譲も同じ移り先へ寄る
+    expect((await b.assign('mgr-4', { container: 'runner-1' }))?.tokenId).toBe(
+      result.moved[0]?.to.tokenId,
+    );
+  });
+
+  it('通る鍵が1本しか無ければ、閾値を超えていてもその鍵を使う（作業を止めない）', async () => {
+    const { b } = book([token('a', 0), token('b', 1, { cooldownUntil: AT + 60_000 })], {
+      loads: { a: 99 },
+    });
+    expect((await b.assign('mgr-1', { container: 'runner-1' }))?.tokenId).toBe('a');
+    expect((await b.assign('mgr-2', { container: 'runner-1' }))?.tokenId).toBe('a');
+  });
+
+  it('引き取りの後（コンテナの記録が無い）は、そのコンテナの委譲がいちばん多く持つ鍵へ寄せる', async () => {
+    const { b } = book([token('a', 0), token('b', 1), token('c', 2)], {
+      loads: { a: 50, b: 50, c: 0 },
+    });
+    // 引き取った委譲が job に残った鍵（prior）で戻る
+    await b.assign('mgr-1', { prior: 'b', container: 'runner-1' });
+    await b.assign('mgr-2', { prior: 'b', container: 'runner-1' });
+    await b.assign('mgr-3', { prior: 'a', container: 'runner-1' });
+
+    expect((await b.assign('mgr-4', { container: 'runner-1' }))?.tokenId).toBe('b');
   });
 });

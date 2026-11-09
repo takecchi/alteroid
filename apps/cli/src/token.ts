@@ -38,7 +38,7 @@ interface TokenRotationSettings {
 }
 
 function describeDistribution(settings: TokenRotationSettings): string {
-  return `配り方: ${settings.distribution ?? 'failover'}（未設定なら failover（既定））\n`;
+  return `配り方: ${settings.distribution ?? 'balanced'}（未設定なら balanced（既定））\n`;
 }
 
 interface TokensView {
@@ -436,8 +436,8 @@ export async function tokenPolicyCommand(
     if (!DISTRIBUTION_VALUES.includes(options.distribution)) {
       throw new Error(
         `--distribution は ${DISTRIBUTION_VALUES.join(' / ')} のいずれか（渡されたのは ${options.distribution}）。` +
-          'failover は現役の鍵が枠に当たるまで同じ鍵を使う（既定）、' +
-          'balanced は作業単位ごとに空いている鍵を割り当てる',
+          'failover は現役の鍵が枠に当たるまで同じ鍵を使う、' +
+          'balanced は同じコンテナ（runner・クローン）に同じ鍵を使い続け、混み具合が 90% を超えたら新しい作業から空いている鍵へ移す（既定）',
       );
     }
     patch.distribution = options.distribution;

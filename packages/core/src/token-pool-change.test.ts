@@ -80,8 +80,10 @@ describe('classifyTokenPolicyChange（#2742）', () => {
     expect(r.changes).toHaveLength(2);
     expect(r.widens).toBe(true);
   });
+  // #6642 で未設定の読みが failover から balanced へ変わった: 元は before（未設定）から変えていた。明示した failover から変える形にし、変えた向きの確かめはそのまま残す
   it('配り方を balanced へ変えるのは広げる側（rotateOn が off でも）', () => {
-    const r = classifyTokenPolicyChange(before, {
+    const failover = { ...before, distribution: 'failover' } as const;
+    const r = classifyTokenPolicyChange(failover, {
       rotateOn: 'free_exhausted',
       cooldownMs: 1000,
       distribution: 'balanced',
@@ -89,12 +91,13 @@ describe('classifyTokenPolicyChange（#2742）', () => {
     expect(r.changes).toEqual([{ field: 'distribution', from: 'failover', to: 'balanced' }]);
     expect(r.widens).toBe(true);
     const off = classifyTokenPolicyChange(
-      { ...before, rotateOn: 'off' },
+      { ...failover, rotateOn: 'off' },
       { rotateOn: 'off', cooldownMs: 1000, distribution: 'balanced' },
     );
     expect(off.widens).toBe(true);
   });
-  it('配り方を failover へ戻すのは狭める側。未設定と failover は差分にならない', () => {
+  // #6642 で反転: 元は「未設定と failover は差分にならない」。既定が balanced になったので、差分にならないのは未設定と balanced で、未設定から failover は狭める変更である
+  it('配り方を failover へ戻すのは狭める側。未設定（既定 balanced）と balanced は差分にならない', () => {
     const balanced = { ...before, distribution: 'balanced' } as const;
     const back = classifyTokenPolicyChange(balanced, {
       rotateOn: 'free_exhausted',
@@ -107,8 +110,17 @@ describe('classifyTokenPolicyChange（#2742）', () => {
       classifyTokenPolicyChange(before, {
         rotateOn: 'free_exhausted',
         cooldownMs: 1000,
-        distribution: 'failover',
+        distribution: 'balanced',
       }),
     ).toEqual({ changes: [], widens: false });
+    const fromUnset = classifyTokenPolicyChange(before, {
+      rotateOn: 'free_exhausted',
+      cooldownMs: 1000,
+      distribution: 'failover',
+    });
+    expect(fromUnset.changes).toEqual([
+      { field: 'distribution', from: 'balanced', to: 'failover' },
+    ]);
+    expect(fromUnset.widens).toBe(false);
   });
 });

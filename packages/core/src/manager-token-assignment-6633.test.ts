@@ -76,6 +76,8 @@ describe('配り方 balanced: 委譲ごとに割り当てた鍵で起こす（#6
     const { managerId } = await pool.start({ request: '調べて' });
 
     expect(fake.starts[0]?.agentToken).toEqual({ value: 'tok-fake-value-tok-b' });
+    // 載る runner をコンテナとして渡す（#6642）: 同じ runner の委譲を同じ鍵へ寄せるため
+    expect(assignment.hints).toEqual([{ managerId, container: 'runner-primary' }]);
     const job = await stores.jobs.getJob(managerId);
     expect(job?.tokenAssignment).toEqual({ tokenId: 'tok-b' });
     expect(JSON.stringify(job)).not.toContain('tok-fake-value');
@@ -154,7 +156,12 @@ describe('配り方 balanced: 委譲ごとに割り当てた鍵で起こす（#6
 
     await pool.send('mgr-done', '続きを');
 
-    expect(assignment.hints).toContainEqual({ managerId: 'mgr-done', prior: 'tok-c' });
+    // #6642 で再開する先の runner（コンテナ）も渡すようになった: 期待値に足した（前の鍵を渡すことの確認はそのまま）
+    expect(assignment.hints).toContainEqual({
+      managerId: 'mgr-done',
+      prior: 'tok-c',
+      container: 'runner-primary',
+    });
     expect(fake.resumes.at(-1)?.agentToken).toEqual({ value: 'tok-fake-value-tok-c' });
     await pool.stop();
   });

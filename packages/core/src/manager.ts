@@ -1216,9 +1216,10 @@ export interface CodexAuthRunnerSync {
  * `assign` が `undefined` を返す（`failover`・通る鍵が無い）ときは従来どおり runner の既定の鍵（現役）で走る。
  */
 export interface ManagerTokenAssignmentPort {
+  /** `container` は委譲が載る runner の id（#6642）。同じコンテナの作業には、できるかぎり同じ鍵を割り当てる（キャッシュのため）。 */
   assign(
     managerId: string,
-    hint: { prior?: string },
+    hint: { prior?: string; container?: string },
   ): Promise<
     { tokenId: string; generation: number; fingerprint: string; value: string } | undefined
   >;
@@ -2291,7 +2292,7 @@ class Pool implements ManagerPool {
     }
 
     const { record, lease } = this.#newStartRecord(input, runner, managerId, cwd, now, at);
-    const assigned = await this.#assignToken(record, undefined);
+    const assigned = await this.#assignToken(record, undefined, runner.runnerId);
     this.#records.set(managerId, record);
     this.#rememberTokenIdentity(managerId);
 
@@ -4215,7 +4216,7 @@ class Pool implements ManagerPool {
     // 「回した時点で古い鍵のまま走っていた」はセッションの鍵の指紋と現役の指紋から引き取りの場で組み直せる。載せないと、古い鍵で枠に落ちた
     // 通知は回し手に「もう回した後」として捨てられ（正しい）、鍵の側からの契機が二度と来ず、その委譲はクローンが手で起こすまで止まる。
     // 割り当てを job から引き直す（#6633）: 帳面はメモリにしか無く、再起動で消えるため。通らなくなっていれば別の鍵へ移り、下の指紋の食い違いで起こし直しの借りに載る
-    await this.#assignToken(record, job.tokenAssignment?.tokenId);
+    await this.#assignToken(record, job.tokenAssignment?.tokenId, living.runner.runnerId);
     const activeFingerprint = this.#targetIdentityOf(job.id)?.fingerprint;
     if (
       attached &&
@@ -5714,7 +5715,11 @@ class Pool implements ManagerPool {
     // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
     this.#restored.begin(record.job.id, runner.runnerId);
     // 前の鍵が通るかぎり替えない（作業の途中で鍵を替えない）。生きたセッションへ合流する回は runner がこの欄を見ない（鍵は起動時に凍る）
-    const assigned = await this.#assignToken(record, record.job.tokenAssignment?.tokenId);
+    const assigned = await this.#assignToken(
+      record,
+      record.job.tokenAssignment?.tokenId,
+      runner.runnerId,
+    );
     // 応答が返らず一覧で引き取った回（下の `resumed = {}`）だけは、runner が開いた値を持たない
     let resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>;
     try {
@@ -6786,12 +6791,17 @@ class Pool implements ManagerPool {
   async #assignToken(
     record: ManagerRecord,
     prior: string | undefined,
+    // 台帳の runnerId を読まない: 再開では命令を出す前に割り当てるので、別の器へ移る回はまだ前の器を指しているため
+    container: string | undefined,
   ): Promise<{ value: string } | undefined> {
     const port = this.#tokenAssignment;
     if (port === undefined) return undefined;
     let assigned: Awaited<ReturnType<ManagerTokenAssignmentPort['assign']>>;
     try {
-      assigned = await port.assign(record.job.id, prior === undefined ? {} : { prior });
+      assigned = await port.assign(record.job.id, {
+        ...(prior === undefined ? {} : { prior }),
+        ...(container === undefined ? {} : { container }),
+      });
     } catch (error) {
       noteDroppedRecord('委譲への鍵の割り当て', record.job.id, error);
       assigned = undefined;

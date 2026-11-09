@@ -20,6 +20,12 @@ function stubCloneHost(): CloneHost {
   });
 }
 
+// 配り方を明示の failover にしておく（#6642 で未設定は balanced と読まれる）
+async function writeFailover(stores: Stores): Promise<void> {
+  const current = await stores.tokens.readSettings();
+  await stores.tokens.writeSettings({ ...current, distribution: 'failover' });
+}
+
 async function seed(options: { journalDown?: boolean } = {}) {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
@@ -236,8 +242,10 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
     expect(await stores.tokens.readSettings()).toEqual(before);
   });
 
+  // #6642 で未設定が balanced と読まれるようになった: 元は未設定から変えていた。明示した failover から変える形にした（測っている順序はそのまま）
   it('配り方を balanced へ: 日誌が先。書けなければ保存せず 500', async () => {
     const { stores, app } = await seed({ journalDown: true });
+    await writeFailover(stores);
     const before = await stores.tokens.readSettings();
     const response = await put(app, '/tokens/policy', { distribution: 'balanced' });
     expect(response.status).toBe(500);
@@ -246,6 +254,7 @@ describe('PUT /tokens/policy の日誌（#2742）', () => {
 
   it('配り方を balanced へ: 日誌が書ければ保存され、日誌に distribution の変更が出る', async () => {
     const { stores, app } = await seed();
+    await writeFailover(stores);
     const response = await put(app, '/tokens/policy', { distribution: 'balanced' });
     expect(response.status).toBe(200);
     expect((await stores.tokens.readSettings()).distribution).toBe('balanced');
