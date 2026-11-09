@@ -90,6 +90,7 @@ export type TokenRotationSettings = NonNullable<TokensState['settings']>;
 export type TokensRowsUnreadable = NonNullable<TokensState['rowsUnreadable']>;
 export type TokensActive = NonNullable<TokensState['active']>;
 export type TokenLoad = NonNullable<TokensState['loads']>[number];
+export type TokenHolder = NonNullable<TokensState['usedBy']>[number];
 export type TokenDistribution = NonNullable<TokenRotationSettings['distribution']>;
 export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
 export type TokenRecovery = NonNullable<AgentTokenView['recovery']>;

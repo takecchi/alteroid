@@ -663,6 +663,8 @@ export const managerSummarySchema = z.object({
     .optional(),
   tokenGeneration: z.number().int().nonnegative().optional(),
   activeTokenGeneration: z.number().int().nonnegative().optional(),
+  // セッションを起こしたときの鍵の id（値ではない。#6646）。分からないときは欄ごと無い（現役で埋めない）
+  tokenId: z.string().optional(),
   // `tokenGeneration` が定義されているときは欄ごと消える（CLI がこの不変条件に依存する）。
   tokenGenerationUnknownReason: z
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
@@ -862,12 +864,17 @@ export const runnersListResponseSchema = z.object({
 });
 
 // 「分からない」を表す値（`unknown`）を持つ: 配線されていない・聞きに行けない軸に `ok` / `idle` を作ると「確かめた」と読めるため。
+// 鍵の身元（値は載せない。#6646）。`label` はプールの行から引く。行が消えていれば id だけ
+const topologyTokenSchema = z.object({ tokenId: z.string(), label: z.string().optional() });
+
 const topologyCloneSchema = z.object({
   state: z.enum(['idle', 'busy', 'usage_blocked', 'unknown']),
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
   model: z.string().optional(),
+  // 欄が無いのは「分からない」。現役で埋めない
+  token: topologyTokenSchema.optional(),
 });
 
 const topologyStorageSchema = z.object({
@@ -906,6 +913,8 @@ const topologyManagerSchema = z.object({
   managerModel: z.string().optional(),
   workerModel: z.string().optional(),
   request: z.string(),
+  // セッションを起こしたときの鍵（`ManagerSummary.tokenId`）。欄が無いのは「分からない」
+  token: topologyTokenSchema.optional(),
   startedAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
   lastReportAt: isoDateTimeSchema.optional(),
@@ -1303,6 +1312,17 @@ export const tokensListResponseSchema = tokensResponseSchema.extend({
   // 鍵ごとの枠の最後の観測（#6633。デーモンのメモリにだけ在る）。測っていない鍵の行は無い（0% で埋めない）。
   // 欄そのものが無いのは、鍵ごとに測らない構成か古いデーモン
   loads: z.array(z.object({ tokenId: z.string(), state: accountUsageStateSchema })).optional(),
+  // いまその鍵で動いている担当（#6646）。クローンと、進行中の委譲（走っている・返事を待っている）だけを載せる。
+  // 鍵はセッションを起こしたときのもの（割り当てではなく実際に渡した鍵）。分からない担当は載らない（現役で埋めない）。欄が無いのは数えられなかった・古いデーモン
+  usedBy: z
+    .array(
+      z.object({
+        tokenId: z.string(),
+        kind: z.enum(['clone', 'manager']),
+        managerId: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 // 表示の読み直しに失敗したときは `tokens` を載せない: 空の `tokens` は「プールが空」と読めてしまうため。

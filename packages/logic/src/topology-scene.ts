@@ -16,8 +16,10 @@ interface SceneDetail {
 }
 
 // 欄が無いことは「不明」: 既定のモデルで埋めない
+// `token` は鍵の名前（#6646）。モデルと同じく、欄が無いのは「分からない」（現役で埋めない）
 interface SceneAgent {
   model?: string;
+  token?: string;
 }
 
 interface SceneWorker {
@@ -284,7 +286,16 @@ function agentOf(model: string | undefined): SceneAgent {
   return model === undefined ? {} : { model };
 }
 
-function managerLabel(managerId: string): string {
+type SnapshotToken = TopologySnapshot['clone']['token'];
+
+// ラベルが無い（行が消えた）ときは id の頭を出す: 何も出さないと「分からない」と区別できないため
+function agentWithToken(model: string | undefined, token: SnapshotToken): SceneAgent {
+  if (token === undefined) return agentOf(model);
+  return { ...agentOf(model), token: token.label ?? token.tokenId.slice(0, 8) };
+}
+
+// 書き出す: トークンの画面の「〇〇で使用中」も地図と同じ短い名前で言うため（#6646）
+export function managerLabel(managerId: string): string {
   return managerId.length > 8 ? managerId.slice(0, 8) : managerId;
 }
 
@@ -431,7 +442,7 @@ export function topologySceneFromSnapshot(
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
   const clone = {
     ...cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs),
-    agent: agentOf(snapshot.clone.model),
+    agent: agentWithToken(snapshot.clone.model, snapshot.clone.token),
   };
   const storage = storageScene(snapshot.storage, nowMs);
   const runners = liveRunnersOf(snapshot.runners);
@@ -515,7 +526,7 @@ function managerScenes(
     status: managerStatus(manager),
     flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
     details: managerDetails(manager, nowMs),
-    agent: agentOf(manager.managerModel),
+    agent: agentWithToken(manager.managerModel, manager.token),
     workers: manager.workers.map((worker) => {
       const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
       if (worker.peer !== undefined)

@@ -43,6 +43,8 @@ export interface SummaryFacts {
   // `live` と同じく必須にする: 既定を置くと、足す人が考えなかったことが「背景処理は待っていない」という主張になって外へ出る。
   awaitingBackground: ManagerAwaitingBackground | undefined;
   tokenGeneration: number | undefined;
+  // `tokenGeneration` と同じ出所（セッションを起こしたときの鍵）の id（#6646）。割り当てではなく、実際に渡した鍵
+  tokenId: string | undefined;
   activeTokenGeneration: number | undefined;
   tokenGenerationPoolWired: boolean;
   resetTimeSkewMatch: NoticeResetMatch | undefined;
@@ -57,6 +59,7 @@ export function summaryOf(record: ManagerRecord, facts: SummaryFacts): ManagerSu
     runnerListedAt,
     awaitingBackground,
     tokenGeneration,
+    tokenId,
     activeTokenGeneration,
     tokenGenerationPoolWired,
     resetTimeSkewMatch,
@@ -157,6 +160,7 @@ export function summaryOf(record: ManagerRecord, facts: SummaryFacts): ManagerSu
           tokenGeneration,
           ...(activeTokenGeneration === undefined ? {} : { activeTokenGeneration }),
         }),
+    ...(tokenId === undefined ? {} : { tokenId }),
     ...(resetTimeSkewMatch === undefined ? {} : { resetTimeSkewMatch }),
   };
 }

@@ -327,10 +327,11 @@ describe('担当の札（モデル。#3921）', () => {
     stubFrameWidth(1000);
     const { container } = render(<SystemTopology {...busyScene} />);
     const summary = container.querySelector('figcaption')?.textContent ?? '';
-    expect(summary).toContain('実行中（モデル opus）。作業者 worker-1');
+    // #6646 でクローンとマネージャーの要約にトークンが入った（この場面は鍵を持たないので「不明」）。作業者には入らない
+    expect(summary).toContain('実行中（モデル opus、トークン 不明）。作業者 worker-1');
     expect(summary).toContain('worker-1 実行中（モデル sonnet）');
-    expect(summary).toContain('実行中（モデル 不明）');
-    expect(summary).toMatch(/^クローン: .*（モデル opus）/);
+    expect(summary).toContain('実行中（モデル 不明、トークン 不明）');
+    expect(summary).toMatch(/^クローン: .*（モデル opus、トークン 不明）/);
     expect(summary).not.toContain('provider');
   });
 
@@ -341,5 +342,36 @@ describe('担当の札（モデル。#3921）', () => {
     expect(getByText('モデル')).toBeTruthy();
     expect(queryByText('provider')).toBeNull();
     expect(document.body.textContent).toContain('不明（名乗りを受けていない）');
+  });
+});
+
+describe('どの担当がどの鍵で動いているか（#6646）', () => {
+  const withTokens = {
+    ...busyScene,
+    clone: { ...busyScene.clone, agent: { model: 'opus', token: 'bob@example.test' } },
+    managers: busyScene.managers.map((manager, index) =>
+      index === 0
+        ? { ...manager, agent: { ...manager.agent, token: 'alice@example.test' } }
+        : manager,
+    ),
+  };
+
+  it('札の面に鍵の名前が出て、読み上げの要約にも入る', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...withTokens} />);
+    const cards = Array.from(container.querySelectorAll('button[aria-label]'));
+    expect(cards.some((card) => card.textContent?.includes('alice@example.test'))).toBe(true);
+    expect(cards.some((card) => card.textContent?.includes('bob@example.test'))).toBe(true);
+    const summary = container.querySelector('figcaption')?.textContent ?? '';
+    expect(summary).toMatch(/^クローン: .*（モデル opus、トークン bob@example.test）/);
+    expect(summary).toContain('トークン alice@example.test');
+  });
+
+  it('札を押した詳細に「トークン」の行が出る。分からなければ現役で埋めず不明と言う', () => {
+    stubFrameWidth(1000);
+    const { getByLabelText } = render(<SystemTopology {...busyScene} />);
+    fireEvent.click(getByLabelText(/^マネージャー mgr-91be/));
+    expect(document.body.textContent).toContain('トークン');
+    expect(document.body.textContent).toContain('不明（このセッションの鍵を観測していない）');
   });
 });

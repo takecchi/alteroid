@@ -45,10 +45,11 @@ import {
   TokenNotFoundError,
   TokenPoolChangedError,
 } from '@alteroid/swr';
-import { formatDateTime, TOKEN_ID_PARAM } from '@alteroid/logic';
+import { formatDateTime, managerLabel, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
   AgentTokenView,
   TokenDistribution,
+  TokenHolder,
   TokenLoad,
   TokenRotationSettings,
   TokensActive,
@@ -233,6 +234,7 @@ function PoolAndSettings() {
             activeNever={data.activeNever === true}
             activeUnreadable={data.activeUnreadable}
             loads={data.loads}
+            usedBy={data.usedBy}
           />
           {data.settings === undefined ? (
             // 既定値では埋めない: off にしてあった回転を既定として見せることになるため
@@ -254,6 +256,7 @@ function PoolCard({
   activeNever,
   activeUnreadable,
   loads,
+  usedBy,
 }: {
   tokens: readonly AgentTokenView[];
   targetTokenId?: string;
@@ -262,6 +265,7 @@ function PoolCard({
   activeNever: boolean;
   activeUnreadable?: { reason: string };
   loads?: readonly TokenLoad[];
+  usedBy?: readonly TokenHolder[];
 }) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
   // 「既に無い」は行ではなく一覧側に持つ: hook は断る前に一覧を取り直すので、行の state に置くと断りの文言も一緒に消えるため
@@ -306,6 +310,7 @@ function PoolCard({
               highlighted={token.id === targetTokenId}
               isActive={active?.tokenId === token.id}
               loads={loads}
+              holders={usedBy?.filter((holder) => holder.tokenId === token.id)}
               onGone={setGone}
             />
           ))}
@@ -377,6 +382,7 @@ function TokenRow({
   highlighted = false,
   isActive = false,
   loads,
+  holders,
   onGone,
 }: {
   token: AgentTokenView;
@@ -384,6 +390,7 @@ function TokenRow({
   highlighted?: boolean;
   isActive?: boolean;
   loads?: readonly TokenLoad[];
+  holders?: readonly TokenHolder[];
 }) {
   const load = loads === undefined ? undefined : describeTokenLoad(loads, token.id);
   const availability = tokenAvailabilityAt(token);
@@ -454,6 +461,9 @@ function TokenRow({
         <Badge tone={state.tone}>{state.label}</Badge>
         {/* 状態の印とは別に出す: 「使用可能」は現役の意味ではないため */}
         {isActive && <Badge tone="ok">現役</Badge>}
+        {(holders ?? []).map((holder) => (
+          <Badge key={holderKey(holder)}>{describeHolder(holder)}</Badge>
+        ))}
         <span className="text-xs text-muted-foreground">order {token.order}</span>
       </div>
 
@@ -888,4 +898,16 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
       </div>
     </Card>
   );
+}
+
+function holderKey(holder: TokenHolder): string {
+  return holder.kind === 'clone' ? 'clone' : `manager:${holder.managerId ?? ''}`;
+}
+
+// 地図と同じ短い名前で言う（#6646）: 画面ごとに名前の形が違うと、同じ委譲だと突き合わせられないため
+function describeHolder(holder: TokenHolder): string {
+  if (holder.kind === 'clone') return 'クローンで使用中';
+  return holder.managerId === undefined
+    ? 'マネージャーで使用中'
+    : `${managerLabel(holder.managerId)} で使用中`;
 }

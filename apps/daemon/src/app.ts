@@ -74,6 +74,8 @@ export interface AppDeps {
   // デーモンが鍵を保管しない（降ろすだけ）: 保管すると記憶の器に GitHub の書き込み権が並ぶため（railway/README.md「daemon 側には置かない」）。
   runners?: RunnerRegistry;
   cloneModel?: string;
+  // クローンのセッションが使っている鍵の id（#6646。ホームの地図の札に出す）。無ければ地図はクローンの鍵を言わない
+  cloneTokenId?: () => string | undefined;
   // 無ければその経路だけ 503: 配線されていないことを黙って隠さないため。
   journalEvents?: Pick<JournalBus, 'subscribe'>;
   // 日誌は通らない（プールが `WorkerToolBus` へ流す）。
