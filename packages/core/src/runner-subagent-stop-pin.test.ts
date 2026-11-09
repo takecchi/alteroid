@@ -190,8 +190,12 @@ const subagentNotes = (events: readonly RunnerEvent[]): NoteEvent[] =>
 /** note の全文と、`text` / `managerId` / `type` 以外の欄（`escalate`／`stall`）。 */
 function viewNotes(events: readonly RunnerEvent[]): unknown[] {
   return subagentNotes(events).map((note) => {
-    const { type: _type, managerId: _managerId, text, ...rest } = note;
-    return Object.keys(rest).length === 0 ? text : { text, ...rest };
+    const rest = Object.fromEntries(
+      Object.entries(note).filter(
+        ([key]) => key !== 'type' && key !== 'managerId' && key !== 'text',
+      ),
+    );
+    return Object.keys(rest).length === 0 ? note.text : { text: note.text, ...rest };
   });
 }
 
@@ -358,9 +362,8 @@ describe('所有者を引けない（#noteOwnerLookupFailure）／当人の分�
   it('agent_id が無い回: mine が空になるので診断の枝だけを通り、起こし直しはしない', async () => {
     const rig = await open();
     await register(rig, 'bg-1', 'agent-1');
-    const { agent_type: _agentType, ...noAgent } = STOP_BASE;
     const result = await fireStop(rig, {
-      ...noAgent,
+      ...STOP_BASE,
       background_tasks: [bg('bg-1'), bg('bg-orphan')],
     });
     expect({ result, notes: viewNotes(rig.events) }).toMatchInlineSnapshot(`
@@ -826,9 +829,9 @@ describe('待ちの結果: released（待ちの途中・前に畳まれた）', 
     const rig = await open();
     await register(rig, 'bg-1', 'agent-1');
     await host?.shutdown();
-    const { stop_hook_active: _active, ...noActive } = STOP_BASE;
     const result = await fireStop(rig, {
-      ...noActive,
+      ...STOP_BASE,
+      stop_hook_active: undefined,
       agent_id: 'agent-1',
       background_tasks: [bg('bg-1')],
     });
@@ -1131,8 +1134,7 @@ describe('作業者の道具の見張りの片付け（settleAgent）', () => {
     const clock = fakeClock();
     const rig = await open({ clock });
     await beginWorkerTool(rig, clock);
-    const { agent_type: _agentType, ...noAgent } = STOP_BASE;
-    await fireStop(rig, { ...noAgent, background_tasks: [] });
+    await fireStop(rig, { ...STOP_BASE, background_tasks: [] });
     expect(endEvents(rig.events).length).toMatchInlineSnapshot(`0`);
   });
 });
