@@ -408,6 +408,7 @@ export const WITHHELD_ENV_KEYS = [
 function childEnvLayers(input: {
   env: NodeJS.ProcessEnv;
   credentials: CredentialStore | undefined;
+  sessionCredentials?: NodeJS.ProcessEnv;
   profileEnv: Record<string, string>;
 }): AnthropicRouteLayer[] {
   const vessel = { ...input.env };
@@ -416,6 +417,8 @@ function childEnvLayers(input: {
   return [
     { source: '器', env: vessel },
     { source: '袋', env: credentialEnv(input.credentials) },
+    // 袋より上・プロファイルより下: 作業単位に割り当てた鍵（#6633）は host の現役より優先するが、人間が明示的に書いたものには勝たない（袋と同じ扱い）
+    { source: 'セッションの鍵', env: input.sessionCredentials ?? {} },
     // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
     // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
     { source: 'プロファイル', env: input.profileEnv },
@@ -430,6 +433,7 @@ function credentialEnv(credentials: CredentialStore | undefined): NodeJS.Process
 function composeChildEnv(input: {
   env: NodeJS.ProcessEnv;
   credentials: CredentialStore | undefined;
+  sessionCredentials?: NodeJS.ProcessEnv;
   profileEnv: Record<string, string>;
   withheldKeys: readonly string[];
 }): NodeJS.ProcessEnv {
@@ -1342,7 +1346,18 @@ class Host implements RunnerHost {
       const claudeKeyChanged = POOL_OWNED_CREDENTIAL_NAMES.some(
         (name) => before.get(name) !== after.get(name),
       );
-      for (const session of this.#sessions.values()) session.recycleForToken(claudeKeyChanged);
+      const otherKeyChanged = [...new Set([...before.keys(), ...after.keys()])].some(
+        (name) =>
+          !POOL_OWNED_CREDENTIAL_NAMES.includes(name) && before.get(name) !== after.get(name),
+      );
+      for (const session of this.#sessions.values()) {
+        // 自分の鍵を持つセッション（#6633）は host の Claude の鍵が変わっても走る鍵が変わらない: 畳むと無駄な開き直しと「回転前の鍵で走っている」の偽の知らせが出るため
+        if (session.ownsAgentToken) {
+          if (otherKeyChanged) session.recycleForToken(false);
+          continue;
+        }
+        session.recycleForToken(claudeKeyChanged);
+      }
     }
     this.#announceAnthropicRoute();
     // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる
@@ -1659,7 +1674,12 @@ class Host implements RunnerHost {
     return cwd;
   }
 
-  #create(managerId: string, request: string, cwd: string): RunnerSession {
+  #create(
+    managerId: string,
+    request: string,
+    cwd: string,
+    agentToken: string | undefined,
+  ): RunnerSession {
     const sessionGeneration = randomUUID();
     // セッションごとに持つ（host の集合に直接足さない）: 終わり方が分かるのは閉じた後で、それまでは守る側のままにするため
     const spawnedPids = new Set<number>();
@@ -1675,6 +1695,7 @@ class Host implements RunnerHost {
         credentials: this.#credentials,
         managerTools: this.#managerTools,
         delegationSubreaper: this.#delegationSubreaper,
+        agentToken,
       }),
       ...this.#sessionOverrides,
       env: this.#env,
@@ -1791,7 +1812,12 @@ class Host implements RunnerHost {
     }
     this.#refuseWhileShuttingDown(command.managerId);
     this.#checkRememberedFence(command.managerId, command.lease);
-    const session = this.#create(command.managerId, command.request, command.cwd);
+    const session = this.#create(
+      command.managerId,
+      command.request,
+      command.cwd,
+      command.agentToken?.value,
+    );
     try {
       session.acceptLease(command.lease);
       this.#rememberFence(command.managerId, command.lease);
@@ -1867,7 +1893,13 @@ class Host implements RunnerHost {
       const awaitedSince = this.#returnAwaitedSince.get(command.managerId);
       // 閉じた後の古い世代の起こし直しをここで断る（#5507）: 新しいセッションは世代を持たないので、持ち越しはこの Map が受け持つ
       this.#checkRememberedFence(command.managerId, command.lease);
-      const session = this.#create(command.managerId, command.request, command.cwd);
+      // 生きたセッションへの合流（上）では `agentToken` を見ない: 走っている CLI の env は起動時に凍るので、鍵を替えたいデーモンは先に畳んでから resume する
+      const session = this.#create(
+        command.managerId,
+        command.request,
+        command.cwd,
+        command.agentToken?.value,
+      );
       let parked: ParkedPeers | undefined;
       try {
         session.acceptLease(command.lease);
@@ -2674,6 +2706,8 @@ interface RunnerSessionOptions {
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
+  /** このセッションだけが使う Claude の鍵（#6633）。在れば host の袋の同じ名前より上に重なる。 */
+  agentToken?: string;
   permissionMode: ManagerPermissionMode;
   bashGuard: BashGuardMode;
   codexAuth: CodexChatgptAuthHandle;
@@ -2744,6 +2778,7 @@ class RunnerSession {
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
+  readonly #agentToken: string | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #bashGuardInspector: RunnerBashGuard;
@@ -2931,6 +2966,7 @@ class RunnerSession {
     this.#codexAuth = options.codexAuth;
     this.#queryFn = options.queryFn;
     this.#credentials = options.credentials;
+    this.#agentToken = options.agentToken;
     this.#permissionMode = options.permissionMode;
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
@@ -3406,6 +3442,10 @@ class RunnerSession {
   async selfFence(reason: string): Promise<void> {
     if (this.#sdkSession.stopped) return;
     await this.#finish('lost', reason, { selfFenced: true });
+  }
+
+  get ownsAgentToken(): boolean {
+    return this.#agentToken !== undefined;
   }
 
   // セッションが無ければ印を立てない: 次に `#open()` するのはもう新しい鍵のもとのため
@@ -4072,6 +4112,9 @@ class RunnerSession {
     const env = composeChildEnv({
       env: this.#env,
       credentials: this.#credentials,
+      ...(this.#agentToken === undefined
+        ? {}
+        : { sessionCredentials: { CLAUDE_CODE_OAUTH_TOKEN: this.#agentToken } }),
       profileEnv: this.#profileEnv(),
       withheldKeys: this.#withheldEnvKeys,
     });

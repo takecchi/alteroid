@@ -944,3 +944,141 @@ describe('Codex の資格が届いた・外れたら、走行中のマネージ�
     expect(s.sessions).toHaveLength(1);
   });
 });
+
+describe('セッション単位の鍵（#6633）: 作業単位に割り当てた鍵は host の現役より上に重なり、host の回転で畳まれない', () => {
+  const ASSIGNED = 'token-fake-assigned-777';
+
+  function setupWithGh() {
+    const events: RunnerEvent[] = [];
+    const { fn, sessions, startedOptions } = fakeSdk({ abortOnInputClose: true });
+    const credentials = createCredentialStore({
+      dir: join(dir, 'creds-6633'),
+      seed: { CLAUDE_CODE_OAUTH_TOKEN: OLD_TOKEN, GH_TOKEN: 'gh-fake-old' },
+      names: ['CLAUDE_CODE_OAUTH_TOKEN', 'GH_TOKEN'],
+    });
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+      env: { PATH: '/usr/bin' },
+      credentials,
+      ...outboxRoots(),
+    });
+    hosts.push(host);
+    return { host, events, sessions, startedOptions };
+  }
+
+  async function finishFirstTurn(s: ReturnType<typeof setupWithGh>): Promise<void> {
+    const first = await nthSession(s.sessions, 0);
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+  }
+
+  it('start に鍵が在れば、そのセッションはその鍵で起き、指紋もその鍵を名乗る', async () => {
+    const s = setupWithGh();
+    await s.host.start({
+      managerId: 'mgr-1',
+      request: '調べて',
+      cwd: '/work/project',
+      agentToken: { value: ASSIGNED },
+    });
+    await nthSession(s.sessions, 0);
+
+    expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(ASSIGNED);
+    expect(s.startedOptions[0]?.env?.GH_TOKEN).toBe('gh-fake-old');
+    const state = s.host.list().find((entry) => entry.managerId === 'mgr-1');
+    expect(state?.tokenFingerprint).toBe(fingerprintOf(ASSIGNED));
+  });
+
+  it('鍵が無い start は従来どおり host の鍵で起きる（failover の挙動を変えない）', async () => {
+    const s = setupWithGh();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    await nthSession(s.sessions, 0);
+
+    expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(OLD_TOKEN);
+  });
+
+  it('host の Claude の鍵が回っても、自分の鍵を持つセッションは畳まれず、回転の note も出ない', async () => {
+    const s = setupWithGh();
+    await s.host.start({
+      managerId: 'mgr-1',
+      request: '調べて',
+      cwd: '/work/project',
+      agentToken: { value: ASSIGNED },
+    });
+    await finishFirstTurn(s);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-888' }]);
+    await tick(40);
+
+    expect(s.sessions).toHaveLength(1);
+    expect(
+      s.events.filter((event) => event.type === 'note' && event.tokenRotation === true),
+    ).toEqual([]);
+  });
+
+  it('Claude 以外の鍵が変われば畳み直すが、開き直したセッションも自分の鍵のまま走る', async () => {
+    const s = setupWithGh();
+    await s.host.start({
+      managerId: 'mgr-1',
+      request: '調べて',
+      cwd: '/work/project',
+      agentToken: { value: ASSIGNED },
+    });
+    await finishFirstTurn(s);
+
+    await s.host.setCredentials([
+      { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-999' },
+      { name: 'GH_TOKEN', value: 'gh-fake-new' },
+    ]);
+    await nthSession(s.sessions, 1);
+
+    expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(ASSIGNED);
+    expect(s.startedOptions[1]?.env?.GH_TOKEN).toBe('gh-fake-new');
+    expect(s.startedOptions[1]?.resume).toBe('sess-1');
+  });
+
+  it('同じ host に鍵を持つセッションと持たないセッションが並べば、回転で畳まれるのは持たないほうだけ', async () => {
+    const s = setupWithGh();
+    await s.host.start({
+      managerId: 'mgr-own',
+      request: '調べて',
+      cwd: '/work/project',
+      agentToken: { value: ASSIGNED },
+    });
+    const own = await nthSession(s.sessions, 0);
+    own.say('わかった');
+    own.finish('わかった');
+    await s.host.start({ managerId: 'mgr-host', request: '調べて', cwd: '/work/project' });
+    const hostKeyed = await nthSession(s.sessions, 1);
+    hostKeyed.say('わかった');
+    hostKeyed.finish('わかった');
+    await reportEvents(s.events, 2);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-aaa' }]);
+    await nthSession(s.sessions, 2);
+    await tick(40);
+
+    expect(s.sessions).toHaveLength(3);
+    expect(s.startedOptions[2]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-aaa');
+    expect(s.startedOptions[2]?.resume).toBe('sess-2');
+  });
+
+  it('作り直しの resume に鍵が在れば、新しいセッションはその鍵で起きる', async () => {
+    const s = setupWithGh();
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-prev',
+      request: '調べて',
+      cwd: '/work/project',
+      message: '続けて',
+      agentToken: { value: ASSIGNED },
+    });
+    await nthSession(s.sessions, 0);
+
+    expect(s.startedOptions[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(ASSIGNED);
+    expect(s.startedOptions[0]?.resume).toBe('sess-prev');
+  });
+});

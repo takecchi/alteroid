@@ -170,6 +170,12 @@ export const runnerStartCommandSchema = z.object({
   request: z.string().min(1),
   cwd: z.string().min(1),
   lease: runnerLeaseSchema.optional(),
+  /**
+   * このセッションだけが使う Claude の鍵（#6633。プールの配り方 `balanced` で、作業単位ごとに割り当てた鍵を渡す）。
+   * 在れば host の袋（`setCredentials`）の同じ名前より上に重なる。無ければ従来どおり host の鍵で走る。
+   * 任意: 古い runner は未知の欄として捨てて host の鍵で走る。どの鍵で起きたかは `tokenFingerprint` で照合できる。
+   */
+  agentToken: z.object({ value: z.string().min(1) }).optional(),
   /*
    * `provider` 欄は無い（マネージャー層は常に Claude で動く）。旧いデーモンが送ってきても、
    * `z.object` は未知の欄を黙って捨てる。
@@ -210,6 +216,12 @@ export const runnerResumeCommandSchema = z.object({
     )
     .optional(),
   lease: runnerLeaseSchema.optional(),
+  /**
+   * このセッションだけが使う Claude の鍵（#6633。プールの配り方 `balanced` で、作業単位ごとに割り当てた鍵を渡す）。
+   * 在れば host の袋（`setCredentials`）の同じ名前より上に重なる。無ければ従来どおり host の鍵で走る。
+   * 任意: 古い runner は未知の欄として捨てて host の鍵で走る。どの鍵で起きたかは `tokenFingerprint` で照合できる。
+   */
+  agentToken: z.object({ value: z.string().min(1) }).optional(),
   /** `message` が無ければ使わない。`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
