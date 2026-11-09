@@ -406,6 +406,8 @@ describe('report の段 2（台帳への写し）', () => {
     expect(Object.hasOwn(r.persisted ?? {}, 'usageStoppedAt')).toBe(false);
     expect(r.listed.usageStoppedAt).toBeUndefined();
     expect(r.listed.resetTimeSkewMatch).toBeUndefined();
+    // 台帳の欄は消えているので一覧では Set の中身が見えない: 枠の印が残っていれば鍵の回転の起こし直しの対象に入るので、そちらで見る
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
   });
 
   it('失敗した回は枠の印も resets 時刻の突き合わせも下ろさない（そこが起こし直したい相手）', async () => {
