@@ -424,6 +424,55 @@ describe('note の知らせ（#emitNoteNotices）', () => {
     `);
   });
 
+  // 畳んで配っていない報告の在庫を抱えた担当の note: 知らせの末尾へ「配っていない」旨が付き、在庫は配り切った状態へ進む（'full'。'flush' なら在庫を残す）。
+  // `emit` の第 6 引数（`withheldSuffixDetail`）の値は、ここでしか外から見えない。
+  const WITHHELD = {
+    count: 2,
+    firstAt: '2026-11-02T02:00:00.000Z',
+    lastAt: '2026-11-02T02:30:00.000Z',
+    excerpts: [{ at: '2026-11-02T02:30:00.000Z', line: '畳んだ報告の冒頭' }],
+    breakdown: 'b',
+    taskCount: 1,
+  };
+
+  it('notifyClone: 抱えている在庫は知らせの末尾へ付いて配り切られる（台帳の写しも消える）', async () => {
+    const s = await open({ job: { withheldReports: WITHHELD } });
+    const out = await s.note({ text: '退避から漏れた', notifyClone: true });
+    expect(out.notices).toMatchInlineSnapshot(`
+      [
+        {
+          "at": "2026-11-02T03:04:05.000Z",
+          "id": "ID",
+          "kind": "report",
+          "managerId": "mgr-note-pin",
+          "statusAtDelivery": "running",
+          "text": "[mgr-note-pin] 退避から漏れた
+
+      （この間に、背景処理の完了待ちで畳んだターンの報告を 2 本配っていない（最初 2026-11-02T02:00:00.000Z / 最後 2026-11-02T02:30:00.000Z）。全文は日誌に在る（\`journal_read q=mgr-note-pin\` since=最初の少し前 until=最後の少し後）。
+      畳んだ報告の冒頭（古い順）:
+      （古い 1 本の冒頭は字数の予算で省いた。全文は日誌に在る（\`journal_read\`））
+      - 2026-11-02T02:30:00.000Z 畳んだ報告の冒頭
+      ）",
+          "type": "manager_message",
+        },
+      ]
+    `);
+    expect((await s.stores.jobs.getJob(JOB_ID))?.withheldReports).toMatchInlineSnapshot(
+      `undefined`,
+    );
+  });
+
+  it('escalate: 抱えている在庫は escalate の知らせの末尾へ付いて配り切られ、続く notifyClone の知らせには付かない', async () => {
+    const s = await open({ job: { withheldReports: WITHHELD } });
+    const out = await s.note({ text: '両方', escalate: true, notifyClone: true });
+    expect(
+      out.notices.map((notice) => (notice as { text: string }).text.includes('配っていない')),
+    ).toEqual([true, false]);
+    expect((await s.stores.jobs.getJob(JOB_ID))?.withheldReports).toMatchInlineSnapshot(
+      `undefined`,
+    );
+  });
+
   it('どちらも無い note: 日誌にだけ残り、受信箱へは何も上がらない。escalate: false も同じ（=== true だけが効く）', async () => {
     const s = await open();
     const none = await s.note({ text: '静かな note' });
