@@ -271,7 +271,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "const contextUsage = await this.#observeContextUsage();",
   "if (contextUsage !== undefined) {this.#emit({type: 'context_usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, turnSucceeded: event.succeeded, contextUsage});} const {said, rejected, inputsThisTurn, notificationsThisTurn, toolsThisTurn, submitsThisTurn, sourcesThisTurn, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn} = this.#turnTally.takeAtResult();",
   "const closedWindow = this.#workerWaitWindow.foldTurn({inputsThisTurn, notificationsThisTurn, toolsThisTurn, submitsThisTurn, sourcesThisTurn});",
-  "if (closedWindow !== null) {this.#emit({type: 'worker_wait', managerId: this.#id, ...closedWindow});} for (const denial of event.denials) this.#noteDenial(denial, 'result');",
+  "if (closedWindow !== null) {this.#emit({type: 'worker_wait', managerId: this.#id, ...closedWindow});} for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');",
   "const failure = event.failure ?? rejected ?? undefined;",
   "if (event.succeeded) {this.#markProgressed();",
   "if (event.usage !== undefined) {this.#emit({type: 'usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, models: event.usage.models, answered: failure === undefined, ...(contextUsage === undefined ? {} : {contextUsage})});}} let noCredentialDirHint = false;",
