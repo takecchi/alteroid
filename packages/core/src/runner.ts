@@ -31,7 +31,6 @@ import type {
   AgentPreToolDecision,
   AgentPreToolRecord,
   AgentPreToolRewrite,
-  AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
@@ -133,7 +132,7 @@ import {
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
-import { codePointBoundary, excerptLine } from './excerpt.js';
+import { excerptLine } from './excerpt.js';
 import { relocateMcpConfigArgs } from './mcp-config-arg.js';
 import {
   RUNNER_MCP_CONFIG_DIR_PREFIX,
@@ -260,6 +259,14 @@ import {
 } from './session-allow-rules.js';
 import { parseDelegatedPermissionRules } from './delegated-permission-rules.js';
 import { RunnerBashGuard } from './runner-bash-guard.js';
+import {
+  OWNER_RECORDABLE_TASK_TYPES,
+  classifyBackgroundTaskStatus,
+  isOwnerRecordableTaskType,
+  taskRow,
+  truncateWithNote,
+} from './runner-background-task-rows.js';
+import { RunnerStopObserver } from './runner-stop-observer.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -341,6 +348,7 @@ import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyFailedTurnUsageNotice, classifyUsageNotice } from './usage-limits.js';
 
 export { SUBAGENT_BACKGROUND_WAIT_MS };
+export { OWNER_RECORDABLE_TASK_TYPES };
 
 // 既定を動かさない: 変更には人間の承認が要るため（AGENTS.md 地雷5）
 export const MANAGER_MODEL = 'opus';
@@ -2434,31 +2442,6 @@ const ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT = 512;
 // 超えた分を黙って落とさない: 切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
 const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 
-// `SUBAGENT_STOP_NOTE_TEXT_LIMIT` と共有しない: 片方を動かしたときに黙って一緒に動かないため。超えた分を黙って落とさない
-const STOP_NOTE_TEXT_LIMIT = 1_500;
-
-/**
- * [sdk-verbatim BackgroundTaskSummary.type]
- * > Friendly task-type label (e.g. 'shell', 'subagent', 'monitor', 'workflow'). Falls back to the raw discriminant for unknown types.
- *
- * [sdk-verbatim BashOutput.backgroundTaskId]
- * > ID of the background task if command is running in background
- *
- * [sdk-verbatim MonitorOutput.taskId]
- * > ID of the background monitor task.
- *
- * [sdk-verbatim WorkflowOutput.taskType]
- * > TaskType of the registered background task — 'local_workflow' for in-process runs, 'remote_agent' when remote:true dispatches to CCR. Set on all new writes; absent only on transcripts written before this field existed.
- */
-// `type !== 'subagent'` で除外しない: 所有者を引けないのが正常かは出力が `backgroundTaskId` を持つかという性質で決まり、monitor / workflow を起こしただけで誤診断が出るため
-// 「引けなかった種類」を足さない: これは引ける側の名簿で、増えるのは `#recordBackgroundTaskOwner` が読むキーを増やしたときだけのため
-export const OWNER_RECORDABLE_TASK_TYPES: ReadonlySet<string> = new Set(['shell']);
-
-// `#noteOwnerLookupFailure` と `#stopTaskOwnerKind` の両方から引く: 片方だけ直すと同じ問いに2つの答えが出るため
-function isOwnerRecordableTaskType(type: unknown): boolean {
-  return typeof type === 'string' && OWNER_RECORDABLE_TASK_TYPES.has(type);
-}
-
 // 知らない値を数えない: 数えると SDK が新しい種類（`local_workflow` 等）を増やすたびに作業者の過大計上が黙って再発するため
 // `OWNER_RECORDABLE_TASK_TYPES` と混ぜない: 背景処理の種類と委譲の種類は別の id 空間のため
 /** 背景で起こした作業者（サブエージェント）の、SDK の背景処理の種類（`task_type`）。 */
@@ -2468,23 +2451,6 @@ function isWorkerTaskType(taskType: string | undefined): boolean {
   return taskType === undefined || taskType === BACKGROUND_AGENT_TASK_TYPE;
 }
 
-/**
- * [sdk-verbatim SDKTaskUpdatedMessage.patch.status]
- * > status?: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused';
- */
-const SETTLED_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'failed',
-  'killed',
-]);
-
-// `paused` を settled に入れない: 止まっているだけで、畳めば置き去りになるため
-const LIVE_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
-  'pending',
-  'running',
-  'paused',
-]);
-
 // 知らせの組み立てが投げたら何も添えない: 知らせのために道具の結果（PostToolUse の応答）を壊さないため
 function noticeOrNull(build: () => string | null): string | null {
   try {
@@ -2492,42 +2458,6 @@ function noticeOrNull(build: () => string | null): string | null {
   } catch {
     return null;
   }
-}
-
-// 分からない status を `'settled'` へ倒さない: 起こし直しが黙って効かなくなるため
-function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'unknown' {
-  if (typeof status !== 'string') return 'unknown';
-  if (SETTLED_BACKGROUND_TASK_STATUSES.has(status)) return 'settled';
-  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) return 'live';
-  return 'unknown';
-}
-
-/** SDK の背景処理の1行（`unknown`）から、文字列の欄だけを読む。文字列でない欄は `undefined`（読み手が既定を決める）。 */
-interface BackgroundTaskRow {
-  id?: string;
-  type?: string;
-  status?: string;
-  description?: string;
-  command?: string;
-}
-
-function taskRow(task: unknown): BackgroundTaskRow {
-  const t = task as Record<keyof BackgroundTaskRow, unknown>;
-  const str = (value: unknown): string | undefined =>
-    typeof value === 'string' ? value : undefined;
-  return {
-    id: str(t.id),
-    type: str(t.type),
-    status: str(t.status),
-    description: str(t.description),
-    command: str(t.command),
-  };
-}
-
-// 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
-function truncateWithNote(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  return text.slice(0, codePointBoundary(text, limit)) + `…（上限 ${limit} 文字で切った）`;
 }
 
 /** `pending` に積み、成否どちらでも外す。`finally` の派生を捨てない（#5972）: `promise` が拒否すると派生の拒否は受け手が無く、runner ごと落ちる。拒否の受け手は呼び手に任せる。 */
@@ -2782,6 +2712,7 @@ class RunnerSession {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #bashGuardInspector: RunnerBashGuard;
+  readonly #stopObserver: RunnerStopObserver;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
@@ -2977,6 +2908,10 @@ class RunnerSession {
       actorOf: (record) => actorOf(this.#id, record),
       note: (text) => this.#note(text),
       tryObservation: (label, fn) => this.#tryObservation(label, fn),
+    });
+    this.#stopObserver = new RunnerStopObserver({
+      stopState: this.#stopState,
+      note: (text) => this.#note(text),
     });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
@@ -3873,7 +3808,7 @@ class RunnerSession {
       onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
       onSessionStart: (record) => this.#onSessionStart(record),
       onSubagentStop: (record) => this.#onSubagentStop(record),
-      onStop: (record) => this.#onStop(record),
+      onStop: (record) => this.#stopObserver.observe(record),
     };
   }
 
@@ -6558,134 +6493,6 @@ class RunnerSession {
         '⟹ この Issue（#570）へ、この行と SDK の版を添えて報告してほしい。' +
         'そのあいだ「自分の背景処理を残して畳んだ作業者」の記録は出なくなる（無音になる）。' +
         '（雑音にしないため、この診断はセッションに1回だけ出す。）',
-    );
-  }
-
-  /**
-   * [sdk-verbatim StopHookInput.background_tasks]
-   * > In-flight background work (running/pending + backgrounded) registered in this session. Lets hooks distinguish "session is done" from "session is paused waiting for background work to wake it". Empty array when nothing is in flight.
-   */
-  // 何も判断せず何も抑制しない（`{ continue: true }` だけを返す）: まず実データを見てから機構を足すかを決めるため
-  // 所有者を `owned_by_subagent` に依存して引かない: 0.3.259 以降の型定義に存在しないため（既存の `#backgroundTaskOwners` だけから引く）
-  // `background_tasks_changed.tasks[].task_id` の等式に乗らない: 同じ id 空間かを誰もライブで確かめていないため
-  // 在り高が非0の回は畳まず毎回出す: 同じ在り高で何度も閉じていること自体が探している署名のため
-  // `#markProgressed()` を呼ばない: 既存の挙動を変えないため
-  async #onStop(record: AgentStopRecord): Promise<void> {
-    try {
-      // 数えるのは何より先: 下のどの枝を通っても（間引かれても）通算が進むため
-      const stopFirings = this.#stopState.incrementStopFirings();
-
-      if (record.readError !== undefined) throw record.readError;
-      const tasks = record.backgroundTasks ?? [];
-      const crons = record.sessionCrons ?? [];
-      const stopHookActive = record.stopHookActive;
-
-      if (tasks.length === 0 && crons.length === 0) {
-        this.#noteStopIdle();
-        return;
-      }
-
-      // 0 の行も残す: 数えた結果の 0 で、消すと合計との突き合わせができなくなるため
-      const owners = { manager: 0, worker: 0, delegation: 0, unrecordable: 0, unresolved: 0 };
-      const statuses = { live: 0, settled: 0, unknown: 0 };
-      for (const task of tasks) {
-        owners[this.#stopTaskOwnerKind(task)] += 1;
-        statuses[classifyBackgroundTaskStatus(taskRow(task).status)] += 1;
-      }
-
-      const stopHookActiveText =
-        stopHookActive === undefined ? '' : ` stop_hook_active=${String(stopHookActive)}。`;
-
-      const noteLines = [
-        `Stop（マネージャーのターンが閉じる瞬間。このセッションで通算 ${stopFirings}回目）: ` +
-          `**背景処理 ${tasks.length}件 / session_crons ${crons.length}件 を残したまま閉じようとしている。**` +
-          stopHookActiveText,
-        `所有者の内訳（表 #backgroundTaskOwners から引いた）: マネージャー自身 ${owners.manager}件 / ` +
-          `作業者 ${owners.worker}件 / 委譲そのもの ${owners.delegation}件 / ` +
-          `控えられない種類 ${owners.unrecordable}件 / 引けなかった ${owners.unresolved}件。`,
-        `status の内訳: 走っている ${statuses.live}件 / 終わった ${statuses.settled}件 / ` +
-          `分からない ${statuses.unknown}件。`,
-        ...tasks.map((task) => this.#renderStopTaskLine(task)),
-        ...(owners.unresolved === 0
-          ? []
-          : [
-              `⚠️ 上のうち ${owners.unresolved}件 は**所有者を引けなかった**（\`type\` が` +
-                '**所有者を控えられる種類**なのに、表に無い）。この行が出たら計器の' +
-                'ほうを疑う —— `PostToolUse` の `tool_response.backgroundTaskId` が改名・消滅したか、' +
-                `表が上限（${BACKGROUND_TASK_OWNER_LIMIT}件）で古い側を捨てたかである。` +
-                '（`monitor` / `workflow` / 遠隔の `Task` は元から控えられないので、この数には入らない' +
-                '—— それらは「控えられない種類」に数えてある。）',
-            ]),
-        ...(statuses.unknown === 0
-          ? []
-          : [
-              `⚠️ 上のうち ${statuses.unknown}件 は status が既知の語彙のどちらでもない。` +
-                'この行が出たら計器のほうを疑う —— SDK が status の語彙を変えた見込みが高い。',
-            ]),
-        '⚠️ **これは観測だけである（#861 の段1）。** この行は何も止めておらず、何も起こし直していない。',
-        '⚠️ この行が出ないことは「空転が無かった」を意味しない —— `Stop` は**マネージャーが起きて' +
-          'いるときにしか来ない**。器が落ちた・入れ替わった・二度と起こされなかった回は、' +
-          'この観測にも現れない（#861）。',
-      ];
-
-      // `stall` を載せない: `note.stall.outcome` の2語のどちらでもなく、欄を増やすとデプロイの窓で古い側が黙って落とすため
-      // `escalate` も立てない: 観測だけなので、クローンの受信箱へ割り込む理由がまだ無いため
-      this.#note(truncateWithNote(noteLines.join('\n'), STOP_NOTE_TEXT_LIMIT));
-    } catch (error: unknown) {
-      try {
-        this.#note(`Stop の観測に失敗した: ${reasonOf(error)}`);
-      } catch {
-        // ここまで失敗したら、もう上げる手段が無い。黙って諦める
-        // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
-      }
-    }
-  }
-
-  // `unresolved` を他へ混ぜない: 混ぜると経路が壊れて表が空になった状態が「全部が委譲そのものだった」に化けるため
-  // `delegation` と `unrecordable` を1つにしない: `subagent` は実測で取れている区別で、名前を1つにして消さないため
-  #stopTaskOwnerKind(
-    task: unknown,
-  ): 'manager' | 'worker' | 'delegation' | 'unrecordable' | 'unresolved' {
-    const { id, type } = taskRow(task);
-    const owner = id === undefined ? undefined : this.#stopState.backgroundTaskOwner(id);
-    if (owner !== undefined) return owner === '' ? 'manager' : 'worker';
-    if (type === 'subagent') return 'delegation';
-    return isOwnerRecordableTaskType(type) ? 'unresolved' : 'unrecordable';
-  }
-
-  // `#renderSubagentStopTaskLines` を使い回さない: 起こし直しの回数を付けると `0回目` が並び、「起こし直しの枠がまだ在る」と読まれるため
-  #renderStopTaskLine(task: unknown): string {
-    const t = taskRow(task);
-    const id = t.id ?? '(不明)';
-    const type = t.type ?? '(不明)';
-    const status = t.status ?? '(不明)';
-    const description = t.description ?? '(不明)';
-    const command = t.command === undefined ? '' : ` command=${t.command}`;
-    const kind = this.#stopTaskOwnerKind(task);
-    const owner =
-      kind === 'worker' && t.id !== undefined
-        ? `worker:${this.#stopState.backgroundTaskOwner(t.id) ?? ''}`
-        : kind;
-    return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
-  }
-
-  // 毎回出さず1セッションに1回へ間引く: `Stop` はマネージャーのターンが閉じるたびに来るので、毎回出すと日誌がターン数ぶんの同じ行で埋まるため
-  // 黙らない: 黙ると「`Stop` が一度も発火しなかった」と「発火したが毎回きれいに閉じた」が日誌の上で同じ顔になるため
-  #noteStopIdle(): void {
-    if (this.#stopState.stopIdleNoted) return;
-    this.#stopState.markStopIdleNoted();
-
-    this.#note(
-      truncateWithNote(
-        'Stop: マネージャーのターンが閉じたが、**背景処理も session_crons も 0件 だった**' +
-          `（このセッションで通算 ${this.#stopState.stopFirings}回目の発火）。` +
-          '⟹ SDK の言う「session is done」の側である。' +
-          '**この行が出たこと自体が「`Stop` はこの器で発火する」の実測である**（#861 の段1）。' +
-          '（雑音にしないため、この「0件で閉じた」診断はセッションに1回だけ出す —— `Stop` は' +
-          'ターンが閉じるたびに来るので、毎回出せば日誌がターン数ぶんの同じ行で埋まる。' +
-          '⟹ **2回目以降の「0件で閉じた」回は個別には残らない。** 続きは #861。）',
-        STOP_NOTE_TEXT_LIMIT,
-      ),
     );
   }
 
