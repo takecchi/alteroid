@@ -128,9 +128,9 @@ export function readGroup(text: string, from: number): { close: number; commas: 
  * クラスの中の2字下げの `async #name(` / `#name(`、行頭の `export async function name(` / `function name(`（`export`・`async` は省けてよい）。
  * 2字下げの形は `#` で始まる名前にだけ当てる: 行頭の関数の本体の中の2字下げの呼び出し（`  name(…);`）を宣言と読み違えないため。
  */
-export function methodBody(text: string, name: string): string {
+export function methodBody(text: string, name: string, asMember = false): string {
   const declaration = new RegExp(
-    name.startsWith('#')
+    name.startsWith('#') || asMember
       ? `\\n {2}(?:async )?${name}\\(`
       : `\\n(?:export )?(?:async )?function ${name}\\(`,
   ).exec(text);
@@ -153,6 +153,11 @@ export type InlinedStep = {
   readonly call: string;
   /** 出した先の末尾に足した1文。差し戻すときに外す */
   readonly trailing: string;
+  /**
+   * 出した先が別のファイル（`packages/core/src` の下の協力者のクラス）のとき、そのファイル名。省けば元のメソッドと同じファイル。
+   * `#` で始まらない名前（協力者の公開メソッド）は、行頭の関数ではなくクラスの 2 字下げのメンバーとして探す。
+   */
+  readonly from?: string;
 };
 
 /**
@@ -234,6 +239,14 @@ export const INLINED_BY_FILE: Readonly<
         call: 'this.#emitAnsweredUsage(event, failure, contextUsage);',
         trailing: '',
       },
+      // 報告の組み立てから送出・後始末（`RunnerReportEmitter#emit`。別ファイル）。引数は前半が算出した値で、本体の字面は元のまま。
+      // 呼び出しの直後の `return;` は元のメソッドに残す（出した先の末尾の `return;` は差し戻すときに外す）
+      {
+        name: 'emit',
+        call: 'await this.#reportEmitter.emit(event, {said, failure, noCredentialDirHint, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn});',
+        trailing: ' return;',
+        from: 'runner-report-emit.ts',
+      },
     ],
   },
   'digest.ts': {
@@ -270,11 +283,14 @@ export function expandedMethodBody(
   file: ScannedSource = 'clone.ts',
 ): string {
   let body = squash(methodBody(text, method));
-  for (const { name, call, trailing } of INLINED_BY_FILE[file][method] ?? []) {
+  for (const { name, call, trailing, from } of INLINED_BY_FILE[file][method] ?? []) {
     const at = body.indexOf(call);
     if (at === -1) continue;
     if (body.indexOf(call, at + 1) !== -1) throw new Error(`${call} が2回ある`);
-    let inner = squash(methodBody(text, name));
+    let inner =
+      from === undefined
+        ? squash(methodBody(text, name))
+        : squash(methodBody(readCoreSource(from), name, true));
     if (trailing !== '') {
       if (!inner.endsWith(trailing)) throw new Error(`${name} の末尾が ${trailing.trim()} でない`);
       inner = inner.slice(0, -trailing.length);
