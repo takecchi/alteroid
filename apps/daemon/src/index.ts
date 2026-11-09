@@ -275,9 +275,9 @@ export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.
     case 'restored':
     case 'recovered':
     case 'reopened':
-    // 休ませたのは1本だけで、他の鍵で作業は続く（#6633）。止まっていないので正常側
     case 'cooled':
     case 'reassigned':
+      // cooled / reassigned は正常側（#6633）: 休ませたのは1本だけで、他の鍵で作業は続くため
       return process.stdout;
     // `parked` は異常側に置く: 運ぶ事実が「いま通る鍵が1本も無い」で、正常な行に混ぜると最も重い状態が最も普通の状態と同じ場所へ出るため。
     case 'exhausted':
