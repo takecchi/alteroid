@@ -48,9 +48,7 @@ import {
   resolveEffectiveBashShapeGuard,
   type BashGuardMode,
 } from './bash-guard-mode.js';
-import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
-import { inspectBashCommand } from './bash-wait-guard.js';
-import { inspectBashShape, pipeExitNotice } from './bash-shape-guard.js';
+import { pipeExitNotice } from './bash-shape-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import {
@@ -261,6 +259,7 @@ import {
   type SessionAllowRuleGrant,
 } from './session-allow-rules.js';
 import { parseDelegatedPermissionRules } from './delegated-permission-rules.js';
+import { RunnerBashGuard } from './runner-bash-guard.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -2747,6 +2746,7 @@ class RunnerSession {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
+  readonly #bashGuardInspector: RunnerBashGuard;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
@@ -2934,6 +2934,14 @@ class RunnerSession {
     this.#permissionMode = options.permissionMode;
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
+    this.#bashGuardInspector = new RunnerBashGuard({
+      env: this.#env,
+      profileEnv: () => this.#profileEnv(),
+      bashGuard: this.#bashGuard,
+      actorOf: (record) => actorOf(this.#id, record),
+      note: (text) => this.#note(text),
+      tryObservation: (label, fn) => this.#tryObservation(label, fn),
+    });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
     this.#pluginRefs = options.plugins;
@@ -5439,12 +5447,9 @@ class RunnerSession {
 
   // 「もっと強く書く」側へ倒さず機械の門へ倒す: システムプロンプトへ逐語で書いても守られないため
   // 既定を deny にしない（`ask` を既定にする）: 誰も開けられず、方針は設定で開けられなければならないため（north_star 禁止2）
-  // `Bash` 以外を弾かない: 他のツールまで巻き込むと「何でも弾きうる門」になり、確認が要る行為の一覧を作ることに近づくため
-  // `decision: 'block'`（セッション全体を止める口）を使わない: この呼び出し1件だけを拒否する
-  // `escalate` を立てない: 作業者が動けなくなったような危険の通知ではなく、ツール呼び出し1件が拒否に置き換わっただけの経過のため
   // 冒頭で全道具の入力の先頭を控える（`Bash` に絞らない）: 分類器はどの道具でも拒否しうるため
   // 1回だけの許可の消費は deny の後に置く: `deny` の設定ではクローンの許可で門を上書きしないため
-  // 判定の周りの例外で deny を消さない: フックが例外で終わると CLI は「ブロックしない」として通常の許可の流れへ戻し、ガードが素通りになるため（観測の副作用は失敗しても判定を止めず、判定そのものが投げたら確認へ倒す）
+  // `Bash` ブロックの判定（`Bash` 以外を弾かない・`decision: 'block'` を使わない・`escalate` を立てない・判定の周りの例外で deny を消さない）の意図は `runner-bash-guard.ts` の `decide` の直前に移した
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     this.#tryObservation('PreToolUse の入力の頭の控え', () => {
       this.#capturePreToolInputHead(record);
@@ -5453,67 +5458,9 @@ class RunnerSession {
       this.#sweepExpiredSessionAllowRules();
     });
 
-    let guardAsk: { reason: string } | undefined;
-    if (record.toolName === 'Bash') {
-      const toolInput = record.toolInput as
-        { command?: unknown; run_in_background?: unknown } | null | undefined;
-      const command = toolInput?.command;
-      if (typeof command === 'string') {
-        // `run_in_background` を `=== true` で受ける: 欠けていても形が崩れていても前景になり、通す側へ倒れるため
-        let verdict:
-          ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
-        let shapeDeny: boolean;
-        try {
-          // 本番デプロイの起動（release-prod）は `off` でも確認に残す
-          const releaseProd = inspectReleaseProdDispatch(command);
-          // 形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す
-          // マネージャーにも掛ける（#4949）: heosterra のマネージャーも同じ形を打っていて、オーナーの決まりはマネージャーにも同じ形を禁じているため
-          // `ALTEROID_BASH_GUARD` から切り離す（#4949）: 形の歯は `ALTEROID_BASH_SHAPE_GUARD`（既定 off）だけで決まる。呼び出しのたびに読み、プロファイルの値を優先する（プロファイルに置けば次の呼び出しから効く）。不正な値はここで投げ、下の catch が確認（`deny` 設定なら deny）に倒す
-          const shape =
-            !releaseProd.matched &&
-            resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on'
-              ? inspectBashShape(command)
-              : { blocked: false as const };
-          shapeDeny = shape.blocked;
-          verdict = releaseProd.matched
-            ? { blocked: true, form: releaseProd.form, reason: releaseProd.reason }
-            : shape.blocked
-              ? shape
-              : this.#bashGuard === 'off'
-                ? { blocked: false }
-                : inspectBashCommand(command, {
-                    backgrounded: toolInput?.run_in_background === true,
-                  });
-        } catch (error) {
-          // 判定できなかった呼び出しを素通しにしない: 倒れる先は確認で、上がらずに止めて誰も開けられない形にしない（`deny` を選んだ人にだけ止める）
-          const message = reasonOf(error);
-          const reason = `Bash のガードの判定が例外で終わったので、安全側で確認に上げた（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`;
-          if (this.#bashGuard === 'deny') {
-            return {
-              kind: 'deny',
-              reason: `Bash のガードの判定が例外で終わったので、安全側で拒否した（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`,
-            };
-          }
-          return { kind: 'ask', reason };
-        }
-        if (verdict.blocked) {
-          const actor = actorOf(this.#id, record);
-          // 形の歯は `ask` でも deny: 確認に上げると、打つたびにクローンへ確認が積み上がるため（#4947）
-          const asked = this.#bashGuard !== 'deny' && !shapeDeny;
-
-          this.#tryObservation('ガードの note の送り出し', () => {
-            this.#note(
-              asked
-                ? `Bash の呼び出しを確認に上げた（${actor}・形=${verdict.form}）。${verdict.reason}`
-                : `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
-            );
-          });
-
-          if (!asked) return { kind: 'deny', reason: verdict.reason };
-          guardAsk = { reason: verdict.reason };
-        }
-      }
-    }
+    const guard = this.#bashGuardInspector.decide(record);
+    if (guard.kind === 'decided') return guard.decision;
+    const guardAsk = guard.kind === 'guardAsk' ? guard.guardAsk : undefined;
 
     // ガードの deny より後に置く: 弾いた呼び出しは Post も拒否の合図も来ないので、置くと片付かないため
     this.#tryObservation('作業者の道具の見張り', () => {
