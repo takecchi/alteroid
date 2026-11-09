@@ -256,6 +256,7 @@ import { RunnerSubagentStopObserver } from './runner-subagent-stop.js';
 import { RunnerDenialNotice } from './runner-denial-notice.js';
 import { RunnerFailureClassifier, resultTextOf } from './runner-failure-classify.js';
 import { RunnerReportEmitter, reportText } from './runner-report-emit.js';
+import { type PendingRequest, RunnerRequestQueue } from './runner-request-queue.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -2565,23 +2566,6 @@ interface ClosedParkedPeer {
 const PARKED_PEER_STOP_EXCERPT_CHARS = 300;
 const PARKED_PEER_STOP_COLLECT_MS = 5_000;
 
-interface PendingRequest {
-  id: string;
-  kind: 'question' | 'permission';
-  summary: string;
-  // 取り直さない: 引き取りのたびに取り直すと、待っている時間の長さが消えるため
-  askedAt: string;
-  // `message` の文言を嗅がない（`withdrawn` / `aborted` で判定する）: AGENTS.md「文字列で本文を嗅がない」
-  // `aborted` を `settled` イベントに載せない: 中断は `withdrawn` が言う「CLI へ届いていない」とは別の事実のため
-  settle: (answer: {
-    message: string;
-    decision?: 'allow' | 'deny';
-    withdrawn?: true;
-    aborted?: true;
-  }) => void;
-  result: Promise<AgentPermissionDecision>;
-}
-
 type SpawnAgentProcessOptions = AgentSpawnOptions;
 
 type HandOverResumeConfigDir = (dir: string, uid: number, gid: number) => void;
@@ -2687,6 +2671,7 @@ class RunnerSession {
   readonly #denialNotice: RunnerDenialNotice;
   readonly #failureClassifier: RunnerFailureClassifier;
   readonly #reportEmitter: RunnerReportEmitter;
+  readonly #requestQueue: RunnerRequestQueue;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
@@ -2924,6 +2909,15 @@ class RunnerSession {
       managerId: this.#id,
       wakeForFinishedBackgroundTaskOutputs: () => this.#wakeForFinishedBackgroundTaskOutputs(),
       deliverPeerNotices: () => this.#deliverPeerNotices(),
+    });
+    this.#requestQueue = new RunnerRequestQueue({
+      sdkSession: this.#sdkSession,
+      pending: this.#pending,
+      resolved: this.#resolved,
+      emit: (event) => this.#emit(event),
+      managerId: this.#id,
+      deliverPeerNotices: () => this.#deliverPeerNotices(),
+      decideAnswer,
     });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
@@ -4999,7 +4993,7 @@ class RunnerSession {
     // ここで1度だけ取る: 経路ごとに取り直すと、同じ確認が経路によって違う「待ち始めた時刻」を名乗るため
     const askedAt = new Date().toISOString();
 
-    const { result } = this.#queueRequest({
+    const { result } = this.#requestQueue.queueRequest({
       id,
       kind,
       summary,
@@ -5010,109 +5004,6 @@ class RunnerSession {
       abortAnswer: { message: 'マネージャー側で中断された。', decision: 'deny', aborted: true },
     });
     return result;
-  }
-
-  // `#onPermission` と `#onPermissionDenied` が共有する「確認を積み、`ask` を出し、決着を待つ」形。2箇所に書くと `settle` の後始末や解けた印が黙ってずれるため
-  // `ask` を中断の確かめより先に出す（#4772）: 受けた時点で中断済みだと `settled` が先に出て、デーモンが後から届いた `ask` を答えようの無い確認として積むため
-  // `withdrawn` を型から落とさない: 落とすと畳みで解けた確認が取り下げとして日誌に残らず、`#onPermissionDenied` の deny の note がクローンの判断として書かれるため
-  #queueRequest(spec: {
-    id: string;
-    kind: PendingRequest['kind'];
-    summary: string;
-    askedAt: string;
-    input: Record<string, unknown>;
-    source: PeerApprovalSource | undefined;
-    signal: AbortSignal | undefined;
-    abortAnswer: Parameters<PendingRequest['settle']>[0];
-    onAbort?: () => void;
-  }): {
-    result: Promise<AgentPermissionDecision>;
-    answered: Promise<Parameters<PendingRequest['settle']>[0]>;
-  } {
-    const { id, kind, summary, askedAt, input, source, signal, abortAnswer, onAbort } = spec;
-    let settle!: PendingRequest['settle'];
-    const answered = new Promise<Parameters<PendingRequest['settle']>[0]>((resolve) => {
-      settle = resolve;
-    });
-
-    const result = answered.then((answer) => {
-      // `decideAnswer` の呼び出しを変えない: `Session#answer()` が同じ関数を呼んでおり、クローンへ返す値と SDK へ返る `behavior` の一致が壊れるため
-      const { decision, unreadable } = decideAnswer(kind, answer.decision, answer.message);
-      // 畳む・中断の経路では `question` も deny で返す: `decideAnswer` は `question` なら常に allow を返すので、`decision` だけで判定すると人間が答えていない問いに畳む・中断の理由の文言が「答え」として乗るため（`message` の文字列は嗅がない）
-      const teardown = answer.withdrawn === true || answer.aborted === true;
-      // teardown 側を `unreadable` の対象外にする: クローンの回答そのものではないため
-      const denyMessage =
-        !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
-      const outcome: AgentPermissionDecision =
-        teardown || decision === 'deny'
-          ? { behavior: 'deny', message: denyMessage }
-          : kind === 'question'
-            ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
-            : { behavior: 'allow' };
-      // 解けたことを覚えるのはここ1箇所: 経路ごとに覚え忘れる隙を作らないため
-      this.#resolved.set(id, outcome);
-      return outcome;
-    });
-
-    let done = false;
-    let unlisten = () => undefined as void;
-
-    const request: PendingRequest = {
-      id,
-      kind,
-      summary,
-      askedAt,
-      result,
-      // 待ち行列から自分を外すのは settle の責任: 呼び出し側任せにすると中断で解けた1件が行列に残り、次に届いた言葉を食い潰すため
-      settle: (value) => {
-        if (done) return;
-        done = true;
-        unlisten();
-        const at = this.#pending.indexOf(request);
-        if (at !== -1) this.#pending.splice(at, 1);
-        if (this.#sdkSession.status === 'waiting_human' && this.#pending.length === 0) {
-          this.#sdkSession.setStatus('running');
-        }
-        this.#emit({
-          type: 'settled',
-          managerId: this.#id,
-          requestId: id,
-          ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
-        });
-        settle(value);
-        // 確認待ちの間に溜めた peer の知らせを届ける: 手すきのマネージャーへ背景の peer が上げた確認だと、
-        // この後に報告の区切りが来ず、溜めたまま残るため
-        this.#deliverPeerNotices();
-      },
-    };
-
-    this.#pending.push(request);
-    this.#sdkSession.setStatus('waiting_human');
-
-    this.#emit({
-      type: 'ask',
-      managerId: this.#id,
-      requestId: id,
-      kind,
-      summary,
-      askedAt,
-      ...(source === undefined ? {} : { source: { type: 'peer', provider: source.provider } }),
-    });
-
-    if (signal !== undefined) {
-      const abort = () => {
-        onAbort?.();
-        request.settle(abortAnswer);
-      };
-      if (signal.aborted) {
-        abort();
-      } else {
-        signal.addEventListener('abort', abort, { once: true });
-        unlisten = () => signal.removeEventListener('abort', abort);
-      }
-    }
-
-    return { result, answered };
   }
 
   // `#onPermission` の実装を直接再利用しない: あちらは `PermissionResult` を組み立てる関数で、両方に手を入れると再送や `withdrawn`/`aborted` の挙動を壊しかねないため
@@ -5220,7 +5111,7 @@ class RunnerSession {
     const askedAt = new Date().toISOString();
 
     let timedOut = false;
-    const { result, answered } = this.#queueRequest({
+    const { result, answered } = this.#requestQueue.queueRequest({
       id,
       kind,
       summary,
@@ -6172,16 +6063,6 @@ function unreportedText(said: readonly string[], reason: string): string {
   );
 }
 
-function withAnswers(input: Record<string, unknown>, message: string): Record<string, unknown> {
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  const answers: Record<string, string> = {};
-  for (const question of questions) {
-    const text = (question as { question?: unknown }).question;
-    if (typeof text === 'string') answers[text] = message;
-  }
-  return { ...input, answers };
-}
-
 // 選択肢（`options`）まで載せる: 載せないとクローンは選択肢の中身を読めず、確認の往復が無駄になるため（north_star のデグレード禁止）
 function describeQuestions(input: Record<string, unknown>): string {
   const questions = Array.isArray(input.questions) ? input.questions : [];
@@ -6358,14 +6239,6 @@ export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' 
   if (DENIAL_WORDS.test(normalized)) return 'deny';
   if (isApprovalOnly(normalized) && !hasNegationMarker(normalized)) return 'allow';
   return 'unreadable';
-}
-
-// 元の文言を1文字も消さない: 安全側で拒否したことと答え直し方を前置きとして足すだけ
-function unreadableDenyMessage(original: string): string {
-  return (
-    '[decision が無く、承認とも拒否とも読み取れなかったので安全側で拒否した] ' +
-    `${original}\n\n許可するときは decision: 'allow' を明示して答え直すこと。`
-  );
 }
 
 // 式を複数箇所に書かない（この関数が唯一の実装）: 実装が2つあると runner.ts 側が変わったときに黙ってずれるため
