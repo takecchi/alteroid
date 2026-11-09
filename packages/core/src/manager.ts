@@ -2193,7 +2193,7 @@ class Pool implements ManagerPool {
     this.#closedNotice = new ManagerClosedNotice({
       persist: (record) => this.#persist(record),
       journalExchange: this.#journalExchange.bind(this),
-      emit: (...args) => this.#emit(...args),
+      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
       queueSynthesizedNotice: (...args) => this.#queueSynthesizedNotice(...args),
       withheld: this.#withheld,
       synthesized: this.#synthesized,
