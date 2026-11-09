@@ -72,6 +72,8 @@ export interface ToolContext {
   managers?: ManagerPool;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
+  /** 鍵ごとの枠の最後の観測（#6633。`GET /tokens` の `loads` と同じもの）。無い器では `token_list` は枠の行を出さない。 */
+  tokenLoads?: () => readonly { tokenId: string; state: AccountUsageState }[];
   runtime?: () => CloneRuntimeFacts;
   runnerModels?: () => Promise<readonly string[]>;
   /** 接続中の runner が名乗った SDK の接続先とモデルの別名の行。 */

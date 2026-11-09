@@ -276,6 +276,17 @@ if [ "$TOTAL" -lt "$CURRENT" ]; then
   fi
 
   info "空ける runner   ${VACATE}（runnerId=${VACATE_ID}）"
+
+  # **ここで止める——vacate を投げる前に。** 下の `--dry-run` の判定はファイルの後ろ（増やす経路）にしか無く、
+  # かつて減らす経路はそこへ着く前に vacate を投げていた（#6644。2026-11-09 の teto で `-d` のまま runner-8 を実際に空けた）。
+  # 空けると委譲は別の runner へ移り、`vacating` は戻せないので、「何も変えない」と読める `-d` で投げてはいけない。
+  # 上の検査（真ん中・2台以上）は通してから止める: 試し実行で断られる形を見られるようにするため。
+  if [ "$DRY_RUN" = 1 ]; then
+    step '--dry-run なので vacate を投げない（委譲は移さず、Service も消さない）'
+    info "実際に回すと: railway ssh --service $APP_SERVICE の中から POST /runners/vacate（runnerId=${VACATE_ID}）を投げ、委譲が移り終わるまで最大 ${VACATE_TIMEOUT_SECONDS}秒待つ"
+    exit 0
+  fi
+
   warn "委譲が移り終わるまで待つ（最大 ${VACATE_TIMEOUT_SECONDS}秒）。" \
     "Service を消すコマンドは最後に表示するだけで、ここでは消さない"
 

@@ -29,7 +29,7 @@ export function fakeCloneHost(overrides: Partial<CloneHost> = {}): CloneHost {
     usageReleasePending: false,
     usageBlockedResetsAt: undefined,
     usageBlockedTokenId: undefined,
-    recycleSessionForToken: () => undefined,
+    recycleSessionForToken: () => 'now' as const,
     anthropicRoute: () => [],
     toolSearchRoute: () => '',
     pluginLoad: () => undefined,

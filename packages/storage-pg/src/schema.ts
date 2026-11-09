@@ -516,6 +516,8 @@ export const agentTokenSettings = pgTable('agent_token_settings', {
   id: text('id').primaryKey(),
   rotateOn: text('rotate_on').notNull(),
   cooldownMs: bigint('cooldown_ms', { mode: 'number' }).notNull(),
+  // null は未設定（既定の balanced と読む）
+  distribution: text('distribution'),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }),
 });
 

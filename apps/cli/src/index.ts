@@ -1133,9 +1133,18 @@ tokenCommand
     '回す契機・冷却の既定を見る（引数無し）／変える（free_exhausted|overage_exhausted|off）',
   )
   .option('--cooldown-ms <N>', '枠が戻る時刻が取れないときの冷却の既定（ミリ秒）')
-  .action(async (rotateOn: string | undefined, options: { cooldownMs?: string }) => {
-    await tokenPolicyCommand(rotateOn, options);
-  });
+  .option(
+    '--distribution <failover|balanced>',
+    '鍵の配り方。balanced は同じコンテナ（runner・クローン）に同じ鍵を使い続け、混み具合が 90% を超えたら新しい作業から空いている鍵へ移す（未設定なら balanced）',
+  )
+  .action(
+    async (
+      rotateOn: string | undefined,
+      options: { cooldownMs?: string; distribution?: string },
+    ) => {
+      await tokenPolicyCommand(rotateOn, options);
+    },
+  );
 
 const daemonCommand = program.command('daemon').description('常駐デーモンの操作');
 

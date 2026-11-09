@@ -926,7 +926,9 @@ export function useSetTokenPolicy() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (patch: Partial<Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>>) => {
+    async (
+      patch: Partial<Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs' | 'distribution'>>,
+    ) => {
       const result = await api.api.PUT('/tokens/policy', { body: patch }).then(unwrap);
       await mutate(KEY.tokens);
       return result;

@@ -7,6 +7,7 @@ import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import {
   toAgentTokenView,
   tokenAvailabilityAt,
+  distributionOf,
   type ActiveAgentToken,
   type AgentToken,
   type AgentTokenView,
@@ -15,6 +16,7 @@ import {
 import { describePage, excerptLine, page, renderListing, renderListingEntry } from './excerpt.js';
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
+import type { AccountUsageState } from './usage-snapshot.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
 import {
   profileEntryVersionOf,
@@ -69,7 +71,7 @@ type TokenListActive = ActiveAgentToken | null | undefined;
 async function readTokenSettingsLine(tokens: TokenListTokens): Promise<string> {
   try {
     const settings = await tokens.readSettings();
-    return `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`;
+    return `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms / 配り方 ${distributionOf(settings)}`;
   } catch (error) {
     if (!(error instanceof UnreadableTokenSettingsError)) throw error;
     return (
@@ -138,9 +140,50 @@ function renderTokenListEmpty(head: readonly string[], hasUnreadable: boolean): 
   ].join('\n');
 }
 
-function renderTokenListEntryExtra(view: AgentTokenView): (string | null)[] {
+const TOKEN_LOAD_WINDOW_LABEL: Readonly<Record<string, string>> = {
+  five_hour: '5時間',
+  seven_day: '週',
+  seven_day_opus: '週（Opus）',
+  seven_day_sonnet: '週（Sonnet）',
+};
+
+type TokenLoads = readonly { tokenId: string; state: AccountUsageState }[];
+
+// 測っていない鍵を 0% と書かない: 「空いている」と読めるため（取れない軸に 0 の行を作らない）
+function renderTokenLoadLine(loads: TokenLoads, tokenId: string): string {
+  const load = loads.find((entry) => entry.tokenId === tokenId);
+  if (load === undefined)
+    return '  枠: まだ測っていない（デーモンの起動後、この鍵の観測が無い。0% ではない）';
+  const { state } = load;
+  switch (state.state) {
+    case 'ok': {
+      const parts = state.usage.windows.flatMap((window) =>
+        window.utilization === undefined
+          ? []
+          : [
+              `${TOKEN_LOAD_WINDOW_LABEL[window.kind] ?? window.kind} ${String(Math.round(window.utilization))}%`,
+            ],
+      );
+      return parts.length === 0
+        ? `  枠: 使用率が取れない（${state.usage.at} 時点）`
+        : `  枠: ${parts.join(' / ')}（${state.usage.at} 時点）`;
+    }
+    case 'failed':
+    case 'unavailable':
+      return `  枠: 測れなかった — ${excerptLine(state.reason, TOKEN_REASON_EXCERPT)}（${state.at}）`;
+    case 'unknown':
+      return '  枠: まだ測っていない（0% ではない）';
+  }
+}
+
+function renderTokenListEntryExtra(
+  view: AgentTokenView,
+  loads: TokenLoads | undefined,
+): (string | null)[] {
   return [
     view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
+    // 口が無い器では行ごと出さない: 「まだ測っていない」と書くと、待てば出ると読めるため
+    loads === undefined ? null : renderTokenLoadLine(loads, view.id),
     view.cooldownUntil === undefined
       ? null
       : // 出所を添える: 時刻だけだと枠のリセット時刻なのか5時間足しただけなのかが一覧から言えない。無い回は「記録が無い」と書く: 黙ると「権威ある値」と読まれるため
@@ -162,6 +205,7 @@ function renderTokenListItems(
   views: readonly AgentTokenView[],
   now: number,
   active: TokenListActive,
+  loads: TokenLoads | undefined,
 ): string[] {
   return views.map((view) => {
     // キャストを挟まない: 挟むと「値を持つ型として扱ってよい」が既成事実になるため
@@ -174,7 +218,7 @@ function renderTokenListItems(
       // `now` で埋めない: 作成・更新が無い行が実在し、「いま作られた」という嘘になるため
       createdAt: view.createdAt ?? '（記録が無い）',
       updatedAt: view.updatedAt ?? '（記録が無い）',
-      extra: renderTokenListEntryExtra(view),
+      extra: renderTokenListEntryExtra(view, loads),
     });
   });
 }
@@ -524,6 +568,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         '登録・無効化は人間の手（alteroid token / PUT /tokens）に属する。',
         '枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。',
         '回った履歴のほうは journal_read types=token_rotation で引ける。',
+        '配り方 balanced では同じコンテナ（runner・クローン）に同じ鍵を使い続け（キャッシュのため）、混み具合が 90% を超えたら新しい作業から空いている鍵へ移す。枠に当たった鍵の持ち主だけを別の鍵へ移す。',
       ].join(' '),
       {
         cursor: z
@@ -555,7 +600,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         if (views.length === 0) {
           return text(renderTokenListEmpty(head, unreadableTokensNote !== null));
         }
-        const items = renderTokenListItems(views, now, active);
+        const items = renderTokenListItems(views, now, active, context.tokenLoads?.());
         return text(renderTokenListBody({ head, items, tokens, total: allTokens.length }));
       },
     ),

@@ -168,6 +168,8 @@ type Scenarios = {
   vacateTimeout: Run;
   vacateMiddleRejected: Run;
   vacateTooMany: Run;
+  vacateDryRun: Run;
+  vacateDryRunMiddle: Run;
 };
 
 let scenarios: Scenarios;
@@ -323,6 +325,36 @@ async function prepareScenarios(): Promise<Scenarios> {
       total: 1,
       services: threeRunners,
       args: ['--vacate', 'runner-3'],
+      allowFailure: true,
+    });
+  });
+
+  // #6644: -d のまま vacate を投げて、runner を実際に空けていた
+  task('vacateDryRun', async () => {
+    const daemon = await startFakeDaemon({
+      token: FAKE_OPERATOR_TOKEN,
+      runnerId: 'runner-2',
+      staleManagerPolls: 0,
+    });
+    const home = makeAlteroidHome(FAKE_OPERATOR_TOKEN, daemon.port);
+    vacateFixtures.push({ daemon, home });
+    s.vacateDryRun = await run({
+      total: 1,
+      services: twoRunners,
+      args: ['--vacate', 'runner-2', '--dry-run'],
+      extraEnv: {
+        ALTEROID_HOME: home,
+        ALTEROID_VACATE_TIMEOUT_SECONDS: '5',
+        ALTEROID_VACATE_POLL_INTERVAL_SECONDS: '0.05',
+      },
+    });
+  });
+
+  task('vacateDryRunMiddle', async () => {
+    s.vacateDryRunMiddle = await run({
+      total: 2,
+      services: threeRunners,
+      args: ['--vacate', 'runner-2', '--dry-run'],
       allowFailure: true,
     });
   });
@@ -686,6 +718,36 @@ describe('--dry-run', () => {
     expect(r.stderr).toContain('runner-2');
     expect(r.stderr).toContain('runner-3');
     expect(r.stderr).toContain('上げ直す');
+  });
+});
+
+describe('--vacate に --dry-run を付けたとき（#6644）', () => {
+  it('vacate を投げない: railway ssh を1度も呼ばず、0 で終わる', () => {
+    const r = scenarios.vacateDryRun;
+    expect(r.exitCode).toBe(0);
+    expect(r.calls.filter((c) => c.startsWith('ssh '))).toEqual([]);
+    expect(r.stderr).not.toContain('vacate を投げた');
+    expect(r.stderr).toContain('--dry-run なので vacate を投げない');
+  });
+
+  it('何を空けるはずだったかは出す（runnerId つき）', () => {
+    const r = scenarios.vacateDryRun;
+    expect(r.stderr).toContain('runner-2（runnerId=runner-2）');
+    expect(r.stderr).toContain('POST /runners/vacate（runnerId=runner-2）');
+  });
+
+  it('消す・置き直す操作も呼ばない', () => {
+    const r = scenarios.vacateDryRun;
+    expect(r.calls.some((c) => c.includes('service delete'))).toBe(false);
+    expect(r.calls.some((c) => c.startsWith('variable set'))).toBe(false);
+    expect(r.calls.some((c) => c.includes('VariableCollectionUpsert'))).toBe(false);
+  });
+
+  it('真ん中を指したときの断りは、試し実行でも同じく出る', () => {
+    const r = scenarios.vacateDryRunMiddle;
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('真ん中の Service は受け付けない');
+    expect(r.calls.filter((c) => c.startsWith('ssh '))).toEqual([]);
   });
 });
 

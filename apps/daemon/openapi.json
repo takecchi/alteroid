@@ -2801,7 +2801,9 @@
                             "sweep_stopped",
                             "parked",
                             "recovered",
-                            "reopened"
+                            "reopened",
+                            "cooled",
+                            "reassigned"
                           ]
                         },
                         "signal": {
@@ -8579,7 +8581,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {
@@ -10859,7 +10863,9 @@
                             "sweep_stopped",
                             "parked",
                             "recovered",
-                            "reopened"
+                            "reopened",
+                            "cooled",
+                            "reassigned"
                           ]
                         },
                         "signal": {
@@ -15436,7 +15442,9 @@
                                     "sweep_stopped",
                                     "parked",
                                     "recovered",
-                                    "reopened"
+                                    "reopened",
+                                    "cooled",
+                                    "reassigned"
                                   ]
                                 },
                                 "signal": {
@@ -17581,7 +17589,9 @@
                                     "sweep_stopped",
                                     "parked",
                                     "recovered",
-                                    "reopened"
+                                    "reopened",
+                                    "cooled",
+                                    "reassigned"
                                   ]
                                 },
                                 "signal": {
@@ -19726,7 +19736,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {
@@ -21862,7 +21874,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {
@@ -33295,6 +33309,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -33728,6 +33746,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -33917,6 +33939,10 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "distribution": {
+                              "type": "string",
+                              "enum": ["failover", "balanced"]
                             },
                             "updatedAt": {
                               "type": "string"
@@ -34154,6 +34180,10 @@
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
                         },
+                        "distribution": {
+                          "type": "string",
+                          "enum": ["failover", "balanced"]
+                        },
                         "updatedAt": {
                           "type": "string"
                         }
@@ -34329,7 +34359,7 @@
         "operationId": "putTokensPolicy",
         "tags": ["tokens"],
         "summary": "回す契機・冷却の既定を変える",
-        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。",
+        "description": "省略した項目は現状のまま変えない。変更は日誌に残る（issue #2742）。回す契機を有効にする・変える・冷却を変える変更は**日誌を先に書き、書けなければ保存せず 500**。`rotateOn: off` へ狭める変更は保存が先で、日誌が書けなくても保存する。`distribution` は `balanced` なら同じコンテナ（runner・クローン）に同じ鍵を使い続け、混み具合が 90% を超えたら新しい作業から空いている鍵へ移す（既定は `balanced`）。`balanced` へ変える変更は日誌が先、`failover` へ戻す変更は保存が先。",
         "responses": {
           "200": {
             "description": "更新後の設定。",
@@ -34346,6 +34376,10 @@
                       "type": "integer",
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "distribution": {
+                      "type": "string",
+                      "enum": ["failover", "balanced"]
                     },
                     "updatedAt": {
                       "type": "string"
@@ -34427,6 +34461,10 @@
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991
+                  },
+                  "distribution": {
+                    "type": "string",
+                    "enum": ["failover", "balanced"]
                   }
                 }
               }

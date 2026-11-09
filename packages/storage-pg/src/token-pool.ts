@@ -4,6 +4,7 @@ import {
   cooldownSourceSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   prepareTokensForReplace,
+  tokenDistributionSchema,
   tokenRotationPolicySchema,
   UnreadableActiveTokenError,
   UnreadableTokenSettingsError,
@@ -122,9 +123,15 @@ export class PgTokenPoolStore implements TokenPoolStore {
       // `summarizeInvalidFields` を通さない: `row.rotateOn` 単体の safeParse では `path` が空になり、欄名が `(root)` に潰れるため。
       throw UnreadableTokenSettingsError.forReason('不正な欄: rotateOn');
     }
+    const distribution =
+      row.distribution === null ? undefined : tokenDistributionSchema.safeParse(row.distribution);
+    if (distribution !== undefined && !distribution.success) {
+      throw UnreadableTokenSettingsError.forReason('不正な欄: distribution');
+    }
     return {
       rotateOn: rotateOn.data,
       cooldownMs: row.cooldownMs,
+      ...(distribution === undefined ? {} : { distribution: distribution.data }),
       ...(row.updatedAt === null ? {} : { updatedAt: row.updatedAt.toISOString() }),
     };
   }
@@ -175,11 +182,17 @@ export class PgTokenPoolStore implements TokenPoolStore {
         id: SETTINGS_ID,
         rotateOn: settings.rotateOn,
         cooldownMs: settings.cooldownMs,
+        distribution: settings.distribution ?? null,
         updatedAt,
       })
       .onConflictDoUpdate({
         target: agentTokenSettings.id,
-        set: { rotateOn: settings.rotateOn, cooldownMs: settings.cooldownMs, updatedAt },
+        set: {
+          rotateOn: settings.rotateOn,
+          cooldownMs: settings.cooldownMs,
+          distribution: settings.distribution ?? null,
+          updatedAt,
+        },
       });
     return settings;
   }

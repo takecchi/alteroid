@@ -519,6 +519,13 @@ export interface CloneOptions {
   childEnvBase?: NodeJS.ProcessEnv;
   credentials?: () => Record<string, string>;
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /**
+   * マネージャープールへ渡す現役の身元。省略すれば `tokenIdentity` と同じ（#6633）。
+   * 分ける理由: 配り方 balanced ではクローン自身の鍵（`tokenIdentity`）が割り当てで決まり、委譲の比べる先（現役）と一致しないため。
+   */
+  managerTokenIdentity?: ManagerPoolOptions['tokenIdentity'];
+  /** マネージャープールへそのまま渡す（`ManagerPoolOptions['tokenAssignment']`。#6633）。クローン自身は読まない。 */
+  managerTokenAssignment?: ManagerPoolOptions['tokenAssignment'];
   /** マネージャープールへそのまま渡す（`ManagerPoolOptions['tokenAvailability']`）。クローン自身は読まない。 */
   tokenAvailability?: ManagerPoolOptions['tokenAvailability'];
   // クローンは回すかどうかを判断しない: 枠に当たるとこのループはターンを回さないので、判断をここへ置くと一番要るときに動かないため
@@ -575,6 +582,10 @@ export interface CloneOptions {
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。外さない: 人間が見られるものをクローンが見られないのは能力の削除で、重い委譲を続けてよいかの判断材料でもあるため。
    */
   accountUsage?: () => AccountUsageState;
+  /**
+   * 鍵ごとの枠の最後の観測を読む口（#6633）。外さない: 人間が `GET /tokens` / Web / CLI で見られる鍵ごとの枠を、クローンだけ見られないのは能力の削除のため。
+   */
+  tokenLoads?: () => readonly { tokenId: string; state: AccountUsageState }[];
   // ここで `Scheduler` を作り直さない: デーモン側が組み立てるため
   scheduler?: () => ScheduleStatus[];
   onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
@@ -1003,6 +1014,8 @@ class Clone implements CloneHost {
   readonly #credentialService: CredentialService | undefined;
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
+  readonly #tokenLoads:
+    (() => readonly { tokenId: string; state: AccountUsageState }[]) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
   readonly #onScheduledRunClaimed: ((kind: string, at: string) => void) | undefined;
@@ -1023,6 +1036,8 @@ class Clone implements CloneHost {
       childEnvBase,
       credentials,
       tokenIdentity,
+      managerTokenIdentity,
+      managerTokenAssignment,
       tokenAvailability,
       onUsageObservation,
       onWorkerToolEvent,
@@ -1048,6 +1063,7 @@ class Clone implements CloneHost {
       permissionRuleService,
       codexAuthService,
       accountUsage,
+      tokenLoads,
       scheduler,
       onScheduledRunNotStarted,
       onScheduledRunClaimed,
@@ -1104,6 +1120,7 @@ class Clone implements CloneHost {
     this.#credentialService = credentialService;
     this.#withheldEnvKeys = withheldEnvKeys ?? [];
     this.#accountUsage = accountUsage;
+    this.#tokenLoads = tokenLoads;
     this.#scheduler = scheduler;
     this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#onScheduledRunClaimed = onScheduledRunClaimed;
@@ -1123,7 +1140,12 @@ class Clone implements CloneHost {
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
         // クローンの側とプールの側で別々の回し手へ渡さない: 同じ1本へ集めるから、世代の照合が「同じ当たりで1回だけ」を保証できるため
-        ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
+        ...((managerTokenIdentity ?? tokenIdentity) === undefined
+          ? {}
+          : { tokenIdentity: managerTokenIdentity ?? tokenIdentity }),
+        ...(managerTokenAssignment === undefined
+          ? {}
+          : { tokenAssignment: managerTokenAssignment }),
         ...(tokenAvailability === undefined ? {} : { tokenAvailability }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
@@ -4231,6 +4253,7 @@ class Clone implements CloneHost {
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+      ...(this.#tokenLoads === undefined ? {} : { tokenLoads: this.#tokenLoads }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       runnerModels: () => collectRunnerModelLines(this.#managers),
@@ -4657,6 +4680,7 @@ class Clone implements CloneHost {
       emit: () => undefined,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+      ...(this.#tokenLoads === undefined ? {} : { tokenLoads: this.#tokenLoads }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       // 削らない: 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'` と名乗る。

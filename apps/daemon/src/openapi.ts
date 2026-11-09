@@ -35,6 +35,7 @@ import {
   scheduledRequestSchema,
   scheduleSpecSchema,
   taskSchema,
+  tokenDistributionSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
@@ -1336,6 +1337,7 @@ export const tokensConflictResponseSchema = z.object({
 export const tokensPolicyUpdateRequestSchema = z.object({
   rotateOn: tokenRotationPolicySchema.optional(),
   cooldownMs: z.number().int().positive().optional(),
+  distribution: tokenDistributionSchema.optional(),
 });
 
 // ここで zod の形にする: core の `dropped-record.ts` は stderr へ出す文字列とプレーンな TS の型しか持たず、zod スキーマが無いため。

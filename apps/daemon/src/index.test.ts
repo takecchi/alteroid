@@ -263,7 +263,8 @@ describe('通る鍵に戻ったときに起こす配線', () => {
     const body = source.slice(source.indexOf('const reopened = reopenedTokenOf(outcome);'));
     const block = body.slice(0, body.indexOf('\n    if (entry === null) return;'));
 
-    expect(block).toContain('clone.post(');
+    // 合図の本体は `cloneWakeFor` に在る（#6633 で、割り当てを移した回と同じ門を通すために切り出した）。ここはそれを組むことを見る
+    expect(block).toContain('cloneWakeFor(reopened)');
     // 1行では見ない: prettier が `clone.managers` と `.restore()` を別の行へ割るため。
     expect(block).toContain('clone.managers');
     expect(block).toContain('.restore(');
@@ -552,9 +553,12 @@ function missingAnchors(body: string, anchors: readonly string[]): string[] {
 
 describe('クローンの門は clone.post だけを絞る（restore / resumeStoppedByUsage は無条件）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-  const wakeStart = source.indexOf('const wake = () => {');
-  const wakeEnd = source.indexOf('\n      if (recycled === ', wakeStart);
+  // 合図の本体は `cloneWakeFor` に切り出してある（#6633）。その関数の本体だけを見る
+  const wakeStart = source.indexOf('function cloneWakeFor(');
+  const wakeEnd = source.indexOf('\n  }\n', wakeStart);
   const wakeBody = source.slice(wakeStart, wakeEnd);
+  const settleBody = source.slice(source.indexOf('const reopened = reopenedTokenOf(outcome);'));
+  const settleBlock = settleBody.slice(0, settleBody.indexOf('\n    if (entry === null) return;'));
 
   it('clone.post は cloneWakeGate.decide の判定の中にある', () => {
     const decideAt = wakeBody.indexOf('cloneWakeGate.decide(');
@@ -573,14 +577,14 @@ describe('クローンの門は clone.post だけを絞る（restore / resumeSto
   });
 
   it('restore() / resumeStoppedByUsage() は判定の分岐（if/else）の外にある', () => {
-    const restoreAt = wakeBody.indexOf('clone.managers');
-    const resumeAt = wakeBody.indexOf('.resumeStoppedByUsage(');
-    const postAt = wakeBody.indexOf('clone.post(');
+    // 門（`cloneWakeFor`）の中には1つも無く、門を組む `settleTokenOutcome` の側で無条件に呼ぶ
+    expect(missingAnchors(wakeBody, ['clone.post('])).toEqual([]);
+    expect(wakeBody).not.toContain('.restore(');
+    expect(wakeBody).not.toContain('.resumeStoppedByUsage(');
 
-    expect(
-      missingAnchors(wakeBody, ['clone.managers', '.resumeStoppedByUsage(', 'clone.post(']),
-    ).toEqual([]);
-    expect(postAt).toBeLessThan(restoreAt);
+    const restoreAt = settleBlock.indexOf('clone.managers');
+    const resumeAt = settleBlock.indexOf('.resumeStoppedByUsage(');
+    expect(missingAnchors(settleBlock, ['clone.managers', '.resumeStoppedByUsage('])).toEqual([]);
     expect(restoreAt).toBeLessThan(resumeAt);
   });
 

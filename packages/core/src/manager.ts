@@ -1211,9 +1211,28 @@ export interface CodexAuthRunnerSync {
   ): Promise<void>;
 }
 
+/**
+ * 配り方 `balanced` の割り当て（#6633）。委譲を起こす・起こし直すたびに鍵を割り当て、runner の命令に載せる。
+ * `assign` が `undefined` を返す（`failover`・通る鍵が無い）ときは従来どおり runner の既定の鍵（現役）で走る。
+ */
+export interface ManagerTokenAssignmentPort {
+  /** `container` は委譲が載る runner の id（#6642）。同じコンテナの作業には、できるかぎり同じ鍵を割り当てる（キャッシュのため）。 */
+  assign(
+    managerId: string,
+    hint: { prior?: string; container?: string },
+  ): Promise<
+    { tokenId: string; generation: number; fingerprint: string; value: string } | undefined
+  >;
+  /** いまの割り当ての身元（同期）。無ければ現役と比べる。 */
+  target(
+    managerId: string,
+  ): { tokenId: string; generation: number; fingerprint: string } | undefined;
+}
+
 export interface ManagerPoolOptions {
   /** **マネージャーのセッションを起こす瞬間に1度だけ読む。** */
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  tokenAssignment?: ManagerTokenAssignmentPort;
   /**
    * トークン1本の「いま使えるか」を聞く。世代が食い違った done の委譲へ送るとき、畳めない理由（確認待ち・背景処理）が残っていても、
    * 委譲が抱えている古い鍵が `'ready'` なら断らず旧セッションへ届けるために使う。
@@ -1587,6 +1606,7 @@ class Pool implements ManagerPool {
   readonly #workspace: WorkspacePolicy;
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
+  readonly #tokenAssignment: ManagerTokenAssignmentPort | undefined;
   readonly #onWorkerToolEvent: ((event: WorkerToolEvent) => void) | undefined;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
@@ -1834,6 +1854,7 @@ class Pool implements ManagerPool {
     resumeConfirmTimeoutMs,
     generateManagerId,
     tokenIdentity,
+    tokenAssignment,
     tokenAvailability,
     onUsageObservation,
     syncRunnerToken,
@@ -2058,6 +2079,7 @@ class Pool implements ManagerPool {
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
+    this.#tokenAssignment = tokenAssignment;
     this.#usageWake = new UsageWake({
       records: this.#records,
       usageStopped: this.#usageStopped,
@@ -2079,7 +2101,7 @@ class Pool implements ManagerPool {
       journal: (entry) => this.#journal(entry),
       // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
       journalExchange: this.#journalExchange.bind(this),
-      tokenIdentity: () => this.#tokenIdentity?.(),
+      tokenIdentity: (managerId) => this.#targetIdentityOf(managerId),
       tokenAvailability:
         tokenAvailability === undefined ? undefined : (tokenId) => tokenAvailability(tokenId),
       send: (managerId, message, delivery) => this.#send(managerId, message, {}, delivery),
@@ -2095,7 +2117,7 @@ class Pool implements ManagerPool {
       resumedCount: this.#resumedCount,
       rotationFoldDueAt: this.#rotationFoldDueAt,
       tokenIdentities: this.#tokenIdentities,
-      tokenIdentity: () => this.#tokenIdentity?.(),
+      tokenIdentity: (managerId) => this.#targetIdentityOf(managerId),
       tokenAvailability:
         tokenAvailability === undefined ? undefined : (tokenId) => tokenAvailability(tokenId),
       sessionTokenFingerprintOf: (managerId) => this.#sessionTokenFingerprintOf(managerId),
@@ -2270,6 +2292,7 @@ class Pool implements ManagerPool {
     }
 
     const { record, lease } = this.#newStartRecord(input, runner, managerId, cwd, now, at);
+    const assigned = await this.#assignToken(record, undefined, runner.runnerId);
     this.#records.set(managerId, record);
     this.#rememberTokenIdentity(managerId);
 
@@ -2280,6 +2303,7 @@ class Pool implements ManagerPool {
         request: startRequest,
         cwd,
         lease: { fence: lease.fence, ttlMs: lease.ttlMs },
+        ...(assigned === undefined ? {} : { agentToken: { value: assigned.value } }),
         ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
       });
     } catch (error) {
@@ -3244,7 +3268,9 @@ class Pool implements ManagerPool {
       runnerListedAt: view.runnerListedAt,
       awaitingBackground: this.#withheld.awaitingBackgroundOf(job.id),
       tokenGeneration: this.#tokenIdentities.get(job.id)?.generation,
-      activeTokenGeneration: view.activeTokenGeneration,
+      // 割り当てが在る委譲は、現役ではなく割り当てと比べる（#6633）: 配り方 balanced では「現役と違う」は古い鍵を意味しない
+      activeTokenGeneration:
+        this.#tokenAssignment?.target(job.id)?.generation ?? view.activeTokenGeneration,
       tokenGenerationPoolWired: view.tokenGenerationPoolWired,
       resetTimeSkewMatch: this.#resetTimeSkewMatches.get(job.id),
       // `record.job.usageStoppedAt` を直接渡さない: `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
@@ -4189,7 +4215,9 @@ class Pool implements ManagerPool {
     // 現役と違う鍵で走り続けている委譲は、起こし直しの借りに載せる（#4643）: 借り（`#usageWakeOwed`）はメモリにしか無く再起動で消えるが、
     // 「回した時点で古い鍵のまま走っていた」はセッションの鍵の指紋と現役の指紋から引き取りの場で組み直せる。載せないと、古い鍵で枠に落ちた
     // 通知は回し手に「もう回した後」として捨てられ（正しい）、鍵の側からの契機が二度と来ず、その委譲はクローンが手で起こすまで止まる。
-    const activeFingerprint = this.#tokenIdentity?.()?.fingerprint;
+    // 割り当てを job から引き直す（#6633）: 帳面はメモリにしか無く、再起動で消えるため。通らなくなっていれば別の鍵へ移り、下の指紋の食い違いで起こし直しの借りに載る
+    await this.#assignToken(record, job.tokenAssignment?.tokenId, living.runner.runnerId);
+    const activeFingerprint = this.#targetIdentityOf(job.id)?.fingerprint;
     if (
       attached &&
       living.state.tokenFingerprint !== undefined &&
@@ -5686,12 +5714,19 @@ class Pool implements ManagerPool {
     delete record.sessionGeneration;
     // 応答より前に立てる: 新しいセッションの出来事は resume の応答より先に届きうる（`manager-report-before-resume-response.test.ts`）。
     this.#restored.begin(record.job.id, runner.runnerId);
+    // 前の鍵が通るかぎり替えない（作業の途中で鍵を替えない）。生きたセッションへ合流する回は runner がこの欄を見ない（鍵は起動時に凍る）
+    const assigned = await this.#assignToken(
+      record,
+      record.job.tokenAssignment?.tokenId,
+      runner.runnerId,
+    );
     // 応答が返らず一覧で引き取った回（下の `resumed = {}`）だけは、runner が開いた値を持たない
     let resumed: Partial<Awaited<ReturnType<RunnerClient['resume']>>>;
     try {
       resumed = await runner.resume({
         managerId: record.job.id,
         sessionId,
+        ...(assigned === undefined ? {} : { agentToken: { value: assigned.value } }),
         cwd: requestedCwd,
         request: request ?? record.job.summary,
         ...(message === undefined ? {} : { message }),
@@ -6742,10 +6777,47 @@ class Pool implements ManagerPool {
     return new Date(this.#now()).toISOString();
   }
 
+  /** この委譲が走るべき鍵の身元: 割り当てが在ればそれ、無ければ現役（#6633）。 */
+  #targetIdentityOf(
+    managerId: string,
+  ): { tokenId: string; generation: number; fingerprint?: string } | undefined {
+    return this.#tokenAssignment?.target(managerId) ?? this.#tokenIdentity?.();
+  }
+
+  /**
+   * 委譲に鍵を割り当て、job に id だけを残す（値は残さない）。割り当てられなければ job の欄を外す。
+   * 投げても起こすことは止めない: 割り当ては「どの鍵で走るか」の選択で、失敗したら従来どおり現役で走れば仕事は止まらないため。
+   */
+  async #assignToken(
+    record: ManagerRecord,
+    prior: string | undefined,
+    // 台帳の runnerId を読まない: 再開では命令を出す前に割り当てるので、別の器へ移る回はまだ前の器を指しているため
+    container: string | undefined,
+  ): Promise<{ value: string } | undefined> {
+    const port = this.#tokenAssignment;
+    if (port === undefined) return undefined;
+    let assigned: Awaited<ReturnType<ManagerTokenAssignmentPort['assign']>>;
+    try {
+      assigned = await port.assign(record.job.id, {
+        ...(prior === undefined ? {} : { prior }),
+        ...(container === undefined ? {} : { container }),
+      });
+    } catch (error) {
+      noteDroppedRecord('委譲への鍵の割り当て', record.job.id, error);
+      assigned = undefined;
+    }
+    if (assigned === undefined) {
+      delete record.job.tokenAssignment;
+      return undefined;
+    }
+    record.job.tokenAssignment = { tokenId: assigned.tokenId };
+    return assigned;
+  }
+
   // `ManagerPool#restore()` の living 枝（生きているセッションを引き取るだけの経路）から呼ばない:
   // env を更新していないのに「観測しただけの現役の世代」を抱えている世代として書き、本物の食い違いが「一致」に化ける。
   #rememberTokenIdentity(managerId: string): void {
-    const identity = this.#tokenIdentity?.();
+    const identity = this.#targetIdentityOf(managerId);
     if (identity === undefined) return;
     // 指紋は持ち込まない: 観測に添える身元は tokenId と世代だけで、指紋は `send()` が現役の側から読む。
     this.#tokenIdentities.set(managerId, {

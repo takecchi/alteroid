@@ -180,8 +180,29 @@ export type TokenRestoreOutcome =
       why: string;
     };
 
+/** 配り方 balanced で、割り当てた鍵1本だけを冷却へ入れた結果（#6633）。現役の指名も撒きも動かさない。 */
+export type TokenCoolOutcome =
+  | {
+      kind: 'cooled';
+      tokenId: string;
+      label: string;
+      cooldownUntil?: number;
+      signal: TokenRotationSignal;
+      why: string;
+    }
+  | { kind: 'already_cooling'; tokenId: string; label: string; signal: TokenRotationSignal }
+  | { kind: 'ignored'; signal?: TokenRotationSignal; why: string };
+
 export interface TokenRotator {
   observe(observation: TokenRotatorObservation): Promise<TokenRotationOutcome>;
+  /**
+   * 配り方 balanced で、割り当てた鍵の枠の知らせを受ける（#6633）。回すかどうかの判定は `observe` と同じ（`decideTokenRotation`）で、
+   * 回すなら**その鍵だけ**を冷却へ入れる。現役の指名・撒き・世代は動かさない（持ち主を移すのは呼び手の割り当ての側）。
+   * 呼び手は、知らせの身元がいまの割り当てだと確かめてから呼ぶ（古い割り当ての知らせは渡さない）。
+   */
+  coolAssigned(
+    observation: TokenRotatorObservation & { observedBy: { tokenId: string } },
+  ): Promise<TokenCoolOutcome>;
   reconsider(input: {
     reason: TokenReconsiderReason;
     current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
@@ -869,6 +890,50 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           freshness,
           whyHead: decision.why,
         });
+      }),
+
+    coolAssigned: (observation) =>
+      serial(async (): Promise<TokenCoolOutcome> => {
+        const [tokens, settingsRead] = await Promise.all([
+          stores.tokens.list(),
+          readSettingsOrUnreadable(stores.tokens),
+        ]);
+        if (!settingsRead.readable) {
+          return {
+            kind: 'ignored',
+            signal: 'settings_unreadable',
+            why: `回転の設定が読めなかった（${settingsRead.reason}）。冷却へ入れるかを判定できないので、この回は入れない`,
+          };
+        }
+        const settings = settingsRead.settings;
+        const decision = decideTokenRotation(settings.rotateOn, observation, 'current');
+        if (!decision.rotate)
+          return { kind: 'ignored', signal: decision.signal, why: decision.why };
+        const tokenId = observation.observedBy.tokenId;
+        const row = tokens.find((token) => token.id === tokenId);
+        if (row === undefined) {
+          return {
+            kind: 'ignored',
+            signal: decision.signal,
+            why: `割り当てた鍵（id ${tokenId}）がプールに無い`,
+          };
+        }
+        // 既に通らない鍵へ書き直さない: 遅れて届いた知らせが本物の期限を縮めうるため（#667 と同じ理由）
+        if (tokenAvailabilityAt(row, now().getTime()) !== 'ready') {
+          return { kind: 'already_cooling', tokenId, label: row.label, signal: decision.signal };
+        }
+        rememberRejection({ tokenId, generation: 0, rotatedAt: now().toISOString() }, observation);
+        const cooled = (await coolDown(tokenId, settings, observation)).find(
+          (token) => token.id === tokenId,
+        );
+        return {
+          kind: 'cooled',
+          tokenId,
+          label: row.label,
+          ...(cooled?.cooldownUntil === undefined ? {} : { cooldownUntil: cooled.cooldownUntil }),
+          signal: decision.signal,
+          why: decision.why,
+        };
       }),
 
     recordTrialVerdict: (input: { tokenId: string; verdict: TokenCandidateVerdict }) =>

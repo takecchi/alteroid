@@ -46,6 +46,13 @@ export {
   probeTokenCandidate,
   type TokenCandidateVerdict,
 } from './token-candidate.js';
+export {
+  CONTAINER_AFFINITY_MAX_LOAD,
+  keepsContainerToken,
+  selectBalancedToken,
+  tokenLoadScoreOf,
+  type BalancedTokenPickInput,
+} from './token-balance.js';
 export { usageTransitionOf } from './usage-limits.js';
 /** PRD「権限境界」とは別の層: あちらは行為の一覧を持ってはいけないが、こちらは実行環境の境界（認証情報の配布範囲）である。 */
 export {
@@ -355,6 +362,7 @@ export {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerPool,
+  type ManagerTokenAssignmentPort,
   type VacateResult,
   type ManagerSendResult,
   type ManagerSummary,
@@ -514,6 +522,10 @@ export {
   tokenRotationPolicySchema,
   activeAgentTokenSchema,
   tokenRotationSettingsSchema,
+  tokenDistributionSchema,
+  DEFAULT_TOKEN_DISTRIBUTION,
+  distributionOf,
+  type TokenDistribution,
   type ActiveAgentToken,
   type AgentToken,
   type TokenCredential,

@@ -7,6 +7,7 @@ exports[`新しい DB を移行した後のスキーマ > 表・列・索引・�
   "agent_token_active | rotated_at | timestamp with time zone | timestamptz | NO | null | null | null | null | 6 | NO | NEVER | null",
   "agent_token_active | token_id | text | text | NO | null | null | null | null | null | NO | NEVER | null",
   "agent_token_settings | cooldown_ms | bigint | int8 | NO | null | null | 64 | 0 | null | NO | NEVER | null",
+  "agent_token_settings | distribution | text | text | YES | null | null | null | null | null | NO | NEVER | null",
   "agent_token_settings | id | text | text | NO | null | null | null | null | null | NO | NEVER | null",
   "agent_token_settings | rotate_on | text | text | NO | null | null | null | null | null | NO | NEVER | null",
   "agent_token_settings | updated_at | timestamp with time zone | timestamptz | YES | null | null | null | null | 6 | NO | NEVER | null",
