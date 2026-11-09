@@ -1025,6 +1025,11 @@ describe('report の後で起こす（#wakeForFinishedBackgroundTaskOutputs）',
   });
 });
 
-// `#deliverPeerNotices`（確認待ちの間に溜めた peer の知らせを、report の後でここで届ける）は、このファイルでは縛らない。
+// 「`liveBackground` を取り込みの `await` より前に 1 回だけ読む」は、このファイルでは縛らない。SDK 由来の背景処理の一覧（`background_tasks_changed`）は
+// `#read` が出来事を 1 件ずつ `await` して処理するので、`turn_ended` の取り込みの間には変わらない。変わりうるのは背景の peer が止まる経路だけで、
+// それには Codex の app server のフェイクが要る（`runner-peer.test.ts` の作り）。読む位置を取り込みの後へ動かす変異は、この試験では赤くならない。
+//
+// `#deliverPeerNotices`（確認待ちの間に溜めた peer の知らせを、report の後でここで届ける）も、このファイルでは縛らない。
 // 溜まるのは `waiting_human` の間だけで、`settle`（確認への答え）が同じ `#deliverPeerNotices` を呼んで先に届けるため、
 // `turn_ended` から呼ばれる側が単独で効く入り口を、外から（Codex の app server のフェイクなしに）作れなかった。
+// 削除する変異は、この試験では赤くならない。
