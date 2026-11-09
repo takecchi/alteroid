@@ -395,6 +395,32 @@ describe('分類できなかった失敗（noteUnclassifiedFailure と、鍵の�
     `);
   });
 
+  it('failure.text だけに Not logged in がある（assistant.error の本文。result の本文は空）: 案内が付く', async () => {
+    const out = await scenario({}, (rig) => {
+      assistant(rig, NOT_LOGGED_IN, 'authentication_failed');
+      result(rig, { text: '' });
+    });
+    expect(out).toMatchInlineSnapshot(`
+      [
+        {
+          "failure": {
+            "code": "authentication_failed",
+            "via": "assistant_error",
+          },
+          "report": "（このターンは応答を返さずに終わった: authentication_failed / assistant_error）
+      Not logged in · Please run /login
+
+      鍵の置き場（ALTEROID_CREDENTIAL_DIR）が無いと、ローカル runner のマネージャーへ鍵が届かない。この runner には鍵の置き場が無い（同一プロセスの runner は置き場を持たない）。\`ALTEROID_CREDENTIAL_DIR\` 付きの runner（apps/runner）を別に起こし、デーモンの \`ALTEROID_RUNNER_URL\` で繋ぐこと。",
+          "status": "done",
+        },
+        "alteroid: SDK の失敗を枠の文言として分類できなかった（初出。**回し手には届かない**）: manager=mgr-1 via=assistant_error code=authentication_failed
+      ",
+        "alteroid: SDK の失敗を枠の文言として分類できなかった（このセッションの合計）: manager=mgr-1 assistant_error:authentication_failed×1
+      ",
+      ]
+    `);
+  });
+
   it('resultTextOf(event).text だけに Not logged in がある（failure は assistant.error の別の本文）: 案内が付く', async () => {
     const out = await scenario({}, (rig) => {
       assistant(rig, '別の理由', 'unknown');
