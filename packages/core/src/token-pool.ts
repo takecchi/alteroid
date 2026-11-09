@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
 import { limitRecoveryOf, limitRecoverySchema } from './usage-limits.js';
+import { parseNoticeWeeklyReset } from './usage-reset-text.js';
 import { compareCodeUnits } from './code-unit-order.js';
 
 // 失効（invalidatedAt）を回す契機に含めない（人間の決定）: 現役が失効しても全層が止まったままになり、人間が手で外すまで復旧しない。「未実装」ではなくそう決めたもの
@@ -82,7 +83,21 @@ export interface AgentToken {
   createdAt?: string;
   // 全行に判を押さない: 全文置換なので押すと「最後に誰かが PUT を打った時刻」に化け、どの行がいつ変わったかが取れなくなるため
   updatedAt?: string;
+  // 週の枠のリセット（#6651。`weeklyResetSchema`）。markTokenUsable では消さない: 毎週の予定であって、いま止まっていることではないため
+  weeklyReset?: WeeklyReset;
 }
+
+/**
+ * 週の枠のリセット（#6651）。上限の文言（`resets Nov 11, 10pm (Asia/Tokyo)`）から読んだ瞬間と時間帯で、鍵ごとに固定の曜日・時刻を控える。
+ * 冷却の欄（`cooldownUntil`）と違い、冷却が明けても・成功しても消さない: 毎週の予定であって、いま止まっていることではないため。
+ * 文言から読んだ推測である（権威ある値ではない）。次に週の文言を観測したら上書きする。
+ */
+export const weeklyResetSchema = z.object({
+  at: z.number(),
+  zone: z.string(),
+  observedAt: z.string(),
+});
+export type WeeklyReset = z.infer<typeof weeklyResetSchema>;
 
 export const agentTokenSchema = z.object({
   id: z.string(),
@@ -100,6 +115,7 @@ export const agentTokenSchema = z.object({
   invalidatedReason: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  weeklyReset: weeklyResetSchema.optional(),
 });
 
 // value を持たない: 型として無ければ、書き忘れて漏れる形が作れないため
@@ -119,6 +135,7 @@ export const agentTokenViewSchema = z.object({
   invalidatedReason: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  weeklyReset: weeklyResetSchema.optional(),
   // 保存せず読むたびに lastRejectedReason から導く: 保存すると分類の表を直したとき古い行だけ古い判定を持ち続け、行から読めないため。
   // lastRejectedReason が無ければ無い: 「拒否されていない」と「分類できない」を unknown に潰さないため
   recovery: limitRecoverySchema.optional(),
@@ -145,6 +162,7 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
       : { invalidatedReason: token.invalidatedReason }),
     ...(token.createdAt === undefined ? {} : { createdAt: token.createdAt }),
     ...(token.updatedAt === undefined ? {} : { updatedAt: token.updatedAt }),
+    ...(token.weeklyReset === undefined ? {} : { weeklyReset: token.weeklyReset }),
     ...(token.lastRejectedReason === undefined
       ? {}
       : { recovery: limitRecoveryOf(token.lastRejectedReason) }),
@@ -291,6 +309,8 @@ export function normalizeTokenPool(
       ...(carry?.invalidatedReason === undefined
         ? {}
         : { invalidatedReason: carry.invalidatedReason }),
+      // 値が変わった行は別のアカウントかもしれないので、週の予定も引き継がない
+      ...(carry?.weeklyReset === undefined ? {} : { weeklyReset: carry.weeklyReset }),
       ...(current === undefined
         ? { createdAt: nowIso }
         : current.createdAt === undefined
@@ -374,6 +394,9 @@ export function markTokenUnusable(
     cooldownUntil: cooldown.until,
     updatedAt: observation.at,
   };
+  // 週の枠の文言なら、毎週のリセットとして控える（#6651）。読めない回は前の観測を残す: 消すと、週以外の上限に当たるたびに予定が失われるため
+  const weekly = parseNoticeWeeklyReset(observation.message, Date.parse(observation.at));
+  if (weekly !== undefined) next.weeklyReset = { ...weekly, observedAt: observation.at };
   // 出所が言えない回は欄を消す: 前の行の値が残ると、いま書いた期限の出所として読まれるため
   if (cooldown.source === undefined) delete next.cooldownSource;
   else next.cooldownSource = cooldown.source;

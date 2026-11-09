@@ -44,6 +44,10 @@ function toRow(token: AgentToken) {
     invalidatedReason: token.invalidatedReason ?? null,
     createdAt: token.createdAt === undefined ? null : new Date(token.createdAt),
     updatedAt: token.updatedAt === undefined ? null : new Date(token.updatedAt),
+    weeklyResetAt: token.weeklyReset?.at ?? null,
+    weeklyResetZone: token.weeklyReset?.zone ?? null,
+    weeklyResetObservedAt:
+      token.weeklyReset === undefined ? null : new Date(token.weeklyReset.observedAt),
   };
 }
 
@@ -68,6 +72,18 @@ function fromRow(row: AgentTokenRow): AgentToken {
     ...(row.invalidatedReason === null ? {} : { invalidatedReason: row.invalidatedReason }),
     ...(row.createdAt === null ? {} : { createdAt: row.createdAt.toISOString() }),
     ...(row.updatedAt === null ? {} : { updatedAt: row.updatedAt.toISOString() }),
+    // 3列が揃っているときだけ読む: 欠けた組を既定値で埋めると、観測していない予定を名乗るため
+    ...(row.weeklyResetAt === null ||
+    row.weeklyResetZone === null ||
+    row.weeklyResetObservedAt === null
+      ? {}
+      : {
+          weeklyReset: {
+            at: row.weeklyResetAt,
+            zone: row.weeklyResetZone,
+            observedAt: row.weeklyResetObservedAt.toISOString(),
+          },
+        }),
   };
 }
 

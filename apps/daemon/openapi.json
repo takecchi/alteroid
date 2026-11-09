@@ -33346,6 +33346,22 @@
                           "updatedAt": {
                             "type": "string"
                           },
+                          "weeklyReset": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "number"
+                              },
+                              "zone": {
+                                "type": "string"
+                              },
+                              "observedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["at", "zone", "observedAt"],
+                            "additionalProperties": false
+                          },
                           "recovery": {
                             "type": "string",
                             "enum": ["time", "action", "unknown"]
@@ -33803,6 +33819,22 @@
                           "updatedAt": {
                             "type": "string"
                           },
+                          "weeklyReset": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "number"
+                              },
+                              "zone": {
+                                "type": "string"
+                              },
+                              "observedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["at", "zone", "observedAt"],
+                            "additionalProperties": false
+                          },
                           "recovery": {
                             "type": "string",
                             "enum": ["time", "action", "unknown"]
@@ -33996,6 +34028,22 @@
                               },
                               "updatedAt": {
                                 "type": "string"
+                              },
+                              "weeklyReset": {
+                                "type": "object",
+                                "properties": {
+                                  "at": {
+                                    "type": "number"
+                                  },
+                                  "zone": {
+                                    "type": "string"
+                                  },
+                                  "observedAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["at", "zone", "observedAt"],
+                                "additionalProperties": false
                               },
                               "recovery": {
                                 "type": "string",
@@ -34236,6 +34284,22 @@
                           },
                           "updatedAt": {
                             "type": "string"
+                          },
+                          "weeklyReset": {
+                            "type": "object",
+                            "properties": {
+                              "at": {
+                                "type": "number"
+                              },
+                              "zone": {
+                                "type": "string"
+                              },
+                              "observedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["at", "zone", "observedAt"],
+                            "additionalProperties": false
                           },
                           "recovery": {
                             "type": "string",

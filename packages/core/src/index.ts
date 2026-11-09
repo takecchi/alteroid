@@ -512,6 +512,8 @@ export {
   agentTokenSchema,
   agentTokenViewSchema,
   cooldownSourceSchema,
+  weeklyResetSchema,
+  type WeeklyReset,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   TokenPoolInputError,
   credentialOf,

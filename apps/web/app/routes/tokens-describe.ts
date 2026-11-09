@@ -312,3 +312,38 @@ export function describeRotationSignal(signal: RotationSignal): string {
 export function describeRotationReason(reason: RotationReason): string {
   return rotationLabel(ROTATION_REASON_LABELS, reason);
 }
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
+
+/** 週の枠のリセット（#6651）を「毎週 火曜 22:00（Asia/Tokyo）」の形と、次の瞬間にする。時間帯が読めなければ `undefined`。 */
+export function weeklyResetSchedule(
+  weeklyReset: NonNullable<AgentTokenView['weeklyReset']>,
+  // 既定引数に Date.now() を持つ: コンポーネント本体で直接 Date.now() を呼ぶと react-hooks/purity に落ちるため
+  at: number = Date.now(),
+): { schedule: string; nextAt: number } | undefined {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: weeklyReset.zone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(weeklyReset.at));
+  } catch {
+    return undefined;
+  }
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(
+    parts.find((part) => part.type === 'weekday')?.value ?? '',
+  );
+  const hour = parts.find((part) => part.type === 'hour')?.value;
+  const minute = parts.find((part) => part.type === 'minute')?.value;
+  if (weekday < 0 || hour === undefined || minute === undefined) return undefined;
+  // 7日ずつ足す: 夏時間のある時間帯では壁時計が1時間ずれうるが、予定の言い方（曜日と時刻）は観測した回の壁時計で出す
+  const weeksAhead = at <= weeklyReset.at ? 0 : Math.ceil((at - weeklyReset.at) / WEEK_MS);
+  return {
+    schedule: `毎週 ${WEEKDAY_JA[weekday]}曜 ${hour}:${minute}（${weeklyReset.zone}）`,
+    nextAt: weeklyReset.at + weeksAhead * WEEK_MS,
+  };
+}
