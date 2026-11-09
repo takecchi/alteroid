@@ -647,8 +647,8 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
   const { busy, failure, setFailure, run } = useAction();
 
   const rotateOn = rotateOnDraft ?? settings.rotateOn;
-  // 未設定の行は failover で動いている（サーバの distributionOf と同じ読み）。選んだ値と比べるときだけ寄せる
-  const savedDistribution: TokenDistribution = settings.distribution ?? 'failover';
+  // 未設定の行は既定の balanced で動いている（サーバの distributionOf と同じ読み。#6642）。選んだ値と比べるときだけ寄せる
+  const savedDistribution: TokenDistribution = settings.distribution ?? 'balanced';
   const distribution = distributionDraft ?? savedDistribution;
   const distributionChanged = distribution !== savedDistribution;
   const cooldownFields = cooldownDraft ?? cooldownDraftOf(settings.cooldownMs);
@@ -668,7 +668,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
     }
     const cooldownMs = cooldownCheck === undefined ? settings.cooldownMs : cooldownCheck.ms;
     await run(async () => {
-      // 配り方は変えたときだけ送る: 未設定の行へ failover を書き込むと、触っていない欄のバイト列が変わるため
+      // 配り方は変えたときだけ送る: 未設定の行へ既定値を書き込むと、触っていない欄のバイト列が変わるため
       await setPolicy({ rotateOn, cooldownMs, ...(distributionChanged ? { distribution } : {}) });
       setRotateOnDraft(undefined);
       setCooldownDraft(undefined);
@@ -771,7 +771,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 // 既定値では埋めず未選択から始める: 読めない現在値の代わりに既定を選ばせると、off にしてあった回転を気づかないまま既定へ戻すことになるため
 // 両方揃うまで保存できない: PUT /tokens/policy は現在値が読めないとき両方を送ったときだけ上書きが通り、片方だけだと 500 になるため
 // ROTATE_ON_OPTIONS / describeRotateOn は SettingsCard と共有する: 選択肢が増減したとき、ここだけ追随し損ねないため
-// 配り方も選ばせる（サーバは省いても通す）: 省くと読めない行が黙って failover で上書きされ、balanced にしてあった配り方を気づかないまま戻すため
+// 配り方も選ばせる（サーバは省いても通す）: 省くと読めない行が黙って既定（balanced）で上書きされ、failover にしてあった配り方を気づかないまま変えるため
 function UnreadableSettingsCard({ reason }: { reason: string }) {
   const setPolicy = useSetTokenPolicy();
 

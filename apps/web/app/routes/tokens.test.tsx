@@ -961,19 +961,20 @@ function stubPolicyScreen(initial: StubSettings = DEFAULT_SETTINGS) {
 }
 
 describe('/tokens 画面 — 配り方（#6633）', () => {
-  it('未設定の行は「未設定。既定」と言い、選択欄は failover を指す', async () => {
+  // #6642 で既定が balanced になった（元は failover を指していた）
+  it('未設定の行は「未設定。既定」と言い、選択欄は既定の balanced を指す', async () => {
     stubPolicyScreen();
 
     renderTokens();
     await waitForPoolLoaded();
 
     expect(screen.getByText(/未設定。既定/, { selector: ':not(option)' })).toBeTruthy();
-    expect(screen.getByLabelText('配り方を変える')).toHaveProperty('value', 'failover');
+    expect(screen.getByLabelText('配り方を変える')).toHaveProperty('value', 'balanced');
     expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true);
   });
 
-  it('balanced を選んで保存すると、配り方を載せて PUT /tokens/policy が呼ばれ、表示が変わる', async () => {
-    const { puts } = stubPolicyScreen();
+  it('failover から balanced を選んで保存すると、配り方を載せて PUT /tokens/policy が呼ばれ、表示が変わる', async () => {
+    const { puts } = stubPolicyScreen({ ...DEFAULT_SETTINGS, distribution: 'failover' });
 
     renderTokens();
     await waitForPoolLoaded();
@@ -986,9 +987,12 @@ describe('/tokens 画面 — 配り方（#6633）', () => {
     });
     // 選択肢（option）にも同じ文が在るので、保存済みの表示の側だけを数える
     expect(
-      await screen.findByText('作業ごとに空いているトークンを割り当てて、使う量をならす', {
-        selector: ':not(option)',
-      }),
+      await screen.findByText(
+        '同じ担当には同じトークンを使い続け、混んできたら新しい作業から空いているトークンへ移す',
+        {
+          selector: ':not(option)',
+        },
+      ),
     ).toBeTruthy();
   });
 
@@ -1007,7 +1011,7 @@ describe('/tokens 画面 — 配り方（#6633）', () => {
     });
   });
 
-  it('配り方を触らずに別の欄を保存しても、配り方は送らない（未設定の行へ failover を書き込まない）', async () => {
+  it('配り方を触らずに別の欄を保存しても、配り方は送らない（未設定の行へ既定値を書き込まない）', async () => {
     const { puts } = stubPolicyScreen();
 
     renderTokens();
@@ -1018,6 +1022,20 @@ describe('/tokens 画面 — 配り方（#6633）', () => {
 
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]).not.toHaveProperty('distribution');
+  });
+
+  it('未設定の行から failover を選ぶと、failover を明示して送る（既定から外す変更として送る）', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('配り方を変える'), { target: { value: 'failover' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(puts).toEqual([{ ...DEFAULT_SETTINGS, distribution: 'failover' }]);
+    });
   });
 
   it('知らない配り方が届いても画面は落ちず、知らないことをそのまま言う', async () => {

@@ -114,15 +114,18 @@ export const ROTATE_ON_OPTIONS = Object.keys({
   off: true,
 } satisfies Record<TokenRotationSettings['rotateOn'], true>) as TokenRotationSettings['rotateOn'][];
 
-// 欄が無いのを failover と読む: サーバの distributionOf と同じ読み方で、未設定の行は従来の配り方で動いているため
+const BALANCED_LABEL =
+  '同じ担当には同じトークンを使い続け、混んできたら新しい作業から空いているトークンへ移す';
+
+// 欄が無いのを balanced と読む: サーバの distributionOf（DEFAULT_TOKEN_DISTRIBUTION、#6642）と同じ読み方のため
 export function describeDistribution(distribution: TokenRotationSettings['distribution']): string {
   switch (distribution) {
     case undefined:
-      return '1本ずつ使い、止まったら次へ切り替える（未設定。既定）';
+      return `${BALANCED_LABEL}（未設定。既定）`;
     case 'failover':
       return '1本ずつ使い、止まったら次へ切り替える';
     case 'balanced':
-      return '作業ごとに空いているトークンを割り当てて、使う量をならす';
+      return BALANCED_LABEL;
     default:
       // 投げない: 送られてくる値で、サーバのほうが新しい窓を先に持つため
       return describeUnknown(distribution, '配り方');
@@ -131,8 +134,8 @@ export function describeDistribution(distribution: TokenRotationSettings['distri
 
 // ROTATE_ON_OPTIONS と同じ形で縛る: 値が増えた日に選べない値が黙って残らないため
 export const DISTRIBUTION_OPTIONS = Object.keys({
-  failover: true,
   balanced: true,
+  failover: true,
 } satisfies Record<TokenDistribution, true>) as TokenDistribution[];
 
 const LOAD_WINDOW_LABELS: Readonly<Record<string, string>> = {
