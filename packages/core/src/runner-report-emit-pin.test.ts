@@ -878,6 +878,8 @@ describe('wantsTokenRecycle（setStatus の後で入力を起こす）', () => {
     expect(rig.started).toHaveLength(1);
     say(rig, 'やった');
     result(rig, { text: 'やった', uuid: 'uuid-result-t' });
+    // 鍵の器はディレクトリへ書く（実 I/O）: 2 本目のセッションが開くまで、回数の上限つきで回す（固定の 6 周では負荷の高い CI で間に合わないことがある）
+    for (let i = 0; i < 600 && rig.started.length < 2; i += 1) await tick();
     await settle();
     expect({
       sessions: rig.started.length,
@@ -897,7 +899,7 @@ describe('wantsTokenRecycle（setStatus の後で入力を起こす）', () => {
   it('付け替えが無ければ畳み直さない', async () => {
     const rig = await open({ credentials: 'with-old-token' });
     result(rig, { text: '済んだ', uuid: 'uuid-result-t2' });
-    await settle();
+    await untilReport(rig);
     expect({ sessions: rig.started.length, reports: reportsOf(rig).length }).toMatchInlineSnapshot(`
       {
         "reports": 1,
