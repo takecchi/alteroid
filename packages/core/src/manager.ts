@@ -6034,7 +6034,7 @@ class Pool implements ManagerPool {
             ? event.text
             : `${event.text}\n${await this.#usageWake.describeWorkerLimitKey(event.workerLimit.raw)}`;
         await this.#note.journalNote(event, noteText);
-        this.#note.emitNoteNotices(event, noteText);
+        await this.#note.emitNoteNotices(event, noteText);
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
         if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
