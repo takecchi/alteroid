@@ -7,6 +7,7 @@ import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import {
   toAgentTokenView,
   tokenAvailabilityAt,
+  distributionOf,
   type ActiveAgentToken,
   type AgentToken,
   type AgentTokenView,
@@ -69,7 +70,7 @@ type TokenListActive = ActiveAgentToken | null | undefined;
 async function readTokenSettingsLine(tokens: TokenListTokens): Promise<string> {
   try {
     const settings = await tokens.readSettings();
-    return `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`;
+    return `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms / 配り方 ${distributionOf(settings)}`;
   } catch (error) {
     if (!(error instanceof UnreadableTokenSettingsError)) throw error;
     return (
@@ -524,6 +525,7 @@ export function profileTools(context: ToolContext, shared: CloneToolsShared) {
         '登録・無効化は人間の手（alteroid token / PUT /tokens）に属する。',
         '枠で止まったときここを見れば、候補が残っているのか全部冷却中なのかが分かる。',
         '回った履歴のほうは journal_read types=token_rotation で引ける。',
+        '配り方 balanced では作業単位（委譲・クローンのセッション）ごとに空いている鍵を割り当て、枠に当たった鍵の持ち主だけを別の鍵へ移す。',
       ].join(' '),
       {
         cursor: z

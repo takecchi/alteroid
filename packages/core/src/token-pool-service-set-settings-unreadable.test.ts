@@ -34,6 +34,36 @@ describe('TokenPoolService.setSettings — 現在値が読めないとき（issu
     await expect(memory.tokens.readSettings()).resolves.toEqual(written);
   });
 
+  it('現在値が読めないとき、patch の配り方だけが運ばれる（現在値の配り方は読めないので足さない）', async () => {
+    const memory = createMemoryStores();
+    const stores: Stores = {
+      ...memory,
+      tokens: {
+        ...memory.tokens,
+        async readSettings() {
+          throw new UnreadableTokenSettingsError('settings が読めない（テスト用）');
+        },
+      },
+    };
+    const service = createTokenPoolService({
+      stores,
+      now: () => new Date('2026-09-29T00:00:00.000Z'),
+    });
+
+    const written = await service.setSettings({
+      rotateOn: 'off',
+      cooldownMs: 5000,
+      distribution: 'balanced',
+    });
+
+    expect(written).toEqual({
+      rotateOn: 'off',
+      cooldownMs: 5000,
+      distribution: 'balanced',
+      updatedAt: '2026-09-29T00:00:00.000Z',
+    });
+  });
+
   it('rotateOn だけの patch は、埋める元（現在値）が読めないので投げたまま', async () => {
     const memory = createMemoryStores();
     const stores: Stores = {

@@ -46,6 +46,24 @@ describe('直列化', () => {
     });
     expect(firstResult.rotateOn).toBe('overage_exhausted');
   });
+
+  it('配り方は patch に無ければ現状のまま。未設定のままならキー自体を持たない', async () => {
+    const stores = createMemoryStores();
+    const service = createTokenPoolService({
+      stores,
+      now: () => new Date('2026-08-24T00:00:00.000Z'),
+    });
+
+    const untouched = await service.setSettings({ cooldownMs: 1_000 });
+    expect('distribution' in untouched).toBe(false);
+
+    await service.setSettings({ distribution: 'balanced' });
+    const kept = await service.setSettings({ cooldownMs: 2_000 });
+    expect(kept.distribution).toBe('balanced');
+
+    const back = await service.setSettings({ distribution: 'failover' });
+    expect(back.distribution).toBe('failover');
+  });
 });
 
 describe('外へ出す顔', () => {

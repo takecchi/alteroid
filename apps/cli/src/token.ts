@@ -33,7 +33,12 @@ interface AgentTokenView {
 interface TokenRotationSettings {
   rotateOn: 'free_exhausted' | 'overage_exhausted' | 'off';
   cooldownMs: number;
+  distribution?: 'failover' | 'balanced';
   updatedAt?: string;
+}
+
+function describeDistribution(settings: TokenRotationSettings): string {
+  return `配り方: ${settings.distribution ?? 'failover'}（未設定なら failover（既定））\n`;
 }
 
 interface TokensView {
@@ -198,6 +203,7 @@ export async function tokenListCommand(): Promise<void> {
     stdout.write(
       `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
     );
+    stdout.write(describeDistribution(view.settings));
   }
 
   stdout.write(describeActive(view));
@@ -400,12 +406,13 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
 }
 
 const ROTATE_ON_VALUES: readonly string[] = ['free_exhausted', 'overage_exhausted', 'off'];
+const DISTRIBUTION_VALUES: readonly string[] = ['failover', 'balanced'];
 
 export async function tokenPolicyCommand(
   value: string | undefined,
-  options: { cooldownMs?: string } = {},
+  options: { cooldownMs?: string; distribution?: string } = {},
 ): Promise<void> {
-  const patch: { rotateOn?: string; cooldownMs?: number } = {};
+  const patch: { rotateOn?: string; cooldownMs?: number; distribution?: string } = {};
   if (value !== undefined) {
     if (!ROTATE_ON_VALUES.includes(value)) {
       throw new Error(
@@ -425,9 +432,20 @@ export async function tokenPolicyCommand(
     }
     patch.cooldownMs = parsed;
   }
+  if (options.distribution !== undefined) {
+    if (!DISTRIBUTION_VALUES.includes(options.distribution)) {
+      throw new Error(
+        `--distribution は ${DISTRIBUTION_VALUES.join(' / ')} のいずれか（渡されたのは ${options.distribution}）。` +
+          'failover は現役の鍵が枠に当たるまで同じ鍵を使う（既定）、' +
+          'balanced は作業単位ごとに空いている鍵を割り当てる',
+      );
+    }
+    patch.distribution = options.distribution;
+  }
 
   const target = await resolveTarget();
-  const readOnly = value === undefined && options.cooldownMs === undefined;
+  const readOnly =
+    value === undefined && options.cooldownMs === undefined && options.distribution === undefined;
   if (target.note !== null) {
     // 設定を変える側は例外にする: 何もせず 0 で返すと、cron などが「済んだ」と誤読するため
     if (!readOnly) throw new Error(target.note);
@@ -457,6 +475,7 @@ function printSettings(settings: TokenRotationSettings): void {
   stdout.write(
     `冷却の既定（resetsAt が取れないときのフォールバック）: ${String(settings.cooldownMs)}ms\n`,
   );
+  stdout.write(describeDistribution(settings));
 }
 
 function toInput(token: AgentTokenView): AgentTokenInput {
