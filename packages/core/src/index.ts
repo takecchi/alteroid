@@ -46,6 +46,11 @@ export {
   probeTokenCandidate,
   type TokenCandidateVerdict,
 } from './token-candidate.js';
+export {
+  selectBalancedToken,
+  tokenLoadScoreOf,
+  type BalancedTokenPickInput,
+} from './token-balance.js';
 export { usageTransitionOf } from './usage-limits.js';
 /** PRD「権限境界」とは別の層: あちらは行為の一覧を持ってはいけないが、こちらは実行環境の境界（認証情報の配布範囲）である。 */
 export {
