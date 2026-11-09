@@ -26,7 +26,7 @@ export const CONTAINER_AFFINITY_MAX_LOAD = 90;
 
 /**
  * コンテナの鍵を、新しい作業にもそのまま使ってよいか（#6642）。
- * 測っていない鍵は使い続ける: キャッシュを優先し、止まったときは移す側が拾うため。
+ * 測っていない鍵（`undefined`）は真を返すが、デーモンの割り当ては測れない鍵をここへ渡さず、寄っているコンテナの数で偏りを見る（#6649。`token-assignment.ts` の `lessCrowdedToken`）。
  */
 export function keepsContainerToken(loadScore: number | undefined): boolean {
   return loadScore === undefined || loadScore < CONTAINER_AFFINITY_MAX_LOAD;

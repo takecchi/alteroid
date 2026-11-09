@@ -38,6 +38,11 @@ export interface TokenAssignmentBookOptions {
 export const CLONE_ASSIGNMENT_UNIT = 'clone';
 
 /**
+ * 測れない鍵で、コンテナを空いている鍵へ移す差（#6649）。コンテナの鍵に寄っている数が、いちばん少ない通る鍵よりこれ以上多いときだけ移す。
+ */
+export const CONTAINER_REBALANCE_GAP = 2;
+
+/**
  * 配り方 `balanced` の割り当ての帳面（#6633）。デーモンのメモリにだけ持つ（委譲の割り当ては job に id だけ残し、引き取りで `adopt` し直す）。
  *
  * **同じ担当（コンテナ）には、できるかぎり同じ鍵を割り当て続ける**（#6642。キャッシュはアカウントをまたがないため）。
@@ -148,17 +153,63 @@ export function createTokenAssignmentBook(
     const container = containerKey(unitId);
     const preferredId = containerTokenOf(container, unitId);
     const preferred = tokens.find((token) => token.id === preferredId);
-    if (
-      usable(preferred, at) &&
-      !(exclude ?? []).includes(preferred.id) &&
-      keepsContainerToken(loadScores().get(preferred.id))
-    ) {
-      containerToken.set(container, preferred.id);
-      return preferred;
+    if (usable(preferred, at) && !(exclude ?? []).includes(preferred.id)) {
+      const score = loadScores().get(preferred.id);
+      if (score !== undefined) {
+        if (keepsContainerToken(score)) {
+          containerToken.set(container, preferred.id);
+          return preferred;
+        }
+      } else {
+        // 測れない鍵では使用率の閾値が成り立たない（profile スコープの無い鍵ではふつう）ので、寄っているコンテナの数で偏りを見る（#6649）。
+        // これが無いと、一度の停止で全コンテナが残った鍵へ寄り、止まった鍵が戻っても failover と同じ偏りのまま戻らない
+        const relief = lessCrowdedToken(tokens, container, preferred.id, at, exclude);
+        if (relief === undefined) {
+          containerToken.set(container, preferred.id);
+          return preferred;
+        }
+        containerToken.set(container, relief.id);
+        return relief;
+      }
     }
     const picked = pickBalanced(tokens, unitId, at, exclude);
     if (picked !== undefined) containerToken.set(container, picked.id);
     return picked;
+  };
+
+  const containersOn = (tokenId: string, exceptContainer: string): number => {
+    let count = 0;
+    for (const [other, held] of containerToken) {
+      if (other !== exceptContainer && held === tokenId) count += 1;
+    }
+    return count;
+  };
+
+  /**
+   * コンテナの鍵より空いている通る鍵（#6649）。寄っているコンテナの数の差が {@link CONTAINER_REBALANCE_GAP} 以上のときだけ返す。
+   * 差 1 で移さない: 移した先が今度は 1 多くなり、行ったり来たりしてキャッシュを毎回失うため。
+   */
+  const lessCrowdedToken = (
+    tokens: readonly AgentToken[],
+    container: string,
+    currentId: string,
+    at: number,
+    exclude?: readonly string[],
+  ): (AgentToken & { value: string }) | undefined => {
+    const here = containersOn(currentId, container) + 1;
+    let best: (AgentToken & { value: string }) | undefined;
+    let bestCount = Number.POSITIVE_INFINITY;
+    for (const token of [...tokens].sort((a, b) => a.order - b.order)) {
+      if (token.id === currentId || (exclude ?? []).includes(token.id) || !usable(token, at)) {
+        continue;
+      }
+      const count = containersOn(token.id, container);
+      if (count < bestCount) {
+        best = token;
+        bestCount = count;
+      }
+    }
+    return best !== undefined && here - bestCount >= CONTAINER_REBALANCE_GAP ? best : undefined;
   };
 
   const pickBalanced = (
