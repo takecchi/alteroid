@@ -538,7 +538,8 @@ describe('report の段 2（台帳への写し）', () => {
   });
 
   it('awaitingBackground が無い報告: 印を下ろす（欄ごと無い）', async () => {
-    const s = await open({ job: { awaitingBackgroundSince: OLD_ISO } });
+    // 前の値は status が done の台帳にだけ残る（done 以外へ動く書き込みは `#persist` が下ろすので、running から始めると前の値が先に消えて見分けられない）
+    const s = await open({ job: { status: 'done', awaitingBackgroundSince: OLD_ISO } });
     const r = await s.report(report());
     expect(Object.hasOwn(r.persisted ?? {}, 'awaitingBackgroundSince')).toBe(false);
   });
