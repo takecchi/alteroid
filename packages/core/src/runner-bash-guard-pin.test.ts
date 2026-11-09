@@ -714,6 +714,22 @@ describe('判定が例外で終わる（不正な ALTEROID_BASH_SHAPE_GUARD）',
   });
 });
 
+describe('env は呼び出しのたびに読む（作った後に書き換えた値が次の呼び出しから効く）', () => {
+  it('runner の env を後から書き換えると、次の PreToolUse から形の歯が on になる', async () => {
+    const env: NodeJS.ProcessEnv = {};
+    const opened = await open(env);
+    const first = decisionOf(await fire(opened, bashInput({ command: FD_DUP }))).decision;
+    env[BASH_SHAPE_GUARD_ENV] = 'on';
+    const second = decisionOf(await fire(opened, bashInput({ command: FD_DUP }))).decision;
+    expect({ first, second }).toMatchInlineSnapshot(`
+      {
+        "first": undefined,
+        "second": "deny",
+      }
+    `);
+  });
+});
+
 describe('throw の伝わり方', () => {
   it('note の送り出しが同期で投げても決定は変わらず、標準エラーへ 1 行残る（ask・deny・形の歯の deny）', async () => {
     const results: Record<string, unknown> = {};
