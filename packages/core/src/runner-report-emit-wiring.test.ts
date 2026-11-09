@@ -14,7 +14,7 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import type { AgentChildProcess } from './agent-session.js';
 import { createCredentialStore } from './credentials.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { createRunnerHost, type RunnerHost, SUBAGENT_BACKGROUND_WAIT_MS } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 // 出し箱の取り込み（`collectManagerOutbox`）だけを、決着を試験が握れる Promise に差し替える（他の関数は本物）。
@@ -118,14 +118,21 @@ afterEach(async () => {
 
 type ReportEvent = Extract<RunnerEvent, { type: 'report' }>;
 
-async function open(): Promise<{ started: Started; events: RunnerEvent[] }> {
+async function open(
+  throwOn?: (event: RunnerEvent) => boolean,
+): Promise<{ started: Started; events: RunnerEvent[] }> {
   const events: RunnerEvent[] = [];
   const { fn, started } = fakeRunnerSdk();
+  let thrown = false;
   host = createRunnerHost({
     runnerId: 'runner-test',
     workspacePath: dir,
     emit: (event) => {
       events.push(event);
+      if (!thrown && throwOn?.(event) === true) {
+        thrown = true;
+        throw new Error('emit が落ちた（テスト用）');
+      }
     },
     queryFn: fn,
     env: { PATH: '/usr/bin' },
@@ -170,6 +177,72 @@ describe('呼び元 #applyTurnEnded の周回（emit を同期で呼ぶ）', () 
         "r3": 13,
       }
     `);
+  });
+});
+
+describe('wakeForFinishedBackgroundTaskOutputs の口は同期のまま渡す（async で包まない）', () => {
+  it('起こしの中の emit が同期で投げたら、その投げは report の後の呼び元へ伝わり、セッションが閉じる', async () => {
+    // 打ち切った作業者の背景処理が、走っている最中に終わった状態を作る（`runner-report-emit-pin.test.ts` と同じ手順）
+    const rig = await open(
+      (event) => event.type === 'note' && event.text.includes('止まっていたマネージャーを起こした'),
+    );
+    const hook = (name: 'PostToolUse' | 'SubagentStop', input: Record<string, unknown>) => {
+      const found = rig.started.options.hooks?.[name]?.[0]?.hooks?.[0];
+      if (found === undefined) throw new Error(`${name} フックが登録されていない`);
+      return found(input as never, undefined, { signal: new AbortController().signal });
+    };
+    await hook('PostToolUse', {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'sleep 90', run_in_background: true },
+      tool_response: { stdout: '', stderr: '', backgroundTaskId: 'bg-agent-1' },
+      agent_id: 'agent-1',
+      agent_type: 'worker',
+    });
+    vi.useFakeTimers();
+    try {
+      const stopped = hook('SubagentStop', {
+        hook_event_name: 'SubagentStop',
+        stop_hook_active: false,
+        agent_transcript_path: '/tmp/does-not-exist.jsonl',
+        agent_type: 'worker',
+        session_crons: [],
+        agent_id: 'agent-1',
+        background_tasks: [
+          { id: 'agent-1', type: 'subagent', status: 'running', description: '当人' },
+          { id: 'bg-agent-1', type: 'monitor', status: 'running', command: 'sleep 90' },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(SUBAGENT_BACKGROUND_WAIT_MS);
+      await stopped;
+    } finally {
+      vi.useRealTimers();
+    }
+    await hook('PostToolUse', {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'pnpm test', run_in_background: true },
+      tool_response: { stdout: '', stderr: '', backgroundTaskId: 'bg-test-1' },
+      agent_id: 'agent-1',
+      agent_type: 'worker',
+    });
+    rig.started.push({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'bg-test-1',
+      status: 'completed',
+      summary: '完了',
+      output_file: '/tmp/out-1554.txt',
+      uuid: 'uuid-task-notification-w',
+      session_id: 'sess-mgr',
+    } as unknown as SDKMessage);
+    for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    result(rig.started, 'r-wake');
+    // 投げた後にセッションが閉じる（`closed`）のは非同期で、いつ届くかが揺れる: 届くまで回す（実時間では待たない）
+    for (let ticks = 0; ticks < 100 && !rig.events.some((e) => e.type === 'closed'); ticks += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(rig.events.some((event) => event.type === 'closed')).toBe(true);
   });
 });
 
