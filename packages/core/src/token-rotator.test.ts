@@ -3513,3 +3513,67 @@ describe('#4844: 値が差し替わった行', () => {
     expect(h.spreadCalls).toEqual([]);
   });
 });
+
+describe('coolAssigned: 配り方 balanced で割り当てた鍵1本だけを休ませる（#6633）', () => {
+  async function seeded() {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'A', value: 'tok-fake-a', order: 0 },
+      { id: 'tok-b', label: 'B', value: 'tok-fake-b', order: 1 },
+    ]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 7, rotatedAt: AT });
+    return h;
+  }
+
+  it('当たった鍵だけを冷却へ入れ、現役の指名も撒きも動かさない', async () => {
+    const h = await seeded();
+
+    const outcome = await h.rotator.coolAssigned({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b', generation: 1_700_000_000_000 },
+    });
+
+    expect(outcome.kind).toBe('cooled');
+    const rows = await h.stores.tokens.list();
+    expect(rows.find((row) => row.id === 'tok-b')?.cooldownUntil).toBeGreaterThan(Date.parse(AT));
+    expect(rows.find((row) => row.id === 'tok-a')?.cooldownUntil).toBeUndefined();
+    expect(await h.stores.tokens.readActive()).toEqual({
+      tokenId: 'tok-a',
+      generation: 7,
+      rotatedAt: AT,
+    });
+    expect(h.spreadCalls).toEqual([]);
+    expect(h.probeCalls).toEqual([]);
+  });
+
+  it('既に休んでいる鍵へは書き直さない（遅れた知らせで期限を動かさない）', async () => {
+    const h = await seeded();
+    await h.rotator.coolAssigned({ notice: reached, observedBy: { tokenId: 'tok-b' } });
+    const before = (await h.stores.tokens.list()).find((row) => row.id === 'tok-b');
+    const writes = h.replaceCalls();
+
+    const outcome = await h.rotator.coolAssigned({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b' },
+    });
+
+    expect(outcome.kind).toBe('already_cooling');
+    expect(h.replaceCalls()).toBe(writes);
+    expect((await h.stores.tokens.list()).find((row) => row.id === 'tok-b')).toEqual(before);
+  });
+
+  it('回す契機に当たらない知らせ（rotateOn: off）では休ませない', async () => {
+    const h = await seeded();
+    await h.stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 60_000 });
+
+    const outcome = await h.rotator.coolAssigned({
+      notice: reached,
+      observedBy: { tokenId: 'tok-b' },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    expect((await h.stores.tokens.list()).every((row) => row.cooldownUntil === undefined)).toBe(
+      true,
+    );
+  });
+});

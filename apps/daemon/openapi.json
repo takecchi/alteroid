@@ -2801,7 +2801,9 @@
                             "sweep_stopped",
                             "parked",
                             "recovered",
-                            "reopened"
+                            "reopened",
+                            "cooled",
+                            "reassigned"
                           ]
                         },
                         "signal": {
@@ -8579,7 +8581,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {
@@ -10859,7 +10863,9 @@
                             "sweep_stopped",
                             "parked",
                             "recovered",
-                            "reopened"
+                            "reopened",
+                            "cooled",
+                            "reassigned"
                           ]
                         },
                         "signal": {
@@ -15436,7 +15442,9 @@
                                     "sweep_stopped",
                                     "parked",
                                     "recovered",
-                                    "reopened"
+                                    "reopened",
+                                    "cooled",
+                                    "reassigned"
                                   ]
                                 },
                                 "signal": {
@@ -17581,7 +17589,9 @@
                                     "sweep_stopped",
                                     "parked",
                                     "recovered",
-                                    "reopened"
+                                    "reopened",
+                                    "cooled",
+                                    "reassigned"
                                   ]
                                 },
                                 "signal": {
@@ -19726,7 +19736,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {
@@ -21862,7 +21874,9 @@
                                   "sweep_stopped",
                                   "parked",
                                   "recovered",
-                                  "reopened"
+                                  "reopened",
+                                  "cooled",
+                                  "reassigned"
                                 ]
                               },
                               "signal": {

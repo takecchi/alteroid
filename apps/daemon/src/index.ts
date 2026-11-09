@@ -41,6 +41,8 @@ import {
   noteDroppedRecord,
   DAILY_REPORT_RETRY_DELAYS_MS,
   tokenAvailabilityAt,
+  distributionOf,
+  DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRestoreEntry,
   tokenRotationEntry,
   probeTokenCandidate,
@@ -90,6 +92,11 @@ import {
 import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { createTokenLoadBook, startTokenLoadSampling } from './token-load.js';
+import {
+  CLONE_ASSIGNMENT_UNIT,
+  createTokenAssignmentBook,
+  type TokenEvacuation,
+} from './token-assignment.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
 import {
@@ -268,6 +275,9 @@ export function tokenRotationStream(event: TokenRotationEntry['event']): NodeJS.
     case 'restored':
     case 'recovered':
     case 'reopened':
+    // 休ませたのは1本だけで、他の鍵で作業は続く（#6633）。止まっていないので正常側
+    case 'cooled':
+    case 'reassigned':
       return process.stdout;
     // `parked` は異常側に置く: 運ぶ事実が「いま通る鍵が1本も無い」で、正常な行に混ぜると最も重い状態が最も普通の状態と同じ場所へ出るため。
     case 'exhausted':
@@ -725,6 +735,16 @@ export async function main(): Promise<void> {
   // 鍵ごとの枠の帳面（#6633）: 現役は下の probe が、それ以外は `tokenLoadSampler` が書く
   const tokenLoadBook = createTokenLoadBook();
 
+  // 配り方 balanced の割り当て（#6633）。設定が読めないときは failover と読む（割り当てない＝従来どおり現役で走る）
+  const tokenAssignments = createTokenAssignmentBook({
+    readTokens: () => stores.tokens.list(),
+    balanced: async () =>
+      distributionOf(
+        await stores.tokens.readSettings().catch(() => DEFAULT_TOKEN_ROTATION_SETTINGS),
+      ) === 'balanced',
+    loads: () => tokenLoadBook.snapshot(),
+  });
+
   const usagePoller = startUsagePolling({
     queryFn: query,
     cwd: paths.root,
@@ -800,6 +820,11 @@ export async function main(): Promise<void> {
     }
   }
 
+  // クローンを作る前に割り当てる: `createClone` は構築の中で最初のターンを回し始めるため（撒き直しを先にするのと同じ理由）
+  await tokenAssignments.assign(CLONE_ASSIGNMENT_UNIT).catch((error: unknown) => {
+    noteDroppedRecord('クローンへの鍵の割り当て', CLONE_ASSIGNMENT_UNIT, error);
+  });
+
   const clone = createClone({
     childEnvBase: bootEnvSnapshot,
     stores,
@@ -821,8 +846,20 @@ export async function main(): Promise<void> {
     permissionRuleService,
     codexAuthService,
     self,
-    credentials: () => agentTokenHolder.values(),
-    tokenIdentity: () => agentTokenHolder.identity(),
+    // 割り当てが在ればその鍵、無ければ現役（#6633）。委譲の比べる先は現役のまま（`managerTokenIdentity`）
+    credentials: () => {
+      const assigned = tokenAssignments.valueOf(CLONE_ASSIGNMENT_UNIT);
+      return assigned === undefined
+        ? agentTokenHolder.values()
+        : { CLAUDE_CODE_OAUTH_TOKEN: assigned };
+    },
+    tokenIdentity: () =>
+      tokenAssignments.target(CLONE_ASSIGNMENT_UNIT) ?? agentTokenHolder.identity(),
+    managerTokenIdentity: () => agentTokenHolder.identity(),
+    managerTokenAssignment: {
+      assign: (managerId, hint) => tokenAssignments.assign(managerId, hint),
+      target: (managerId) => tokenAssignments.target(managerId),
+    },
     tokenAvailability: async (tokenId) => {
       const token = (await tokenPoolService.list()).tokens.find((entry) => entry.id === tokenId);
       return token === undefined ? undefined : tokenAvailabilityAt(token, Date.now());
@@ -846,6 +883,24 @@ export async function main(): Promise<void> {
       }
       if (isRejectionForTrialBackoff(observation)) {
         tokenTrialWatch?.noteRejection(observation.observedBy.tokenId);
+      }
+      // 割り当てた鍵の知らせは現役を回さず、その鍵だけを休ませて持ち主を移す（#6633）。帳面が出していない身元は従来どおり回し手へ
+      const assignedBy = observation.observedBy;
+      if (assignedBy?.tokenId !== undefined && assignedBy.generation !== undefined) {
+        const freshness = tokenAssignments.freshnessOf({
+          tokenId: assignedBy.tokenId,
+          generation: assignedBy.generation,
+        });
+        // 前の割り当ての遅れた知らせは捨てる: 持ち主はもう別の鍵へ移っており、休ませると関係の無い鍵の期限を書くため
+        if (freshness === 'stale') return;
+        if (freshness === 'current') {
+          const cooled = await tokenRotator.coolAssigned({
+            ...observation,
+            observedBy: { ...assignedBy, tokenId: assignedBy.tokenId },
+          });
+          await settleCooledToken(cooled, observation.notice?.text);
+          return;
+        }
       }
       const outcome = await tokenRotator.observe(observation);
       // 当たった文言は言い換えずそのまま添える: 人間が claude.ai と突き合わせられ、回復の見込みの分類も効くため。
@@ -890,6 +945,141 @@ export async function main(): Promise<void> {
   // 起動時に1回、その後は周期。デーモンが異常終了して /tmp に残ったクローンの MCP 設定（資格入り）を掃く（#5222）
   const cloneMcpConfigSweeper = startCloneMcpConfigSweeping({ journal: stores.journal });
 
+  // 割り当てた鍵1本を休ませた結果を日誌へ残し、持ち主を移す（#6633）
+  async function settleCooledToken(
+    outcome: Awaited<ReturnType<typeof tokenRotator.coolAssigned>>,
+    noticeText: string | undefined,
+  ): Promise<void> {
+    if (outcome.kind === 'ignored') return;
+    if (outcome.kind === 'cooled') {
+      const until =
+        outcome.cooldownUntil === undefined
+          ? ''
+          : `（${new Date(outcome.cooldownUntil).toISOString()} まで）`;
+      await appendTokenRotationJournal({
+        type: 'token_rotation',
+        event: 'cooled',
+        signal: outcome.signal,
+        freshness: 'current',
+        text:
+          `認証トークン: 割り当てた「${outcome.label}」（id ${outcome.tokenId}）が枠に当たったので休ませた${until}。` +
+          '使用中のトークン（現役）は切り替えていない。' +
+          (noticeText === undefined ? '' : `\n当たった文言: ${noticeText}`),
+      });
+    }
+    await settleReassignment(await tokenAssignments.evacuate(outcome.tokenId));
+  }
+
+  // 持ち主を移した結果を日誌へ残し、移ったクローンは畳み直し、委譲は枠で止まっていれば起こす（#6633）
+  async function settleReassignment(result: TokenEvacuation): Promise<void> {
+    if (result.moved.length === 0 && result.stranded.length === 0) return;
+    const lines = [
+      ...result.moved.map(
+        (move) =>
+          `${move.unitId}: ${move.from.tokenId} → 「${move.label}」（id ${move.to.tokenId}）`,
+      ),
+      ...result.stranded.map(
+        (unitId) => `${unitId}: 通るトークンが無いので割り当てを外した（使用中のトークンで走る）`,
+      ),
+    ];
+    await appendTokenRotationJournal({
+      type: 'token_rotation',
+      event: 'reassigned',
+      text: `認証トークン: 休ませたトークンを使っていた作業を移した\n${lines.join('\n')}`,
+    });
+    const cloneMove = result.moved.find((move) => move.unitId === CLONE_ASSIGNMENT_UNIT);
+    if (cloneMove !== undefined) {
+      const cloneRecycled = clone.recycleSessionForToken();
+      const cloneWake = cloneWakeFor({
+        tokenId: cloneMove.to.tokenId,
+        label: cloneMove.label,
+        how: '回した',
+      });
+      if (cloneRecycled === 'now') cloneWake();
+      else pendingTokenWake = cloneWake;
+    } else if (result.stranded.includes(CLONE_ASSIGNMENT_UNIT)) {
+      clone.recycleSessionForToken();
+    }
+    const movedManagers = [...result.moved.map((move) => move.unitId), ...result.stranded].filter(
+      (unitId) => unitId !== CLONE_ASSIGNMENT_UNIT,
+    );
+    if (movedManagers.length === 0) return;
+    // 走っている委譲は次の send で畳み直される（StaleTokenFold が割り当てと比べる）。枠で止まっている委譲だけをここで起こす
+    void clone.managers
+      .restore()
+      .then(() => clone.managers.resumeStoppedByUsage())
+      .then((nudged) => {
+        if (nudged.length === 0) return;
+        process.stdout.write(
+          `alteroidd: 鍵の割り当てを移したので、枠で止まっていた委譲へ続きを促しました: ${nudged.join(', ')}\n`,
+        );
+      })
+      .catch((error: unknown) => {
+        writeStderrLine(
+          `alteroidd: 鍵の割り当てを移した後の委譲の起こし直しに失敗しました: ${reasonOf(error)}\n`,
+        );
+      });
+  }
+
+  async function appendTokenRotationJournal(entry: TokenRotationEntry): Promise<void> {
+    tokenRotationStream(entry.event).write(
+      `alteroidd: ${entry.text.split('\n')[0] ?? entry.text}\n`,
+    );
+    await stores.journal.append(entry).catch((error: unknown) => {
+      noteDroppedRecord('認証トークンの割り当て', 'journal', error);
+    });
+  }
+
+  // クローンへ「鍵が通る状態に戻った」を知らせる合図を組む（回した・戻った回と、balanced で割り当てを移した回が同じ門を通る。#6633）
+  function cloneWakeFor(reopened: ReopenedToken): () => void {
+    return () => {
+      // 判定は `staleObservedRecoveryForBlockedKey` と同じ関数を呼び、コピーしない: 片方だけ直したときに黙ってずれるため。
+      const observedRecovery = reopened.how === 'また通るようになった';
+      const staleSameKeyRecovery = staleObservedRecoveryForBlockedKey({
+        observedRecovery,
+        reopenedTokenId: reopened.tokenId,
+        blockedResetsAt: clone.usageBlockedResetsAt,
+        blockedTokenId: clone.usageBlockedTokenId,
+      });
+      const decision = cloneWakeGate.decide(
+        reopened,
+        clone.usageBlocked,
+        clone.usageReleasePending,
+        staleSameKeyRecovery,
+      );
+      if (decision.kind === 'fold') {
+        // 畳んだ理由は4つを言い分ける: 潰すと、往復・ターンを跨いだ反復・同じ鍵の使い回し・本当に静かな場合が跡から読めなくなるため。
+        const why = !clone.usageBlocked
+          ? 'クローンは枠で止まっていないので起こさない'
+          : clone.usageReleasePending
+            ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
+            : staleSameKeyRecovery
+              ? '同じ鍵・同じ回復予定時刻（resetsAt）に対する観測ベースの使い回しで、プールの構成は変わっていない'
+              : '前に同じ合図（同じ鍵・同じ根拠）を配ってあり、そのあいだ鍵が通らなくなったことを観測していない';
+        process.stdout.write(
+          `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（${why}）: ` +
+            `「${reopened.label}」（id ${reopened.tokenId}）\n`,
+        );
+      } else {
+        // 本文の観測時刻と合図の `at` は同じ値にする: `new Date()` を2回呼ぶと本文の内側と外側でズレた時刻を名乗るため。
+        const observedAt = new Date().toISOString();
+        clone.post({
+          type: 'external',
+          id: randomUUID(),
+          at: observedAt,
+          source: TOKEN_POOL_REOPENED_SOURCE,
+          payload: {
+            text: describeReopenedTokenNotice(reopened, decision.folded, observedAt),
+            tokenId: reopened.tokenId,
+            observedRecovery,
+          },
+          // 畳み込みの鍵を `payload.text` から取らない: 畳んだ件数を含むため、件数が違うだけで別の鍵になり受信箱側の畳み込みが効かない。
+          identity: deliveredIdentity(reopened),
+        });
+      }
+    };
+  }
+
   // 観測から来た回と状態から来た回で同じここを通す: 別々に書くと、片方だけが `parked` を知らない・セッションを作り直す、という食い違いが静かに生まれるため。
   async function settleTokenOutcome(
     outcome: TokenRotationOutcome,
@@ -899,8 +1089,10 @@ export async function main(): Promise<void> {
 
     // `parked` でもセッションを作り直す: 冷却が明けた後に古い鍵のまま挑むのが最悪の形のため。
     // 返り値を捨てない: `'deferred'` のときに再開の合図を先に入れると、古い鍵のターンに消費されてそのターンが死ぬため。
+    // 割り当てを持つクローンは現役が回っても走る鍵が変わらないので畳まない（#6633）
     const recycled =
-      outcome.kind === 'rotated' || outcome.kind === 'parked'
+      (outcome.kind === 'rotated' || outcome.kind === 'parked') &&
+      tokenAssignments.target(CLONE_ASSIGNMENT_UNIT) === undefined
         ? clone.recycleSessionForToken()
         : 'now';
 
@@ -915,52 +1107,7 @@ export async function main(): Promise<void> {
     if (reopened !== undefined) {
       // クローンへの知らせだけを持つ（マネージャーの起こし直しは含めない。下で先に呼ぶ）。
       // 合図は新しい鍵で受け取れるようになってから入れる: 走行中のターンは古い鍵のままで、そこへ入れると合図がそのターンに消費されるため。
-      const wake = () => {
-        // 判定は `staleObservedRecoveryForBlockedKey` と同じ関数を呼び、コピーしない: 片方だけ直したときに黙ってずれるため。
-        const observedRecovery = reopened.how === 'また通るようになった';
-        const staleSameKeyRecovery = staleObservedRecoveryForBlockedKey({
-          observedRecovery,
-          reopenedTokenId: reopened.tokenId,
-          blockedResetsAt: clone.usageBlockedResetsAt,
-          blockedTokenId: clone.usageBlockedTokenId,
-        });
-        const decision = cloneWakeGate.decide(
-          reopened,
-          clone.usageBlocked,
-          clone.usageReleasePending,
-          staleSameKeyRecovery,
-        );
-        if (decision.kind === 'fold') {
-          // 畳んだ理由は4つを言い分ける: 潰すと、往復・ターンを跨いだ反復・同じ鍵の使い回し・本当に静かな場合が跡から読めなくなるため。
-          const why = !clone.usageBlocked
-            ? 'クローンは枠で止まっていないので起こさない'
-            : clone.usageReleasePending
-              ? 'クローンは枠で止まっているが、再開の印が既に立っている（もう起こしてあるので重ねない）'
-              : staleSameKeyRecovery
-                ? '同じ鍵・同じ回復予定時刻（resetsAt）に対する観測ベースの使い回しで、プールの構成は変わっていない'
-                : '前に同じ合図（同じ鍵・同じ根拠）を配ってあり、そのあいだ鍵が通らなくなったことを観測していない';
-          process.stdout.write(
-            `alteroidd: 認証トークンが通る状態に戻った合図を畳んだ（${why}）: ` +
-              `「${reopened.label}」（id ${reopened.tokenId}）\n`,
-          );
-        } else {
-          // 本文の観測時刻と合図の `at` は同じ値にする: `new Date()` を2回呼ぶと本文の内側と外側でズレた時刻を名乗るため。
-          const observedAt = new Date().toISOString();
-          clone.post({
-            type: 'external',
-            id: randomUUID(),
-            at: observedAt,
-            source: TOKEN_POOL_REOPENED_SOURCE,
-            payload: {
-              text: describeReopenedTokenNotice(reopened, decision.folded, observedAt),
-              tokenId: reopened.tokenId,
-              observedRecovery,
-            },
-            // 畳み込みの鍵を `payload.text` から取らない: 畳んだ件数を含むため、件数が違うだけで別の鍵になり受信箱側の畳み込みが効かない。
-            identity: deliveredIdentity(reopened),
-          });
-        }
-      };
+      const wake = cloneWakeFor(reopened);
       // マネージャーの起こし直しは、クローンのセッションの作り直し（`recycled`）を待たずに先に呼ぶ: マネージャーはクローンのセッションと独立に枠で止まりうるため、
       // クローンが長いターンの最中・受信箱が詰まっている間も後ろに並ばせない。待たせるのはクローンへの知らせ（上の `wake`）だけ。
       // 待たない: 引き取りは runner への問い合わせで落ちうる・遅いため、回した結果の記録を縛らない。
@@ -1005,7 +1152,16 @@ export async function main(): Promise<void> {
 
   tokenWatch = startTokenRotationWatch({
     rotator: tokenRotator,
-    onOutcome: (outcome) => settleTokenOutcome(outcome),
+    onOutcome: async (outcome) => {
+      await settleTokenOutcome(outcome);
+      // 割り当てた鍵が通らなくなった（外された・消えた・値が替わった・冷却に入った）持ち主を移し直す（#6633）。目盛り・プールの変更ごとに見る
+      await tokenAssignments
+        .reconcile()
+        .then((moved) => settleReassignment(moved))
+        .catch((error: unknown) => {
+          noteDroppedRecord('鍵の割り当ての見直し', 'reconcile', error);
+        });
+    },
   });
 
   tokenTrialWatch = startTokenTrialWatch({

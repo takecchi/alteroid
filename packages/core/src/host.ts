@@ -170,7 +170,8 @@ export interface CloneHost {
   readonly usageBlockedTokenId: string | undefined;
 
   // `stop()` と混ぜない: 混ぜると「トークンを回したらクローンが止まる」になるため
-  recycleSessionForToken(): void;
+  // 'deferred' はターンの途中で、畳み直しは境界まで待つ: 呼び手は合図を入れるのを畳み直しの後まで待たせる（`onTokenSessionRecycled`）
+  recycleSessionForToken(): 'now' | 'deferred';
 
   // セッションを起こさない読み（身元を捕まえない）。値は返さない: 鍵は在るか無いかと出所だけ。
   anthropicRoute(): string[];
