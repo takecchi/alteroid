@@ -101,7 +101,7 @@ export class ManagerClosedNotice {
   }
 
   // `closed` の段3-5: report が無いまま届いた `closed(done)` をクローンへ知らせる（呼び元が `done` かつ在庫無しのときだけ呼ぶ）。
-  async noticeSilentDone(record: ManagerRecord, event: ClosedEvent): Promise<void> {
+  noticeSilentDone(record: ManagerRecord, event: ClosedEvent): Promise<void> {
     const seen = reportSeenInSession(
       record.job.lastReportAt,
       record.job.runnerSessionSince,
