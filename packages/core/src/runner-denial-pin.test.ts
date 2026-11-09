@@ -944,6 +944,24 @@ describe('出来事が出る周回（同期のまま保つ）', () => {
       }
     `);
   });
+
+  // 順序の歯（#6630 のレビューの指摘）: 複数の拒否は届いた順に 1 件ずつ決着する。期待の値は今の作りの出力から生成して目で読んで確かめた
+  it('result: 複数の拒否の permission_denied は届いた順に出る', async () => {
+    const rig = await open();
+    result(rig, [
+      { tool_name: 'Read', tool_use_id: 'tu-ord-1' },
+      { tool_name: 'Bash', tool_use_id: 'tu-ord-2' },
+      { tool_name: 'Read', tool_use_id: 'tu-ord-3' },
+    ]);
+    await ticksUntil(rig, 3);
+    expect(deniedOf(rig.events).map((event) => event.toolUseId)).toMatchInlineSnapshot(`
+      [
+        "tu-ord-1",
+        "tu-ord-2",
+        "tu-ord-3",
+      ]
+    `);
+  });
 });
 
 describe('同期で投げたときの伝わり方', () => {
