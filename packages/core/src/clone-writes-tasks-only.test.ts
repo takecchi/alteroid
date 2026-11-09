@@ -130,6 +130,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'manager-closed-apply.ts',
     'manager-closed-front.ts',
     'manager-denial.ts',
+    'manager-note.ts',
     'manager-self-fenced.ts',
     'manager-session.ts',
     'manager-tool-use.ts',

@@ -428,7 +428,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#handleResumeFailed': 'failure',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
-    '#journalNote': 'reply',
     '#noteAmbiguousResolved': 'recovery',
     '#noteAmbiguousSighting': 'failure',
     '#noteClosedFailure': 'failure',
@@ -453,6 +452,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager-denial.ts': {
     '#deniedOf': 'thinning',
     handle: 'decision',
+  },
+  // 担当の `note` の日誌への書き込みを持つ協力者（旧 `Pool#journalNote`）。同じ検査をここへ移した。公開メソッド `journalNote` は `#` の付かない名前の行
+  'manager-note.ts': {
+    journalNote: 'reply',
   },
   // 自己失効の `closed` を受けて、貸し出しを返して引き取りの挑み直しを日誌へ書く協力者（旧 `Pool#closeSelfFenced`）。同じ検査をここへ移した。公開メソッド `closeSelfFenced` は `#` の付かない名前の行
   'manager-self-fenced.ts': {
@@ -628,6 +631,7 @@ const EXCHANGE_SOURCES = [
   'denial-renotify.ts',
   'manager-closed-front.ts',
   'manager-denial.ts',
+  'manager-note.ts',
   'manager-self-fenced.ts',
   'manager-session.ts',
   'manager-waiting.ts',

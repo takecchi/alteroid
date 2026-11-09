@@ -149,6 +149,7 @@ import { ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-appl
 import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
+import { ManagerNoteReceiver } from './manager-note.js';
 import { ManagerReportApply } from './manager-report-apply.js';
 import { ManagerSelfFencedReceiver } from './manager-self-fenced.js';
 import { ManagerSessionReceiver } from './manager-session.js';
@@ -1834,6 +1835,8 @@ class Pool implements ManagerPool {
   readonly #reportApply: ManagerReportApply;
   /** `closed` の本体（`#closeJob`）の頭の、台帳へ写す同期の段（`#closeJob` が `await` を挟まずに呼ぶ）。 */
   readonly #closedApply: ManagerClosedApply;
+  /** `note` の 3 段（印を立てる・日誌へ残す・クローンへの知らせを積む）。`#handleEvent` の `case 'note'` が元の `await` の並びのまま呼ぶ（`return` へまとめない）。 */
+  readonly #note: ManagerNoteReceiver;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -2213,6 +2216,14 @@ class Pool implements ManagerPool {
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
       withdrawWaiting: (record, reason) => this.#withdrawWaiting(record, reason),
+    });
+    this.#note = new ManagerNoteReceiver({
+      persist: (record) => this.#persist(record),
+      journal: (entry) => this.#journal(entry),
+      journalExchange: this.#journalExchange.bind(this),
+      emit: (...args) => this.#emit(...args),
+      workerLimitStopped: this.#workerLimitStopped,
+      tokenIdentities: this.#tokenIdentities,
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -6015,15 +6026,15 @@ class Pool implements ManagerPool {
         // 作業者の落ちの印を立てる（#5030）。`await` の前に同期で立てる: 鍵の突き合わせの間にターンが終わっても、終わりの契機が印を見られるように。
         // `#usageStopped` と鍵の回転の観測（`#observeForTokenRotation`）へは流さない（#4903）。
         if (event.workerLimit !== undefined) {
-          await this.#markWorkerLimitStopped(record, event.managerId, event.workerLimit);
+          await this.#note.markWorkerLimitStopped(record, event.managerId, event.workerLimit);
         }
         // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
         const noteText =
           event.workerLimit === undefined
             ? event.text
             : `${event.text}\n${await this.#usageWake.describeWorkerLimitKey(event.workerLimit.raw)}`;
-        await this.#journalNote(event, noteText);
-        this.#emitNoteNotices(event, noteText);
+        await this.#note.journalNote(event, noteText);
+        this.#note.emitNoteNotices(event, noteText);
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
         if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);
@@ -6341,82 +6352,6 @@ class Pool implements ManagerPool {
         dropped.text,
       ...dropped.attachments,
     });
-  }
-
-  /** `note` の段1: 作業者の落ちの印を立てて台帳へ写す（呼び元が `event.workerLimit` の有無で呼ぶ）。 */
-  async #markWorkerLimitStopped(
-    record: ManagerRecord,
-    managerId: string,
-    workerLimit: NonNullable<Extract<RunnerEvent, { type: 'note' }>['workerLimit']>,
-  ): Promise<void> {
-    const mark = {
-      preRotationKey: workerLimit.preRotationKey,
-      turnStartedAt: record.job.turnStartedAt,
-    };
-    this.#workerLimitStopped.set(managerId, mark);
-    // 台帳にも写す: デーモンが再起動しても印が残るように
-    record.job.workerLimitStopped = { ...mark };
-    await this.#persist(record);
-  }
-
-  /** `note` の段2: note を日誌へ残す（stall の有無で行の種類を分ける）。 */
-  async #journalNote(
-    event: Extract<RunnerEvent, { type: 'note' }>,
-    noteText: string,
-  ): Promise<void> {
-    // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
-    // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
-    if (event.stall === undefined) {
-      await this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
-      );
-    } else {
-      await this.#journal({
-        type: 'subagent_stall',
-        agentId: event.stall.agentId,
-        ...(event.stall.agentType === undefined ? {} : { agentType: event.stall.agentType }),
-        ownedTaskCount: event.stall.ownedTaskCount,
-        sessionTaskCount: event.stall.sessionTaskCount,
-        wakeupCount: event.stall.wakeupCount,
-        outcome: event.stall.outcome,
-        text: `[${event.managerId}] ${event.text}`,
-      });
-    }
-  }
-
-  /** `note` の段3（同期）: `escalate` / `notifyClone` の欄に応じてクローンへの知らせを積む。 */
-  #emitNoteNotices(event: Extract<RunnerEvent, { type: 'note' }>, noteText: string): void {
-    // 欄（`event.escalate`）で判定し、本文を嗅がない。
-    if (event.escalate === true) {
-      this.#emit(
-        event.managerId,
-        'report',
-        `[${event.managerId}] 作業者が自分で起こした背景処理を残したまま畳もうとする回が、` +
-          '背景処理の完了を待つ上限（30分）に達して打ち切った。**この作業者は自動では再開しない**（委譲がここで止まっている）。\n' +
-          `詳細（何が残っているか・何回目だったか）: ${event.text}\n` +
-          '全件は日誌に残っている（`journal_read` で辿れる）。',
-      );
-    }
-
-    // 欄（`event.notifyClone`）で判定し、本文を嗅がない（#4685）: 成果が失われうる知らせは、日誌だけだとクローンが引かない限り見えないため
-    if (event.notifyClone === true) {
-      // 作業者の落ちには、積んだ時点の担当の鍵の世代を添えて「別の世代へ移って戻ったら畳んでよい」と印を付ける（#5048）。世代が分からなければ付けない
-      const heldGeneration = this.#tokenIdentities.get(event.managerId)?.generation;
-      this.#emit(
-        event.managerId,
-        'report',
-        `[${event.managerId}] ${noteText}`,
-        undefined,
-        undefined,
-        'full',
-        false,
-        undefined,
-        event.workerLimit === undefined || heldGeneration === undefined
-          ? undefined
-          : { movedFromGeneration: heldGeneration },
-      );
-    }
   }
 
   /** `resume_failed` の段1: 前のセッションを開き直せなかったが runner が自力で戻れた回の台帳・知らせを整える。 */
