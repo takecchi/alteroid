@@ -360,6 +360,7 @@ export {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerPool,
+  type ManagerTokenAssignmentPort,
   type VacateResult,
   type ManagerSendResult,
   type ManagerSummary,

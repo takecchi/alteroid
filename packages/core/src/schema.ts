@@ -1443,6 +1443,8 @@ export const jobSchema = z.object({
   // 名簿を引き直さず、その回に claim した相手を写す: 引き直すと、resume の最中に器が入れ替わった回に「新しい器へ載った」と書いて以後ずっと告げなくなるため
   // 名乗らない値で上書きしない（`undefined` を書き込まない）: 一度名乗った器の値を残すため
   sessionInstanceId: z.string().optional(),
+  // 配り方 balanced で割り当てた鍵（#6633）。id だけを持つ（値は台帳に書かない）。引き取り・resume で同じ鍵へ戻すために永続する
+  tokenAssignment: z.object({ tokenId: z.string().min(1) }).optional(),
   // `.strict()` にしない: 撤去した `managerProvider` が旧い行に残りうるが、`z.object` は未知の欄を黙って捨てるので読み込みは落ちないため
   // 退避済みトランスクリプト以外の生ログへの入口をここに持たない: runner のローカルパスを台帳に書くと、runner が入れ替わった瞬間に嘘になるため
   archiveIds: z.array(z.string()).optional(),

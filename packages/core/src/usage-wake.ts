@@ -61,7 +61,10 @@ interface UsageWakeDeps {
   journal: (entry: JournalEntryInput) => Promise<void>;
   /** `Pool#journalExchange` を束ねたもの（呼び出しの形は `exchange-kind-coverage.test.ts` が数える）。 */
   journalExchange: (role: 'inbound' | 'outbound', text: string) => Promise<void>;
-  tokenIdentity: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /** この委譲が走るべき鍵（割り当てが在ればそれ、無ければ現役。#6633）。 */
+  tokenIdentity: (
+    managerId: string,
+  ) => { tokenId: string; generation: number; fingerprint?: string } | undefined;
   /** 配線されていなければ `undefined`（掃きは何もしない）。 */
   tokenAvailability:
     | ((tokenId: string) => Promise<'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined>)
@@ -241,27 +244,33 @@ export class UsageWake {
       (managerId) => !d.records.has(managerId) && !d.usageWakeRetry.has(managerId),
     );
     if (candidates.length === 0) return nudged;
-    const identity = d.tokenIdentity();
-    if (identity === undefined || d.tokenAvailability === undefined) return nudged;
-    const availability = await d.tokenAvailability(identity.tokenId).catch(() => undefined);
-    if (availability !== 'ready') return nudged;
-    // 現役の鍵の行は(b)の2つ目・3つ目の材料で、世代が違えば要らないので、要る担当が現れるまで読まない。1周で1度だけ読む。
-    let activeRow: Pick<AgentToken, 'cooldownUntil' | 'lastRejectedAt' | 'updatedAt'> | undefined;
-    let activeRowRead = false;
-    const readActiveRow = async (): Promise<typeof activeRow> => {
-      if (!activeRowRead) {
-        activeRowRead = true;
-        try {
-          activeRow = (await d.stores.tokens.list()).find((token) => token.id === identity.tokenId);
-        } catch (error) {
-          noteDroppedRecord('枠で止まった担当の鍵の行の読み取り', identity.tokenId, error);
-          activeRow = undefined;
-        }
+    const tokenAvailability = d.tokenAvailability;
+    if (tokenAvailability === undefined) return nudged;
+    // 担当ごとに走るべき鍵が違いうる（#6633 の割り当て）ので、鍵の状態と行は鍵ごとに1周で1度だけ読む。
+    // 行は(b)の2つ目・3つ目の材料で、世代が違えば要らないので、要る担当が現れるまで読まない。
+    const availabilities = new Map<string, Promise<string | undefined>>();
+    const availabilityOf = (tokenId: string) => {
+      let pending = availabilities.get(tokenId);
+      if (pending === undefined) {
+        pending = tokenAvailability(tokenId).catch(() => undefined);
+        availabilities.set(tokenId, pending);
       }
-      return activeRow;
+      return pending;
+    };
+    type TokenRow = Pick<AgentToken, 'cooldownUntil' | 'lastRejectedAt' | 'updatedAt'>;
+    let rows: Promise<AgentToken[] | undefined> | undefined;
+    const readRow = async (tokenId: string): Promise<TokenRow | undefined> => {
+      rows ??= d.stores.tokens.list().catch((error: unknown) => {
+        noteDroppedRecord('枠で止まった担当の鍵の行の読み取り', tokenId, error);
+        return undefined;
+      });
+      return (await rows)?.find((token) => token.id === tokenId);
     };
     for (const managerId of candidates) {
       if (d.stopped()) break;
+      const identity = d.tokenIdentity(managerId);
+      if (identity === undefined) continue;
+      if ((await availabilityOf(identity.tokenId)) !== 'ready') continue;
       try {
         // 判定の間に別の契機が起こして印を下ろした・像に載せた担当は触らない。
         if (
@@ -278,7 +287,7 @@ export class UsageWake {
         let returned = heldGeneration !== undefined && heldGeneration !== identity.generation;
         if (!returned && job.usageStoppedAt !== undefined) {
           const stoppedAt = Date.parse(job.usageStoppedAt);
-          const row = await readActiveRow();
+          const row = await readRow(identity.tokenId);
           if (!Number.isNaN(stoppedAt) && row !== undefined) {
             const until = row.cooldownUntil;
             const updatedAt = row.updatedAt === undefined ? NaN : Date.parse(row.updatedAt);
@@ -519,14 +528,16 @@ export class UsageWake {
   ): Promise<void> {
     const d = this.#deps;
     if (d.stopped() || !d.usageStopped.has(managerId)) return;
-    const held = d.tokenIdentities.get(managerId)?.generation;
-    const identity = d.tokenIdentity();
+    const heldIdentity = d.tokenIdentities.get(managerId);
+    const held = heldIdentity?.generation;
+    const identity = d.tokenIdentity(managerId);
     if (identity === undefined) return;
     // 世代を覚えていない（再起動で引き取っただけの）セッションは、鍵の指紋で比べる（#4643 の畳みの判定と同じ）: 世代だけで比べると
     // 「分からない」で素通りし、回し手も古い指紋の観測を stale として無視するので、引き取りの借りを使い切った後は次の回転まで誰も起こさない
     const heldLabel =
       held !== undefined
-        ? held < identity.generation
+        ? // 鍵が違えば世代を比べない（#6633）: 配り方を切り替えると現役の世代と割り当ての世代（時刻）が混ざり、大小が意味を持たないため
+          heldIdentity?.tokenId !== identity.tokenId || held < identity.generation
           ? `世代 ${String(held)}`
           : undefined
         : heldFingerprint !== undefined &&
@@ -606,7 +617,7 @@ export class UsageWake {
         // 走っている間は起こさない（印は残す）: ターンが終われば次の回転が拾う。
         return false;
       }
-      const identity = d.tokenIdentity();
+      const identity = d.tokenIdentity(managerId);
       if (trigger === 'turn-ended') {
         if (identity === undefined || d.tokenAvailability === undefined) return false;
         const availability = await d.tokenAvailability(identity.tokenId).catch(() => undefined);

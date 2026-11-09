@@ -17,7 +17,10 @@ interface StaleTokenFoldPorts {
   resumedCount: ReadonlyMap<string, number>;
   rotationFoldDueAt: Map<string, number>;
   tokenIdentities: ReadonlyMap<string, { tokenId: string; generation: number }>;
-  tokenIdentity: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /** この委譲が走るべき鍵（割り当てが在ればそれ、無ければ現役。#6633）。 */
+  tokenIdentity: (
+    managerId: string,
+  ) => { tokenId: string; generation: number; fingerprint?: string } | undefined;
   tokenAvailability:
     | ((tokenId: string) => Promise<'ready' | 'cooling' | 'disabled' | 'invalidated' | undefined>)
     | undefined;
@@ -95,7 +98,7 @@ export class StaleTokenFold {
     // 判断を始めた時点の resume の回数を控える（#5207）: 畳む直前に読み直し、その間に別の経路が起こし直していたら畳まない
     const resumedAtStart = ports.resumedCount.get(managerId) ?? 0;
     const held = ports.tokenIdentities.get(managerId)?.generation;
-    const identity = ports.tokenIdentity();
+    const identity = ports.tokenIdentity(managerId);
     const active = identity?.generation;
     const activeFingerprint = identity?.fingerprint;
 
@@ -319,7 +322,7 @@ export class StaleTokenFold {
     // （2026-10-23 heosterra。担当のターンが1つ壊れ、#5205 の引き金にもなった）。畳まなければ、呼び手はいまのセッションへそのまま届ける
     const resumedMeanwhile = (ports.resumedCount.get(managerId) ?? 0) !== resumedAtStart;
     const heldNow = ports.tokenIdentities.get(managerId)?.generation;
-    const activeNow = ports.tokenIdentity()?.generation;
+    const activeNow = ports.tokenIdentity(managerId)?.generation;
     const caughtUp =
       byGeneration &&
       heldNow !== undefined &&
