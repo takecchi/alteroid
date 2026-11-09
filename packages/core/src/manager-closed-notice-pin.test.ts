@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { setStderrSinkForTesting } from './dropped-record.js';
 import { createManagerPool } from './manager.js';
+import type { ManagerRecord } from './manager.js';
+import { ManagerClosedNotice } from './manager-closed-notice.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { fakeRunnerRegistry } from './runner-registry.test-support.js';
 import type { InboxEvent, Job } from './schema.js';
+import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { createMemoryStores } from './testing.js';
+import { UsageWake } from './usage-wake.js';
 
 // 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: `#closeJob` の完了が何周で戻るかを数えるため。見張りの本体は使わない。
 const phases = vi.hoisted(() => [] as string[]);
@@ -760,5 +765,352 @@ describe('microtask の周回数（`#closeJob` の中の 3 本の位置を数え
       ]
     `);
     await s.pool.stop();
+  });
+});
+
+// 口（`emit`・`queueSynthesizedNotice`）が同期で throw したときの伝わり方。
+// 切り出し前（`Pool` の同名のメソッド）は、同期の段の throw はそのまま `#closeJob` の拒否になり、`#closeJob` は途中で止まる。
+// 口を `async` の皮で包むと、throw は捨てられた Promise の拒否へ移り、`#closeJob` は止まらずに最後まで走る（等価ではない）。
+// 期待の値は、今の作りの出力（`-u` で生成したインラインのスナップショット）を目で読んで確かめたもの（仕様を先に書いたものではない）。
+// 実時間では待たない（`setImmediate` で 2 回譲るだけ。`unhandledRejection` は microtask が尽きたあとに届くため）。
+// 口の差し替えは `SynthesizedNoticeWindows` のプロトタイプ（`Pool` が持つ実物の口の先）で行い、条件に合う呼び出しだけ投げる。
+describe('口が同期で throw したときの伝わり方（#closeJob の拒否）', () => {
+  const BOOM = 'boom-sync';
+
+  async function yieldMacrotask(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+
+  type Throwing = 'emit' | 'queue';
+
+  /**
+   * 条件に合う口の呼び出しだけ投げさせ、`closed` を流して、`#handleEvent` の経路から見えることを集める。
+   * 未処理の拒否を捕まえる処理（vitest 自身の受け手を一時的に外す）は `finally` で必ず元へ戻す。
+   */
+  async function probe(options: {
+    open: OpenOptions;
+    event: Extract<RunnerEvent, { type: 'closed' }>;
+    throwing: Throwing;
+    when: (args: readonly unknown[]) => boolean;
+  }) {
+    const s = await open(options.open);
+    const unhandled: string[] = [];
+    const stderrLines: string[] = [];
+    let settleUsageWake = 0;
+    const originalEmit = SynthesizedNoticeWindows.prototype.emit;
+    const originalQueue = SynthesizedNoticeWindows.prototype.queue;
+    const originalSettle = UsageWake.prototype.settleUsageWake;
+    const thrown: unknown[][] = [];
+    const maybeThrow = (args: unknown[]): void => {
+      if (options.when(args)) {
+        thrown.push(args);
+        throw new Error(BOOM);
+      }
+    };
+    if (options.throwing === 'emit') {
+      SynthesizedNoticeWindows.prototype.emit = function (
+        this: SynthesizedNoticeWindows,
+        ...args: Parameters<SynthesizedNoticeWindows['emit']>
+      ): void {
+        maybeThrow(args);
+        originalEmit.apply(this, args);
+      };
+    } else {
+      SynthesizedNoticeWindows.prototype.queue = function (
+        this: SynthesizedNoticeWindows,
+        ...args: Parameters<SynthesizedNoticeWindows['queue']>
+      ): void {
+        maybeThrow(args);
+        originalQueue.apply(this, args);
+      };
+    }
+    UsageWake.prototype.settleUsageWake = function (
+      this: UsageWake,
+      ...args: Parameters<UsageWake['settleUsageWake']>
+    ): Promise<void> {
+      settleUsageWake += 1;
+      return originalSettle.apply(this, args);
+    };
+    const savedListeners = process.listeners('unhandledRejection');
+    process.removeAllListeners('unhandledRejection');
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason instanceof Error ? reason.message : String(reason));
+    };
+    process.on('unhandledRejection', onUnhandled);
+    setStderrSinkForTesting((line) => {
+      if (line.includes('runner からの合図の処理'))
+        stderrLines.push(line.replace(/^\S+: \S+ /, ''));
+    });
+    try {
+      phases.length = 0;
+      await s.push(options.event);
+      await yieldMacrotask();
+      await s.closeWindows();
+      await yieldMacrotask();
+      return {
+        s,
+        thrownCount: thrown.length,
+        unhandled,
+        stderrLines,
+        settled: phases.includes('runner-event-settled:closed'),
+        retired: s.pool.denials(JOB_ID).length === 0,
+        settleUsageWake,
+      };
+    } finally {
+      setStderrSinkForTesting(null);
+      process.off('unhandledRejection', onUnhandled);
+      for (const listener of savedListeners) process.on('unhandledRejection', listener);
+      SynthesizedNoticeWindows.prototype.emit = originalEmit;
+      SynthesizedNoticeWindows.prototype.queue = originalQueue;
+      UsageWake.prototype.settleUsageWake = originalSettle;
+    }
+  }
+
+  const peerNotice = (args: readonly unknown[]): boolean =>
+    typeof args[2] === 'string' && args[2].includes('alteroid より');
+  const flushNote = (args: readonly unknown[]): boolean =>
+    typeof args[2] === 'string' && args[2].includes('背景処理の完了待ちで畳んでいた報告');
+
+  it('emit（peer の閉じの知らせ）が throw: #closeJob は同期の throw で途中で止まる（在庫の flush・像の畳み・枠の起こし直しは走らない）。拒否は #onEvent から呼び元へ戻り、握られず未処理の拒否になる', async () => {
+    const r = await probe({
+      open: { withheld: true, job: { pendingPeerCloseNotice: PENDING_PEER_CLOSE } },
+      event: closed('failed', 'マネージャーのセッションが落ちた: Error: boom'),
+      throwing: 'emit',
+      when: peerNotice,
+    });
+    expect({
+      thrownCount: r.thrownCount,
+      unhandled: r.unhandled,
+      stderrLines: r.stderrLines,
+      settled: r.settled,
+      retired: r.retired,
+      settleUsageWake: r.settleUsageWake,
+      messages: r.s.messages().map((message) => message.text.slice(0, 20)),
+    }).toMatchInlineSnapshot(`
+      {
+        "messages": [
+          "マネージャーのセッションが落ちた: Er",
+        ],
+        "retired": false,
+        "settleUsageWake": 0,
+        "settled": true,
+        "stderrLines": [
+          "runner からの合図の処理が例外で終わりました（type=closed managerId=mgr-closed-notice-pin）: Error: boom-sync
+      ",
+        ],
+        "thrownCount": 1,
+        "unhandled": [
+          "boom-sync",
+        ],
+      }
+    `);
+    await r.s.pool.stop();
+  });
+
+  it('emit（在庫の flush・窓なし）が throw: 同じく #closeJob は途中で止まり（像は畳まれない・枠の起こし直しも走らない）、未処理の拒否になる', async () => {
+    const r = await probe({
+      open: { withheld: true, job: REPORT_SEEN },
+      event: closed('done'),
+      throwing: 'emit',
+      when: flushNote,
+    });
+    expect({
+      thrownCount: r.thrownCount,
+      unhandled: r.unhandled,
+      stderrLines: r.stderrLines,
+      settled: r.settled,
+      retired: r.retired,
+      settleUsageWake: r.settleUsageWake,
+      messages: r.s.messages().map((message) => message.text.slice(0, 20)),
+    }).toMatchInlineSnapshot(`
+      {
+        "messages": [],
+        "retired": false,
+        "settleUsageWake": 0,
+        "settled": true,
+        "stderrLines": [
+          "runner からの合図の処理が例外で終わりました（type=closed managerId=mgr-closed-notice-pin）: Error: boom-sync
+      ",
+        ],
+        "thrownCount": 1,
+        "unhandled": [
+          "boom-sync",
+        ],
+      }
+    `);
+    await r.s.pool.stop();
+  });
+
+  it('queueSynthesizedNotice（silent done の closed_done_silent）が throw: async の noticeSilentDone の拒否が #closeJob の拒否になり、以降の段は走らない。未処理の拒否になる', async () => {
+    const r = await probe({
+      open: {},
+      event: closed('done'),
+      throwing: 'queue',
+      when: (args) => args[1] === 'closed_done_silent',
+    });
+    expect({
+      thrownCount: r.thrownCount,
+      unhandled: r.unhandled,
+      stderrLines: r.stderrLines,
+      settled: r.settled,
+      retired: r.retired,
+      settleUsageWake: r.settleUsageWake,
+      marked: (await r.s.job())?.silentDoneNotifiedFor,
+      messages: r.s.messages().map((message) => message.text.slice(0, 20)),
+    }).toMatchInlineSnapshot(`
+      {
+        "marked": "2026-11-01T01:00:00.000Z",
+        "messages": [],
+        "retired": false,
+        "settleUsageWake": 0,
+        "settled": true,
+        "stderrLines": [
+          "runner からの合図の処理が例外で終わりました（type=closed managerId=mgr-closed-notice-pin）: Error: boom-sync
+      ",
+        ],
+        "thrownCount": 1,
+        "unhandled": [
+          "boom-sync",
+        ],
+      }
+    `);
+    await r.s.pool.stop();
+  });
+
+  it('queueSynthesizedNotice（flush の窓あり closed_withheld_flush）が throw: 同期の flushWithheldAtClose の throw が #closeJob の拒否になり、像の畳み・枠の起こし直しは走らない', async () => {
+    const r = await probe({
+      open: { withheld: true },
+      event: closed('failed', 'マネージャーのセッションが落ちた: Error: boom'),
+      throwing: 'queue',
+      when: (args) => args[1] === 'closed_withheld_flush',
+    });
+    expect({
+      thrownCount: r.thrownCount,
+      unhandled: r.unhandled,
+      stderrLines: r.stderrLines,
+      settled: r.settled,
+      retired: r.retired,
+      settleUsageWake: r.settleUsageWake,
+      messages: r.s.messages().map((message) => message.text.slice(0, 20)),
+    }).toMatchInlineSnapshot(`
+      {
+        "messages": [
+          "マネージャーのセッションが落ちた: Er",
+        ],
+        "retired": false,
+        "settleUsageWake": 0,
+        "settled": true,
+        "stderrLines": [
+          "runner からの合図の処理が例外で終わりました（type=closed managerId=mgr-closed-notice-pin）: Error: boom-sync
+      ",
+        ],
+        "thrownCount": 1,
+        "unhandled": [
+          "boom-sync",
+        ],
+      }
+    `);
+    await r.s.pool.stop();
+  });
+
+  it('対照（throw しない）: 同じ場面で口が投げなければ、像は畳まれ、枠の起こし直しまで走り、未処理の拒否は出ない', async () => {
+    const r = await probe({
+      open: { withheld: true, job: REPORT_SEEN },
+      event: closed('done'),
+      throwing: 'emit',
+      when: () => false,
+    });
+    expect({
+      thrownCount: r.thrownCount,
+      unhandled: r.unhandled,
+      stderrLines: r.stderrLines,
+      settled: r.settled,
+      retired: r.retired,
+      settleUsageWake: r.settleUsageWake,
+    }).toMatchInlineSnapshot(`
+      {
+        "retired": true,
+        "settleUsageWake": 1,
+        "settled": true,
+        "stderrLines": [],
+        "thrownCount": 0,
+        "unhandled": [],
+      }
+    `);
+    await r.s.pool.stop();
+  });
+
+  describe('協力者を直に呼んだとき（同期の段は同期のまま throw し、async の段は拒否で返る）', () => {
+    function makeNotice(overrides: {
+      emit?: () => void;
+      queue?: () => void;
+      withheld?: boolean;
+      hasWindow?: boolean;
+    }): ManagerClosedNotice {
+      return new ManagerClosedNotice({
+        persist: () => Promise.resolve(),
+        journalExchange: () => Promise.resolve(),
+        emit:
+          overrides.emit ??
+          (() => {
+            /* 何もしない */
+          }),
+        queueSynthesizedNotice:
+          overrides.queue ??
+          (() => {
+            /* 何もしない */
+          }),
+        withheld: {
+          get: () => (overrides.withheld === true ? ({} as never) : undefined),
+          carryToWindow: () => undefined,
+        },
+        synthesized: {
+          hasWindow: () => overrides.hasWindow === true,
+          quotaOfFragment: () => undefined,
+        },
+      });
+    }
+    const record = (job: Partial<Job>): ManagerRecord => ({ job: { id: JOB_ID, ...job } }) as never;
+    const boom = (): void => {
+      throw new Error(BOOM);
+    };
+
+    it('noticePeerCloseAtEnd: emit が throw すると、Promise の拒否ではなく同期の throw として呼び元へ出る', () => {
+      const notice = makeNotice({ emit: boom });
+      let result: unknown;
+      expect(() => {
+        result = notice.noticePeerCloseAtEnd(
+          record({ pendingPeerCloseNotice: PENDING_PEER_CLOSE }),
+          closed('failed'),
+        );
+      }).toThrow(BOOM);
+      expect(result).toBeUndefined();
+    });
+
+    it('flushWithheldAtClose: emit（窓なし）・queueSynthesizedNotice（窓あり）が throw すると、同期の throw として呼び元へ出る', () => {
+      expect(() => {
+        makeNotice({ emit: boom, withheld: true }).flushWithheldAtClose(closed('done'));
+      }).toThrow(BOOM);
+      expect(() => {
+        makeNotice({ queue: boom, withheld: true, hasWindow: true }).flushWithheldAtClose(
+          closed('failed'),
+        );
+      }).toThrow(BOOM);
+    });
+
+    it('noticeSilentDone: queueSynthesizedNotice が throw しても同期には throw せず、返した Promise が拒否される', async () => {
+      const notice = makeNotice({ queue: boom });
+      let returned: Promise<void> | undefined;
+      expect(() => {
+        returned = notice.noticeSilentDone(record({}), closed('done'));
+      }).not.toThrow();
+      expect(returned).toBeInstanceOf(Promise);
+      await expect(returned).rejects.toThrow(BOOM);
+    });
   });
 });
