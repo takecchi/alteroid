@@ -19,6 +19,7 @@ exports[`委譲の要約を組む3つの道の出力を固定する > 道1と道
   "startedAt": "2026-10-01T00:00:00.000Z",
   "status": "running",
   "tokenGeneration": 1,
+  "tokenId": "tok-a",
   "updatedAt": "2026-10-01T00:00:00.000Z",
   "waiting": [],
   "workspace": {
@@ -51,6 +52,7 @@ exports[`委譲の要約を組む3つの道の出力を固定する > 道1と道
   "startedAt": "2026-10-01T00:00:00.000Z",
   "status": "running",
   "tokenGeneration": 1,
+  "tokenId": "tok-a",
   "updatedAt": "2026-10-01T00:00:00.000Z",
   "waiting": [],
   "workspace": {
@@ -101,6 +103,7 @@ exports[`委譲の要約を組む3つの道の出力を固定する > 道3: rest
     "startedAt": "2026-09-30T00:00:00.000Z",
     "status": "running",
     "tokenGeneration": 2,
+    "tokenId": "tok-b",
     "updatedAt": "2026-10-01T00:00:00.000Z",
     "waiting": [],
   },

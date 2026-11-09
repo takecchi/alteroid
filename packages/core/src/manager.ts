@@ -511,6 +511,11 @@ export interface ManagerSummary {
    * 一致・不一致の判定は焼かない（`lease` と同じ理由）。
    */
   activeTokenGeneration?: number;
+  /**
+   * セッションを起こしたときの鍵の id（#6646。`tokenGeneration` と同じ出所）。値ではない。
+   * 配り方 balanced では委譲ごとに違う。分からない（再起動の後など）ときは欄ごと消える（現役で埋めない）。
+   */
+  tokenId?: string;
   /** `tokenGeneration` が定義されているときは欄ごと消える（測れているのに理由を出さない）。 */
   tokenGenerationUnknownReason?: TokenGenerationUnknownReason;
   /**
@@ -3268,6 +3273,7 @@ class Pool implements ManagerPool {
       runnerListedAt: view.runnerListedAt,
       awaitingBackground: this.#withheld.awaitingBackgroundOf(job.id),
       tokenGeneration: this.#tokenIdentities.get(job.id)?.generation,
+      tokenId: this.#tokenIdentities.get(job.id)?.tokenId,
       // 割り当てが在る委譲は、現役ではなく割り当てと比べる（#6633）: 配り方 balanced では「現役と違う」は古い鍵を意味しない
       activeTokenGeneration:
         this.#tokenAssignment?.target(job.id)?.generation ?? view.activeTokenGeneration,

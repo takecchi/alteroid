@@ -87,6 +87,7 @@ function topologyManagerOf(
   activity: TopologyActivityTracker,
   nowMs: number,
   models: ManagerModels,
+  tokenLabels?: ReadonlyMap<string, string>,
 ): TopologyManager {
   const showRunningTool = mayShowRunningTool(manager);
   const waiting = manager.waiting.slice(0, TOPOLOGY_WAITING_PER_MANAGER).map((item) => ({
@@ -119,6 +120,7 @@ function topologyManagerOf(
     ...(manager.runnerListedAt === undefined ? {} : { runnerListedAt: manager.runnerListedAt }),
     ...(manager.usageStoppedAt === undefined ? {} : { usageStoppedAt: manager.usageStoppedAt }),
     ...models,
+    ...topologyTokenOf(manager.tokenId, tokenLabels),
     request: clipLine(manager.request, TOPOLOGY_REQUEST_LIMIT),
     startedAt: manager.startedAt,
     updatedAt: manager.updatedAt,
@@ -165,6 +167,19 @@ export interface TopologyInputs {
   activity: TopologyActivityTracker;
   modelsOf?: (manager: ManagerSummary) => ManagerModels;
   cloneModel?: string;
+  // 鍵の id → ラベル（#6646）。値は持たない。無ければ札は id だけを出す
+  tokenLabels?: ReadonlyMap<string, string>;
+  // クローンのセッションが使っている鍵の id。分からなければ欄を出さない（現役で埋めない）
+  cloneTokenId?: string;
+}
+
+function topologyTokenOf(
+  tokenId: string | undefined,
+  labels: ReadonlyMap<string, string> | undefined,
+): { token?: TopologySnapshot['clone']['token'] } {
+  if (tokenId === undefined) return {};
+  const label = labels?.get(tokenId);
+  return { token: label === undefined ? { tokenId } : { tokenId, label } };
 }
 
 export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
@@ -179,6 +194,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   const clone: TopologySnapshot['clone'] = {
     ...cloneState,
     ...(input.cloneModel === undefined ? {} : { model: input.cloneModel }),
+    ...topologyTokenOf(input.cloneTokenId, input.tokenLabels),
   };
 
   const onMap = input.managers
@@ -198,6 +214,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
       input.activity,
       input.nowMs,
       input.modelsOf?.(manager) ?? {},
+      input.tokenLabels,
     );
     const size = JSON.stringify(row).length;
     // 1本目は必ず載せる: 1本も載らない一覧は「居ない」と読めるため。
@@ -358,6 +375,9 @@ interface TopologyServiceDeps {
   storage: StorageHealthTracker;
   modelsOf: (manager: ManagerSummary) => ManagerModels;
   cloneModel?: string;
+  // #6646: 鍵のラベルとクローンの鍵。どちらも無い器（テスト等）では欄を出さない
+  tokenLabels?: () => Promise<ReadonlyMap<string, string>>;
+  cloneTokenId?: () => string | undefined;
   now?: () => number;
 }
 
@@ -380,6 +400,9 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     notePhase('topology:list');
     const managers = await deps.clone.managers.list();
     const unreadable = await deps.unreadableJobs();
+    // 読めなくても地図は出す: ラベルは飾りで、無ければ id だけを出せば足りるため
+    const tokenLabels = await deps.tokenLabels?.().catch(() => undefined);
+    const cloneTokenId = deps.cloneTokenId?.();
     notePhase(`topology:build:${String(managers.length)}`);
     const value = buildTopologySnapshot({
       nowMs,
@@ -392,6 +415,8 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       activity: deps.activity,
       modelsOf: deps.modelsOf,
       ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
+      ...(tokenLabels === undefined ? {} : { tokenLabels }),
+      ...(cloneTokenId === undefined ? {} : { cloneTokenId }),
     });
     notePhase('topology:build-done');
     cached = { at: nowMs, value };

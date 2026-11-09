@@ -233,7 +233,7 @@ function EmptyNote({ box, text }: { box: LaidContainer['box']; text: string }) {
 
 function summarize({ clone, db, runners, managers, externals }: TopologyScene): string {
   const parts = [
-    `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}${agentSummary(clone.agent)}`,
+    `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}${agentSummary(clone.agent, true)}`,
     // 外部サービスは状態を言わない: 観測していないため
     ...(externals ?? []).map(
       (x) =>
@@ -248,15 +248,16 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
         .map((w) => `${w.label} ${STATUS[w.status].label}${agentSummary(w.agent)}`)
         .join('、');
       const why = m.status === 'waiting' && m.task ? `（${m.task}）` : '';
-      const agent = m.group === true ? '' : agentSummary(m.agent);
+      const agent = m.group === true ? '' : agentSummary(m.agent, true);
       return `マネージャー ${m.label}: ${STATUS[m.status].label}${why}${agent}${ws ? `。作業者 ${ws}` : ''}`;
     }),
   ];
   return parts.join('。');
 }
 
-function agentSummary(agent: TopologyAgent | undefined): string {
-  return `（モデル ${agent?.model ?? '不明'}）`;
+function agentSummary(agent: TopologyAgent | undefined, withToken = false): string {
+  const token = withToken ? `、トークン ${agent?.token ?? '不明'}` : '';
+  return `（モデル ${agent?.model ?? '不明'}${token}）`;
 }
 
 const CONTAINER_HINT: Record<string, string> = {
@@ -379,6 +380,8 @@ function NodeIcon({ node, className }: { node: LaidNode; className?: string }) {
 }
 
 const UNKNOWN_AGENT = '不明（名乗りを受けていない）';
+// 現役で埋めない: balanced では担当ごとに鍵が違い、現役はその担当の鍵ではないため（#6646）
+const UNKNOWN_TOKEN = '不明（このセッションの鍵を観測していない）';
 
 function NodeDetail({ node }: { node: LaidNode }) {
   const s = node.status ? STATUS[node.status] : undefined;
@@ -398,6 +401,15 @@ function NodeDetail({ node }: { node: LaidNode }) {
                 mono: Boolean(node.agent.model),
               },
             ]),
+        ...(node.agent !== undefined && (node.kind === 'clone' || node.kind === 'manager')
+          ? [
+              {
+                label: 'トークン',
+                value: node.agent.token ?? UNKNOWN_TOKEN,
+                mono: Boolean(node.agent.token),
+              },
+            ]
+          : []),
         ...(node.details ?? []).map((d) => ({ label: d.label, value: d.value, mono: d.mono })),
       ]}
     />
@@ -453,6 +465,11 @@ function Node({
       </span>
       <span className="flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
         <span className="shrink-0">{KIND[node.kind].role}</span>
+        {node.agent?.token ? (
+          <span className="max-w-[45%] shrink-0 truncate font-mono" title={node.agent.token}>
+            {node.agent.token}
+          </span>
+        ) : null}
         {node.task ? <span className="min-w-0 truncate">{node.task}</span> : null}
       </span>
     </button>
