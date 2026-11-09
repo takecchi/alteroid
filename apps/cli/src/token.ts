@@ -51,6 +51,24 @@ interface TokensView {
   activeUnreadable?: { reason: string };
   // プールの版。読んだ一覧で全文置換するときに `ifMatch` として返す（古いデーモンは返さない）
   version?: string;
+  // 鍵ごとの枠の最後の観測（#6633）。欄が無いのは古いデーモン
+  loads?: TokenLoad[];
+}
+
+// 表示に要る形だけを持つ（`AccountUsageState` の全部は写さない）
+interface TokenLoad {
+  tokenId: string;
+  state:
+    | {
+        state: 'ok';
+        usage: {
+          at: string;
+          limitsAvailable: boolean;
+          windows: { kind: string; utilization?: number }[];
+        };
+      }
+    | { state: 'failed' | 'unavailable'; at: string; reason: string }
+    | { state: 'unknown' };
 }
 
 interface AgentTokenInput {
@@ -215,6 +233,45 @@ export async function tokenListCommand(): Promise<void> {
     if (stamps !== null) stdout.write(`   ${stamps}\n`);
     const status = describeStatus(token, now);
     if (status !== null) stdout.write(`   ${status}\n`);
+    if (view.loads !== undefined) stdout.write(`   ${describeTokenLoad(view.loads, token.id)}\n`);
+  }
+}
+
+const WINDOW_LABELS: Readonly<Record<string, string>> = {
+  five_hour: '5時間',
+  seven_day: '週',
+  seven_day_opus: '週（Opus）',
+  seven_day_sonnet: '週（Sonnet）',
+};
+
+// 測っていない鍵を 0% と書かない: 「空いている」と読めるため（#6633）
+export function describeTokenLoad(loads: readonly TokenLoad[], tokenId: string): string {
+  const load = loads.find((entry) => entry.tokenId === tokenId);
+  if (load === undefined) return '枠: まだ測っていない（デーモンの起動後、この鍵の観測が無い）';
+  const { state } = load;
+  switch (state.state) {
+    case 'ok': {
+      const parts = state.usage.windows.flatMap((window) =>
+        window.utilization === undefined
+          ? []
+          : [
+              `${WINDOW_LABELS[window.kind] ?? window.kind} ${String(Math.round(window.utilization))}%`,
+            ],
+      );
+      if (parts.length === 0) return `枠: 使用率が取れない（${state.usage.at} 時点）`;
+      return `枠: ${parts.join(' / ')}（${state.usage.at} 時点）`;
+    }
+    case 'failed':
+    case 'unavailable':
+      return `枠: 測れなかった — ${state.reason}（${state.at}）`;
+    case 'unknown':
+      return '枠: まだ測っていない';
+    default: {
+      // 実行時の倒れ先: 新しいデーモンが知らない状態を返しても、一覧の表示ごと落とさない
+      const unhandled: never = state;
+      void unhandled;
+      return '枠: この CLI が知らない状態（CLI が古い）';
+    }
   }
 }
 

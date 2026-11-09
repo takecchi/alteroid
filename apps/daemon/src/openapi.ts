@@ -1299,6 +1299,9 @@ export const tokensListResponseSchema = tokensResponseSchema.extend({
     .optional(),
   activeNever: z.literal(true).optional(),
   activeUnreadable: z.object({ reason: z.string() }).optional(),
+  // 鍵ごとの枠の最後の観測（#6633。デーモンのメモリにだけ在る）。測っていない鍵の行は無い（0% で埋めない）。
+  // 欄そのものが無いのは、鍵ごとに測らない構成か古いデーモン
+  loads: z.array(z.object({ tokenId: z.string(), state: accountUsageStateSchema })).optional(),
 });
 
 // 表示の読み直しに失敗したときは `tokens` を載せない: 空の `tokens` は「プールが空」と読めてしまうため。

@@ -89,6 +89,7 @@ import {
 } from './runner-event-journal-fold.js';
 import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
+import { createTokenLoadBook, startTokenLoadSampling } from './token-load.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
 import {
@@ -721,15 +722,28 @@ export async function main(): Promise<void> {
   const tokenRotationJournalFold = new TokenRotationJournalFold();
 
   // 実セッションに相乗りしない: ターンを回した直後のセッションへ usage 要求を出すと `ProcessTransport is not ready for writing` で失敗するため。
+  // 鍵ごとの枠の帳面（#6633）: 現役は下の probe が、それ以外は `tokenLoadSampler` が書く
+  const tokenLoadBook = createTokenLoadBook();
+
   const usagePoller = startUsagePolling({
     queryFn: query,
     cwd: paths.root,
     env: () => agentTokenHolder.values(),
     identity: () => agentTokenHolder.identity(),
     onState: (state, measuredBy) => {
+      if (measuredBy !== undefined) tokenLoadBook.record(measuredBy.tokenId, state);
       tokenWatch?.observeAccount(state, measuredBy);
     },
     withheldEnvKeys: storage.withheldEnvKeys,
+  });
+
+  const tokenLoadSampler = startTokenLoadSampling({
+    queryFn: query,
+    cwd: paths.root,
+    withheldEnvKeys: storage.withheldEnvKeys,
+    tokens: () => stores.tokens.list(),
+    activeTokenId: () => agentTokenHolder.identity()?.tokenId,
+    book: tokenLoadBook,
   });
 
   // 回転で撒いた結果は担い手のプールへも渡す（#4725）: 落ちた runner へ撒き直させるため（`agentTokenPushes`）
@@ -1132,6 +1146,7 @@ export async function main(): Promise<void> {
     pluginDistribution: pluginDistributionService,
     codexAuth: codexAuthService,
     tokens: tokenPoolService,
+    tokenLoads: () => tokenLoadBook.snapshot(),
     clearSessionLog: storage.clearSessionLog,
     attachmentCopiesDir: attachmentCopiesDir(paths.root),
     attachmentLimits: storage.attachmentLimits,
@@ -1192,6 +1207,7 @@ export async function main(): Promise<void> {
     scheduler.stop();
     dailyReportCatchup?.stop();
     usagePoller.stop();
+    tokenLoadSampler.stop();
     managerPoller.stop();
     archiveFolder.stop();
     attachmentPruner.stop();
