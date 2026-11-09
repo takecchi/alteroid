@@ -20,7 +20,6 @@ import type {
   AgentDelegationNotified,
   AgentDelegationStarted,
   AgentEvent,
-  AgentPermissionDenial,
   AgentTurnEnded,
 } from './agent-events.js';
 import type {
@@ -107,7 +106,7 @@ import {
   failedContextUsageObservation,
 } from './context-usage.js';
 import { controlRequestWithin, SESSION_ALLOW_RULES_TIMEOUT_MS } from './control-deadline.js';
-import { denialInputShape, type DeniedRecord } from './denial-shape.js';
+import type { DeniedRecord } from './denial-shape.js';
 import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
@@ -260,6 +259,7 @@ import {
 } from './session-allow-rules.js';
 import { parseDelegatedPermissionRules } from './delegated-permission-rules.js';
 import { RunnerBashGuard } from './runner-bash-guard.js';
+import { RunnerDenialNotice } from './runner-denial-notice.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -2747,6 +2747,7 @@ class RunnerSession {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #bashGuardInspector: RunnerBashGuard;
+  readonly #denialNotice: RunnerDenialNotice;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
@@ -2941,6 +2942,18 @@ class RunnerSession {
       actorOf: (record) => actorOf(this.#id, record),
       note: (text) => this.#note(text),
       tryObservation: (label, fn) => this.#tryObservation(label, fn),
+    });
+    this.#denialNotice = new RunnerDenialNotice({
+      settleWorkerTool: (toolUseId) => this.#settleWorkerTool(toolUseId),
+      settleSessionAllowRuleUse: (toolUseId, outcome) =>
+        this.#settleSessionAllowRuleUse(toolUseId, outcome),
+      oneShotAllowedToolUses: this.#oneShotAllowedToolUses,
+      allowedButDenied: this.#allowedButDenied,
+      preToolInputHeads: this.#preToolInputHeads,
+      denied: this.#denied,
+      note: (text) => this.#note(text),
+      emit: (event) => this.#emit(event),
+      managerId: this.#id,
     });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
@@ -4378,7 +4391,7 @@ class RunnerSession {
 
       case 'permission_denied': {
         // 両方読む: `auto` ではこの合図が唯一の生の合図で、SDK 曰く best-effort のため authoritative な `result.permission_denials` と併読する
-        this.#noteDenial(event.denial, 'live');
+        this.#denialNotice.noteDenial(event.denial, 'live');
         return;
       }
 
@@ -4533,7 +4546,7 @@ class RunnerSession {
     }
 
     // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載り、ゼロ埋めで害が出る値でもないため
-    for (const denial of event.denials) this.#noteDenial(denial, 'result');
+    for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');
 
     // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
     const failure = event.failure ?? rejected ?? undefined;
@@ -4918,79 +4931,6 @@ class RunnerSession {
     const closedWindow = this.#workerWaitWindow.close();
     if (closedWindow === null) return;
     this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
-  }
-
-  // `#progressed` を立てない: 拒否は手が動いた印ではなく、立てると resume が効かず終わった回を「もう作業した」と誤認して生ログからの作り直しを止めるため
-  #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
-    const tool = denial.tool ?? '(不明な道具)';
-    const input = denial.input;
-    if (typeof denial.toolUseId === 'string') this.#settleWorkerTool(denial.toolUseId);
-    // フックと拒否の知らせのどちらが先に届いても決着させる（先に届いた方だけが note を出す。#4905）
-    this.#settleSessionAllowRuleUse(denial.toolUseId, { kind: 'denied', via });
-
-    // SDK が付けてきた `denial.toolUseId` で引く: 下で組む代用の `toolUseId` は実在の id ではなく、無関係な一致が起きうるため
-    if (typeof denial.toolUseId === 'string') {
-      const funneled = this.#oneShotAllowedToolUses.get(denial.toolUseId);
-      if (funneled !== undefined) {
-        this.#oneShotAllowedToolUses.delete(denial.toolUseId);
-        // 同じ呼び出しの次の拒否では確認を上げない（#4904）。期限は許可と同じ: 過ぎれば別の機会として扱うため
-        this.#allowedButDenied.set(funneled.key, {
-          expiresAt: funneled.at + ONE_SHOT_ALLOW_TTL_MS,
-        });
-        this.#note(
-          `1回だけの許可（issue #1105 P1、${funneled.actor}・${funneled.tool}）で allow を` +
-            `返した呼び出しが、それでも拒否された（合図の出所: ${via}）。分類器がこの allow を` +
-            `分類器へ回した（リモートの機能フラグ）か、deny 規則が上書きしたかのどちらか` +
-            `（あるいは両方）で、alteroid 側からは切り分けられない。この許可はいまは効いて` +
-            `いない可能性がある。分類器が迂回・敵対の型で止めた呼び出しは、クローンの allow や` +
-            `担当の伝言を人間の確認と見なさないため、同じ入力の撃ち直しは通らないことがある。` +
-            `同じ呼び出しへの確認は重ねて上げない（#4904）。`,
-        );
-      }
-    }
-
-    // 道具名だけで束ねない: 「同じ拒否の2度目」と「live を見逃した初出」が潰れるため（`tool_use_id` は SDK の型で必須なのでこの経路はいま踏まれない）
-    // 入力そのものを鍵に混ぜない: 鍵は `onForget` が日誌へそのまま並べ、道具の入力にはトークンが入りうるため
-    const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
-    // 引いたら消す: 生の入力を持ち回っていないので、同じ tool_use_id の拒否がもう一度来ても作り直せないため
-    const inputHead = this.#preToolInputHeads.get(toolUseId);
-    if (inputHead !== undefined) this.#preToolInputHeads.delete(toolUseId);
-    // `has` だけで弾かない: 入力を持つのは `via: 'result'` だけで、弾くと入力を持つ authoritative な記録が捨てられ日誌に「何を実行しようとしたか」が残らないため
-    // `permission_denied` をもう一度降ろさず既存の `note` で足す: デーモンは拒否を1件ずつ数えており二重計上で escalation が段を跨いで飛ぶため。新しい種別を足すとまだ知らないデーモンの `safeParse` が落ちる
-    const seen = this.#denied.get(toolUseId);
-    if (seen !== undefined) {
-      if (seen.input || input === undefined) return;
-      this.#denied.set(toolUseId, { input: true });
-      const shape = denialInputShape(input);
-      if (shape !== undefined) {
-        this.#note(
-          `先に降ろした ${tool} の拒否について、ターン終わりの記録（via: result）に` +
-            `入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: ${shape}`,
-        );
-      }
-      return;
-    }
-    this.#denied.set(toolUseId, { input: input !== undefined });
-    // 文字列であることを確かめてからしか載せない: 型を保証しないまま `z.string().optional()` へ渡すと、SDK の型変化で数値や null が黙って通るため。無いものは作り物を出さずキーごと省く
-    // `actor` は `via: 'live'` のときだけ載せる: `result` 側の SDK 型には `agent_id` が無く、「マネージャーだった」と決めつけないため
-    // `agent_type` を作り物で埋めない: SDK の型に無い情報のため
-    const agentId = denial.agentId;
-    const agentType = denial.agentType;
-    const actor = via === 'live' ? actorOf(this.#id, { agentId, agentType }) : undefined;
-    this.#emit({
-      type: 'permission_denied',
-      managerId: this.#id,
-      toolUseId,
-      tool,
-      input,
-      via,
-      ...(actor === undefined ? {} : { actor }),
-      ...(denial.reason === undefined ? {} : { reason: denial.reason }),
-      ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
-      ...(denial.message === undefined ? {} : { message: denial.message }),
-      // `input` の欄には詰めない: `runner-protocol.ts` の `input` の doc が禁じているため（別の任意欄に載せる）
-      ...(inputHead === undefined ? {} : { inputHead }),
-    });
   }
 
   // 分類ロジックを複製しない: SDK の値をそのまま写し、集計は読む側（`context-usage.ts`）が1箇所で持つため
