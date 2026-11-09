@@ -145,6 +145,7 @@ import type {
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import { isManagerInFlight } from './job-status-running.js';
+import { ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-apply.js';
 import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
@@ -1831,6 +1832,8 @@ class Pool implements ManagerPool {
   readonly #closedFront: ManagerClosedFrontReceiver;
   /** `report` の段 2: 報告の中身を台帳へ写す同期の段（`#handleReport` が `await this.#persist(record)` の手前で呼ぶ。`await` で包まない）。 */
   readonly #reportApply: ManagerReportApply;
+  /** `closed` の本体（`#closeJob`）の頭の、台帳へ写す同期の段（`#closeJob` が `await` を挟まずに呼ぶ）。 */
+  readonly #closedApply: ManagerClosedApply;
 
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -2205,6 +2208,11 @@ class Pool implements ManagerPool {
       nowIso: () => this.#nowIso(),
       usageStopped: this.#usageStopped,
       resetTimeSkewMatches: this.#resetTimeSkewMatches,
+    });
+    this.#closedApply = new ManagerClosedApply({
+      now: () => this.#now(),
+      nowIso: () => this.#nowIso(),
+      withdrawWaiting: (record, reason) => this.#withdrawWaiting(record, reason),
     });
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
@@ -6687,9 +6695,14 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     event: Extract<RunnerEvent, { type: 'closed' }>,
   ): Promise<void> {
-    this.#applyClosedToJob(record, event);
+    this.#closedApply.applyClosedToJob(record, event);
     await this.#persist(record, { sessionClosed: true });
-    this.#notePidsSaturationAtClose(record, event);
+    // `runnerId` が無い分は無実の器を沈めないために数えない。印の判定（`failed` / `lost`・構造化された値だけ）と知らせる順（eagain → fork-denied）は `pidsSaturationSignsOf` が持つ。
+    if (record.job.runnerId !== undefined) {
+      for (const sign of pidsSaturationSignsOf(event)) {
+        this.#runners.notePidsSaturationSign(record.job.runnerId, sign);
+      }
+    }
     const markedByClosed =
       event.status === 'failed' ? await this.#noteClosedFailure(record, event) : undefined;
     this.#noticePeerCloseAtEnd(record, event);
@@ -6720,69 +6733,6 @@ class Pool implements ManagerPool {
     }
     // 枠でセッションごと落ちた回は `report` が出ず、ここしか通らない。`#retire` の後で呼ぶ: 起こし直しは `send()` に相乗りし、像が無ければ台帳から読み直すので resume できる。逆順だと `#retire` が `send()` の載せ直した像を消す。
     await this.#usageWake.settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
-  }
-
-  // `closed` の段3-1: 状態・貸し出し・直近の失敗の事実・未 push の観測を台帳（`record.job`）へ写す。同期のまま保つ。
-  #applyClosedToJob(record: ManagerRecord, event: Extract<RunnerEvent, { type: 'closed' }>): void {
-    record.job.status = event.status;
-    // 閉じたのだから背景待ちの保留も下ろす（`closed(done)` は `status` が `done` のままなので `#persist` の掃除では落ちない）
-    delete record.job.awaitingBackgroundSince;
-    this.#withdrawWaiting(record, `セッションが閉じた（status=${event.status}）`);
-    record.attached = false;
-    // 貸し出しは期限を待たず返す（`closed` は持ち主自身が「もう走っていない」と言っている）: 返さないと引き取りが猶予のぶん遅れる。消さずに印を立てる: 消すと世代（`fence`）まで消え、遅れて届いた返却で runner の世代より小さい世代を渡し命令が拒まれ続ける。
-    if (record.job.lease !== undefined) {
-      record.job.lease = releaseLease(record.job.lease, this.#now());
-    }
-    // 台帳へも残す: 受信箱は流れるので、本文だけでは振り返る面（`manager_list` / `manager_report`）から復元できない。無い回に既定値を作らない。
-    // 先に前の回の値を下ろす: 欄が無い回に下ろさないと、続けて `failed` で閉じたとき1回目の値が今回の落ち方として残る。`status` では絞らない。
-    delete record.job.lastSystemError;
-    if (event.status === 'failed' && event.systemError !== undefined) {
-      record.job.lastSystemError = {
-        ...event.systemError,
-        at: this.#nowIso(),
-      };
-    }
-    // `lastSystemError` と同じ理由・同じ条件（`failed` の回だけ）で、先に前の回の値を下ろす。
-    delete record.job.lastCgroupEvents;
-    if (event.status === 'failed' && event.cgroupEvents !== undefined) {
-      record.job.lastCgroupEvents = {
-        ...event.cgroupEvents,
-        at: this.#nowIso(),
-      };
-    }
-    // `unpushedWork` は `status` で絞らない: 「どの枝を見ればよいか」は失敗特有の事実ではない。同じ上書きガードを通す: `report` / `tool_use` の fire-and-forget が非同期に競走し、`closed` の処理より後に解決しうる。
-    // `#recordUnpushedWorkObservation` を直接呼ばない: 自分で `#persist` するので、直後の `#persist` と二重に書き込む。
-    if (event.unpushedWork !== undefined) {
-      const at = this.#nowIso();
-      const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
-      if (
-        isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
-      ) {
-        record.job.lastUnpushedWorkObservation = carryKnownBranches(
-          observation,
-          record.job.lastUnpushedWorkObservation,
-        );
-      }
-    }
-  }
-
-  // `closed` の段3-2: `failed` / `lost` の落ち方から、器の pids 飽和の印を立てる。同期のまま保つ。
-  #notePidsSaturationAtClose(
-    record: ManagerRecord,
-    event: Extract<RunnerEvent, { type: 'closed' }>,
-  ): void {
-    // `failed` だけでなく `lost` も見る: SIGABRT の `failed` の後の resume が `spawn … EAGAIN` で `lost` になる形で、後者は `failed` 専用の `noteManagerFailed` に届かない。判定は構造化された値だけ。`runnerId` が無い分は無実の器を沈めないために数えない。
-    if (
-      (event.status === 'failed' || event.status === 'lost') &&
-      record.job.runnerId !== undefined
-    ) {
-      if (event.systemError?.code === 'EAGAIN') {
-        this.#runners.notePidsSaturationSign(record.job.runnerId, 'eagain');
-      }
-      if ((event.cgroupEvents?.pidsMaxDelta ?? 0) > 0) {
-        this.#runners.notePidsSaturationSign(record.job.runnerId, 'fork-denied');
-      }
-    }
   }
 
   // `closed` の段3-3: `failed` で閉じた回の知らせ（日誌・枠の印・合流窓・器の失敗の計上）。枠の印を新しく立てたときはその理由を返す。
