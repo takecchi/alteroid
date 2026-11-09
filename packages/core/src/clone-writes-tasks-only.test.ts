@@ -133,6 +133,7 @@ describe('台帳の書き込みの道具を案内する文が残っていない'
     'manager-session.ts',
     'manager-tool-use.ts',
     'manager-parked-peers.ts',
+    'manager-report-apply.ts',
     'manager-waiting.ts',
   ])('%s に、消した道具の名前が残っていない', (file) => {
     // tools.ts は道具の実装ソース（tools.ts と clone-tools-*.ts）を全部読む。入口は clone-tools-sources.test-support.ts
