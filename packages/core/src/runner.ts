@@ -20,7 +20,6 @@ import type {
   AgentDelegationNotified,
   AgentDelegationStarted,
   AgentEvent,
-  AgentTurnEnded,
 } from './agent-events.js';
 import type {
   AgentContextOutcome,
@@ -110,7 +109,6 @@ import {
   noteBackgroundFailure,
   noteDroppedRecord,
   noteMissingRecordSource,
-  noteUnclassifiedFailure,
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
   reasonOf,
@@ -256,6 +254,7 @@ import { OWNER_RECORDABLE_TASK_TYPES } from './runner-background-task-rows.js';
 import { RunnerStopObserver } from './runner-stop-observer.js';
 import { RunnerSubagentStopObserver } from './runner-subagent-stop.js';
 import { RunnerDenialNotice } from './runner-denial-notice.js';
+import { RunnerFailureClassifier, resultTextOf } from './runner-failure-classify.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
@@ -334,7 +333,7 @@ import {
   type SdkFailure,
 } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
-import { classifyFailedTurnUsageNotice, classifyUsageNotice } from './usage-limits.js';
+import { classifyUsageNotice } from './usage-limits.js';
 
 export { SUBAGENT_BACKGROUND_WAIT_MS };
 export { OWNER_RECORDABLE_TASK_TYPES };
@@ -727,7 +726,6 @@ const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
  * そこではトークンプールの鍵を降ろす先が無く（`setCredentials` が断る）、マネージャーの子には器の鍵が届かない。
  * 別プロセスの runner（`apps/runner`）は必ず器を作るので、この案内は出ない（本番の runner の挙動は変えない）。
  */
-const NOT_LOGGED_IN_PATTERN = /not logged in/i;
 const NO_CREDENTIAL_DIR_HINT =
   '鍵の置き場（ALTEROID_CREDENTIAL_DIR）が無いと、ローカル runner のマネージャーへ鍵が届かない。' +
   'この runner には鍵の置き場が無い（同一プロセスの runner は置き場を持たない）。' +
@@ -2701,6 +2699,7 @@ class RunnerSession {
   readonly #stopObserver: RunnerStopObserver;
   readonly #subagentStopObserver: RunnerSubagentStopObserver;
   readonly #denialNotice: RunnerDenialNotice;
+  readonly #failureClassifier: RunnerFailureClassifier;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
@@ -2923,6 +2922,12 @@ class RunnerSession {
       note: (text) => this.#note(text),
       emit: (event) => this.#emit(event),
       managerId: this.#id,
+    });
+    this.#failureClassifier = new RunnerFailureClassifier({
+      emit: (event) => this.#emit(event),
+      managerId: this.#id,
+      credentials: this.#credentials,
+      unclassifiedFailures: this.#sdkSession.unclassifiedFailures,
     });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
@@ -4529,31 +4534,8 @@ class RunnerSession {
 
     this.#emitAnsweredUsage(event, failure, contextUsage);
 
-    // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
-    // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
-    // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
-    // 鍵の器が無い器で `Not logged in` が来たときの案内。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
-    let noCredentialDirHint = false;
-    if (failure !== undefined) {
-      // 候補と順序（応答の本文を入れない理由を含む）は `classifyFailedTurnUsageNotice` に1つだけ置く: クローンの層（`clone.ts`）と同じ判定を使うため
-      const notice = classifyFailedTurnUsageNotice(failure.text, event.errorLines);
-      if (notice !== undefined) {
-        this.#emit({ type: 'usage_notice', managerId: this.#id, notice });
-      } else {
-        // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
-        noCredentialDirHint =
-          this.#credentials === undefined &&
-          [failure.text, resultTextOf(event).text, ...event.errorLines].some((text) =>
-            NOT_LOGGED_IN_PATTERN.test(text),
-          );
-        noteUnclassifiedFailure(
-          this.#sdkSession.unclassifiedFailures,
-          this.#id,
-          failure.via,
-          failure.code,
-        );
-      }
-    }
+    // 失敗の分類（`usage_notice` の送出・分類できなかった失敗の跡・鍵の置き場の案内の判定）は `RunnerFailureClassifier` へ出した。戻り値は報告の末尾に案内を足すか
+    const noCredentialDirHint = this.#failureClassifier.classify(event, failure);
 
     // 止めた後の失敗の結果は立て直さない（#5205。`#read` の他の2か所と揃える）: 畳み（stop）で終わったターンの失敗を「resume が戻れなかった」と読み、
     // 止めたはずのセッションの中に CLI を作り直していた。作り直した CLI は名簿から外れたまま古い世代で出来事を出し続け、stop も答えも届かない
@@ -6315,14 +6297,6 @@ function describeRejectionCodes(codes: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
   return [...counts].map(([code, n]) => `${code} ×${String(n)}`).join(' / ');
-}
-
-// `empty` は構造的な事実で、返す文字列（`（報告なし）` 等）そのものではない: 文字列を変えずに構造だけを添える
-function resultTextOf(event: AgentTurnEnded): { text: string; empty: boolean } {
-  if (event.body.length > 0) return { text: event.body, empty: false };
-  if (event.outcome !== undefined)
-    return { text: `（結果なしで終了: ${event.outcome}）`, empty: false };
-  return { text: '（報告なし）', empty: true };
 }
 
 function withAnswers(input: Record<string, unknown>, message: string): Record<string, unknown> {
