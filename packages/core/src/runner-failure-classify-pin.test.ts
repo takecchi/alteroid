@@ -520,13 +520,15 @@ describe('出来事が出る周回数と、emit が投げたときの伝わり�
     `);
   });
 
-  it('usage_notice の emit が同期で投げると、report は出ない（その後ろの処理は走らない）', async () => {
+  it('usage_notice の emit が同期で投げると、report は出ず、セッションが閉じる（その後ろの処理は走らない）', async () => {
     let rig: Rig | undefined;
     const lines = await captureStderr(async () => {
       rig = await open({ throwOn: (event) => event.type === 'usage_notice' });
       result(rig, { text: ORG_SPEND_LIMIT, isError: true });
-      await tick();
-      await tick();
+      // 投げた後にセッションが閉じる（`closed`）のは非同期で、いつ届くかが揺れる: 届くまで回す（実時間では待たない）
+      for (let ticks = 0; ticks < 100 && !rig.events.some((e) => e.type === 'closed'); ticks += 1) {
+        await tick();
+      }
     });
     if (rig === undefined) throw new Error('rig が無い');
     expect({
@@ -539,6 +541,7 @@ describe('出来事が出る周回数と、emit が投げたときの伝わり�
           "session",
           "context_usage",
           "usage_notice",
+          "closed",
         ],
       }
     `);
