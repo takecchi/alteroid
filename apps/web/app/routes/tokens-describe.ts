@@ -1,6 +1,8 @@
 import type {
   AgentTokenView,
   TokenAvailability,
+  TokenDistribution,
+  TokenLoad,
   TokenRecovery,
   TokenRotationEntry,
   TokenRotationSettings,
@@ -111,6 +113,71 @@ export const ROTATE_ON_OPTIONS = Object.keys({
   overage_exhausted: true,
   off: true,
 } satisfies Record<TokenRotationSettings['rotateOn'], true>) as TokenRotationSettings['rotateOn'][];
+
+// 欄が無いのを failover と読む: サーバの distributionOf と同じ読み方で、未設定の行は従来の配り方で動いているため
+export function describeDistribution(distribution: TokenRotationSettings['distribution']): string {
+  switch (distribution) {
+    case undefined:
+      return '1本ずつ使い、止まったら次へ切り替える（未設定。既定）';
+    case 'failover':
+      return '1本ずつ使い、止まったら次へ切り替える';
+    case 'balanced':
+      return '作業ごとに空いているトークンを割り当てて、使う量をならす';
+    default:
+      // 投げない: 送られてくる値で、サーバのほうが新しい窓を先に持つため
+      return describeUnknown(distribution, '配り方');
+  }
+}
+
+// ROTATE_ON_OPTIONS と同じ形で縛る: 値が増えた日に選べない値が黙って残らないため
+export const DISTRIBUTION_OPTIONS = Object.keys({
+  failover: true,
+  balanced: true,
+} satisfies Record<TokenDistribution, true>) as TokenDistribution[];
+
+const LOAD_WINDOW_LABELS: Readonly<Record<string, string>> = {
+  five_hour: '5時間',
+  seven_day: '週',
+  seven_day_opus: '週（Opus）',
+  seven_day_sonnet: '週（Sonnet）',
+};
+
+// 測っていない鍵を 0% と書かない: 「空いている」と読めるため（#6633。CLI の describeTokenLoad と同じ線）
+// 測れなかった回は理由を原文で出す: 「まだ測っていない」と潰すと、壊れているのか待てば出るのかが区別できないため
+export function describeTokenLoad(
+  loads: readonly TokenLoad[],
+  tokenId: string,
+): { text: string; at?: string } {
+  const load = loads.find((entry) => entry.tokenId === tokenId);
+  if (load === undefined) {
+    return { text: 'まだ測っていない（デーモンの起動後、このトークンの観測が無い）' };
+  }
+  const { state } = load;
+  switch (state.state) {
+    case 'ok': {
+      const parts = state.usage.windows.flatMap((window) =>
+        window.utilization === undefined
+          ? []
+          : [
+              `${LOAD_WINDOW_LABELS[window.kind] ?? window.kind} ${String(Math.round(window.utilization))}%`,
+            ],
+      );
+      if (parts.length === 0) return { text: '使用率が取れない', at: state.usage.at };
+      return { text: parts.join(' / '), at: state.usage.at };
+    }
+    case 'failed':
+    case 'unavailable':
+      return { text: `測れなかった — ${state.reason}`, at: state.at };
+    case 'unknown':
+      return { text: 'まだ測っていない' };
+    default:
+      // 投げない: 送られてくる値で、サーバのほうが新しい窓を先に持つため
+      return {
+        // 判別子だけ出す: 丸ごと渡すと [object Object] になるため
+        text: describeUnknown((state as { state: never }).state, '枠の観測の状態'),
+      };
+  }
+}
 
 // ここだけ assertNever を使わない: 送られてくる値でサーバのほうが新しい窓を先に持ち、throw すると1行の未知が一覧全部を消すため
 // not_rotated は freshness も見て言い分ける: stale の回は契機に当たっており、「契機に当たらなかった」と書くと嘘になるため

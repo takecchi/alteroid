@@ -48,6 +48,8 @@ import {
 import { formatDateTime, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
   AgentTokenView,
+  TokenDistribution,
+  TokenLoad,
   TokenRotationSettings,
   TokensActive,
   TokensRowsUnreadable,
@@ -56,9 +58,12 @@ import type {
 import {
   describeAvailability,
   describeCooldownSource,
+  describeDistribution,
   describeFingerprint,
   describeRecovery,
   describeRotateOn,
+  describeTokenLoad,
+  DISTRIBUTION_OPTIONS,
   ROTATE_ON_OPTIONS,
   tokenAvailabilityAt,
 } from './tokens-describe';
@@ -227,6 +232,7 @@ function PoolAndSettings() {
             active={data.active}
             activeNever={data.activeNever === true}
             activeUnreadable={data.activeUnreadable}
+            loads={data.loads}
           />
           {data.settings === undefined ? (
             // 既定値では埋めない: off にしてあった回転を既定として見せることになるため
@@ -247,6 +253,7 @@ function PoolCard({
   active,
   activeNever,
   activeUnreadable,
+  loads,
 }: {
   tokens: readonly AgentTokenView[];
   targetTokenId?: string;
@@ -254,6 +261,7 @@ function PoolCard({
   active?: TokensActive;
   activeNever: boolean;
   activeUnreadable?: { reason: string };
+  loads?: readonly TokenLoad[];
 }) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
   // 「既に無い」は行ではなく一覧側に持つ: hook は断る前に一覧を取り直すので、行の state に置くと断りの文言も一緒に消えるため
@@ -297,6 +305,7 @@ function PoolCard({
               token={token}
               highlighted={token.id === targetTokenId}
               isActive={active?.tokenId === token.id}
+              loads={loads}
               onGone={setGone}
             />
           ))}
@@ -367,13 +376,16 @@ function TokenRow({
   token,
   highlighted = false,
   isActive = false,
+  loads,
   onGone,
 }: {
   token: AgentTokenView;
   onGone: (error: TokenNotFoundError | undefined) => void;
   highlighted?: boolean;
   isActive?: boolean;
+  loads?: readonly TokenLoad[];
 }) {
+  const load = loads === undefined ? undefined : describeTokenLoad(loads, token.id);
   const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
@@ -494,6 +506,18 @@ function TokenRow({
                 },
                 // 出所を必ず出す: 絶対時刻だけでは権威ある値か推測かが書けず、推測のときだけ出す形にすると何も書いていないことが「推測ではない」と「まだ対応していない」の両方を意味するため
                 { label: '期限の出所', value: describeCooldownSource(token.cooldownSource) },
+              ]
+            : []),
+          // 欄ごと無い（鍵ごとに測らない構成か古いデーモン）なら行も出さない: 「まだ測っていない」と書くと、待てば出ると読めるため
+          ...(load !== undefined
+            ? [
+                {
+                  label: '枠の使用率',
+                  value:
+                    load.at === undefined
+                      ? load.text
+                      : `${load.text}（${formatDateTime(load.at)} 時点）`,
+                },
               ]
             : []),
           {
@@ -617,16 +641,23 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
     undefined,
   );
   const [cooldownDraft, setCooldownDraft] = useState<CooldownDraft | undefined>(undefined);
+  const [distributionDraft, setDistributionDraft] = useState<TokenDistribution | undefined>(
+    undefined,
+  );
   const { busy, failure, setFailure, run } = useAction();
 
   const rotateOn = rotateOnDraft ?? settings.rotateOn;
+  // 未設定の行は failover で動いている（サーバの distributionOf と同じ読み）。選んだ値と比べるときだけ寄せる
+  const savedDistribution: TokenDistribution = settings.distribution ?? 'failover';
+  const distribution = distributionDraft ?? savedDistribution;
+  const distributionChanged = distribution !== savedDistribution;
   const cooldownFields = cooldownDraft ?? cooldownDraftOf(settings.cooldownMs);
   // 触っていない欄は保存済みの値のまま（分に満たない端数も含めて）送る。触った欄だけ、時・分から作り直す
   const cooldownCheck: CooldownCheck | undefined =
     cooldownDraft === undefined ? undefined : checkCooldownDraft(cooldownDraft);
   const cooldownChanged =
     cooldownCheck !== undefined && !(cooldownCheck.ok && cooldownCheck.ms === settings.cooldownMs);
-  const dirty = rotateOn !== settings.rotateOn || cooldownChanged;
+  const dirty = rotateOn !== settings.rotateOn || cooldownChanged || distributionChanged;
   useReportDirty('token-policy', dirty);
 
   async function save() {
@@ -637,19 +668,25 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
     }
     const cooldownMs = cooldownCheck === undefined ? settings.cooldownMs : cooldownCheck.ms;
     await run(async () => {
-      await setPolicy({ rotateOn, cooldownMs });
+      // 配り方は変えたときだけ送る: 未設定の行へ failover を書き込むと、触っていない欄のバイト列が変わるため
+      await setPolicy({ rotateOn, cooldownMs, ...(distributionChanged ? { distribution } : {}) });
       setRotateOnDraft(undefined);
       setCooldownDraft(undefined);
+      setDistributionDraft(undefined);
     });
   }
 
   return (
     <Card>
-      <CardHeader title="切り替えの設定" subtitle="トークンを切り替える条件と、休止の既定" />
+      <CardHeader
+        title="切り替えの設定"
+        subtitle="トークンの配り方、切り替える条件と、休止の既定"
+      />
       <KeyValueList
         className="px-4 py-3"
         labelWidth="9rem"
         items={[
+          { label: '配り方', value: describeDistribution(settings.distribution) },
           { label: '切り替える条件', value: describeRotateOn(settings.rotateOn) },
           {
             label: '休止の既定',
@@ -671,6 +708,25 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
       />
 
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">配り方を変える</span>
+            <Select
+              value={distribution}
+              onChange={(event) => setDistributionDraft(event.target.value as TokenDistribution)}
+            >
+              {DISTRIBUTION_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {describeDistribution(option)}
+                </option>
+              ))}
+            </Select>
+          </label>
+          {/* label の外に置く: 中に置くと選択欄の名前にこの文まで混ざるため */}
+          <span className="text-xs text-muted-foreground">
+            変えても、いま動いている作業のトークンは途中で替えない。次に作業を起こすとき（新しい委譲・再開）から効く。
+          </span>
+        </div>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">切り替える条件を変える</span>
           <Select
@@ -715,6 +771,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 // 既定値では埋めず未選択から始める: 読めない現在値の代わりに既定を選ばせると、off にしてあった回転を気づかないまま既定へ戻すことになるため
 // 両方揃うまで保存できない: PUT /tokens/policy は現在値が読めないとき両方を送ったときだけ上書きが通り、片方だけだと 500 になるため
 // ROTATE_ON_OPTIONS / describeRotateOn は SettingsCard と共有する: 選択肢が増減したとき、ここだけ追随し損ねないため
+// 配り方も選ばせる（サーバは省いても通す）: 省くと読めない行が黙って failover で上書きされ、balanced にしてあった配り方を気づかないまま戻すため
 function UnreadableSettingsCard({ reason }: { reason: string }) {
   const setPolicy = useSetTokenPolicy();
 
@@ -722,13 +779,21 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
     undefined,
   );
   const [cooldownFields, setCooldownFields] = useState<CooldownDraft>(EMPTY_COOLDOWN_DRAFT);
+  const [distributionDraft, setDistributionDraft] = useState<TokenDistribution | undefined>(
+    undefined,
+  );
   const { busy, failure, setFailure, run } = useAction();
 
   useReportDirty(
     'token-policy',
-    rotateOnDraft !== undefined || !isEmptyCooldownDraft(cooldownFields),
+    rotateOnDraft !== undefined ||
+      !isEmptyCooldownDraft(cooldownFields) ||
+      distributionDraft !== undefined,
   );
-  const canSubmit = rotateOnDraft !== undefined && !isEmptyCooldownDraft(cooldownFields);
+  const canSubmit =
+    rotateOnDraft !== undefined &&
+    !isEmptyCooldownDraft(cooldownFields) &&
+    distributionDraft !== undefined;
 
   async function save() {
     if (!canSubmit) return;
@@ -739,7 +804,11 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
       return;
     }
     await run(async () => {
-      await setPolicy({ rotateOn: rotateOnDraft, cooldownMs: check.ms });
+      await setPolicy({
+        rotateOn: rotateOnDraft,
+        cooldownMs: check.ms,
+        distribution: distributionDraft,
+      });
     });
   }
 
@@ -751,9 +820,29 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
       </div>
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
         <p className="text-xs text-muted-foreground">
-          直すには、切り替える条件と休止の既定の両方を選び直して保存する（片方だけでは保存できない
-          —— 読めない現在値は、両方揃った入力でしか上書きできない）。
+          直すには、配り方・切り替える条件・休止の既定のすべてを選び直して保存する（どれかが欠けると保存できない
+          —— 読めない現在値は、揃った入力でしか上書きできない）。
         </p>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">配り方を選ぶ</span>
+          <Select
+            value={distributionDraft ?? ''}
+            onChange={(event) =>
+              setDistributionDraft(
+                event.target.value === '' ? undefined : (event.target.value as TokenDistribution),
+              )
+            }
+          >
+            <option value="" disabled>
+              選択してください
+            </option>
+            {DISTRIBUTION_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {describeDistribution(option)}
+              </option>
+            ))}
+          </Select>
+        </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">切り替える条件を選ぶ</span>
           <Select

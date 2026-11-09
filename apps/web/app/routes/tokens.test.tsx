@@ -919,9 +919,10 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
 
 // 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので method / 本文が落ちるため
 // /tokens/policy を先に判定する: '/tokens/policy'.includes('/tokens') が真で、順序を逆にすると素の /tokens 分岐に食われるため
-function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DEFAULT_SETTINGS) {
-  let settings: { rotateOn: string; cooldownMs: number } = { ...initial };
-  const puts: { rotateOn?: string; cooldownMs?: number }[] = [];
+type StubSettings = { rotateOn: string; cooldownMs: number; distribution?: string };
+function stubPolicyScreen(initial: StubSettings = DEFAULT_SETTINGS) {
+  let settings: StubSettings = { ...initial };
+  const puts: { rotateOn?: string; cooldownMs?: number; distribution?: string }[] = [];
   let failNext: { status: number; error: string } | undefined;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -958,6 +959,140 @@ function stubPolicyScreen(initial: { rotateOn: string; cooldownMs: number } = DE
     },
   };
 }
+
+describe('/tokens 画面 — 配り方（#6633）', () => {
+  it('未設定の行は「未設定。既定」と言い、選択欄は failover を指す', async () => {
+    stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.getByText(/未設定。既定/, { selector: ':not(option)' })).toBeTruthy();
+    expect(screen.getByLabelText('配り方を変える')).toHaveProperty('value', 'failover');
+    expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true);
+  });
+
+  it('balanced を選んで保存すると、配り方を載せて PUT /tokens/policy が呼ばれ、表示が変わる', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('配り方を変える'), { target: { value: 'balanced' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(puts).toEqual([{ ...DEFAULT_SETTINGS, distribution: 'balanced' }]);
+    });
+    // 選択肢（option）にも同じ文が在るので、保存済みの表示の側だけを数える
+    expect(
+      await screen.findByText('作業ごとに空いているトークンを割り当てて、使う量をならす', {
+        selector: ':not(option)',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('balanced から failover へ戻すと、failover を明示して送る', async () => {
+    const { puts } = stubPolicyScreen({ ...DEFAULT_SETTINGS, distribution: 'balanced' });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.getByLabelText('配り方を変える')).toHaveProperty('value', 'balanced');
+    fireEvent.change(screen.getByLabelText('配り方を変える'), { target: { value: 'failover' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(puts).toEqual([{ ...DEFAULT_SETTINGS, distribution: 'failover' }]);
+    });
+  });
+
+  it('配り方を触らずに別の欄を保存しても、配り方は送らない（未設定の行へ failover を書き込まない）', async () => {
+    const { puts } = stubPolicyScreen();
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('切り替える条件を変える'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).not.toHaveProperty('distribution');
+  });
+
+  it('知らない配り方が届いても画面は落ちず、知らないことをそのまま言う', async () => {
+    stubPolicyScreen({ ...DEFAULT_SETTINGS, distribution: 'round_robin' });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.getByText(/未知の配り方（round_robin）/)).toBeTruthy();
+  });
+});
+
+describe('/tokens 画面 — トークンごとの枠の使用率（#6633）', () => {
+  const ROWS = [
+    { id: 't-a', label: 'measured', order: 0, sha256: 'a'.repeat(12), source: 'stored' },
+    { id: 't-b', label: 'unmeasured', order: 1, sha256: 'b'.repeat(12), source: 'stored' },
+    { id: 't-c', label: 'failed', order: 2, sha256: 'c'.repeat(12), source: 'stored' },
+  ];
+  const AT = '2026-11-09T12:00:00.000Z';
+
+  function rowOf(label: string): HTMLElement {
+    const row = screen.getByText(label).closest('li');
+    if (row === null) throw new Error(`行が無い: ${label}`);
+    return row;
+  }
+
+  it('測れた行は窓ごとの使用率を時刻つきで出し、測っていない行は 0% と書かず「まだ測っていない」と言う', async () => {
+    stubScreen({
+      tokens: ROWS,
+      activeFields: {
+        loads: [
+          {
+            tokenId: 't-a',
+            state: {
+              state: 'ok',
+              usage: {
+                at: AT,
+                limitsAvailable: true,
+                windows: [
+                  { kind: 'five_hour', utilization: 42.4 },
+                  { kind: 'seven_day', utilization: 61 },
+                ],
+              },
+            },
+          },
+          {
+            tokenId: 't-c',
+            state: { state: 'failed', at: AT, reason: 'probe が時間切れ' },
+          },
+        ],
+      },
+    });
+
+    renderTokens();
+    await waitForPoolLoaded();
+    await screen.findByText('measured');
+
+    expect(within(rowOf('measured')).getByText(/5時間 42% \/ 週 61%/)).toBeTruthy();
+    expect(within(rowOf('measured')).getByText(new RegExp(formatDateTime(AT)))).toBeTruthy();
+    expect(within(rowOf('unmeasured')).getByText(/まだ測っていない/)).toBeTruthy();
+    expect(within(rowOf('unmeasured')).queryByText(/0%/)).toBeNull();
+    expect(within(rowOf('failed')).getByText(/測れなかった — probe が時間切れ/)).toBeTruthy();
+  });
+
+  it('loads の欄ごと無い（鍵ごとに測らない構成・古いデーモン）なら、使用率の行そのものを出さない', async () => {
+    stubScreen({ tokens: ROWS });
+
+    renderTokens();
+    await waitForPoolLoaded();
+    await screen.findByText('measured');
+
+    expect(screen.queryByText('枠の使用率')).toBeNull();
+    expect(screen.queryByText(/まだ測っていない/)).toBeNull();
+  });
+});
 
 describe('/tokens 画面 — 切り替えの設定を書き込む（Issue #1123）', () => {
   it('切り替える条件を変えて保存すると、その値だけで PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
@@ -1196,8 +1331,9 @@ function stubUnreadableScreen(
   options: { reason: string; tokens?: unknown[] } = { reason: '理由' },
 ) {
   const { reason, tokens = [] } = options;
-  let readable: { rotateOn: string; cooldownMs: number; updatedAt: string } | undefined;
-  const puts: { rotateOn?: string; cooldownMs?: number }[] = [];
+  let readable:
+    { rotateOn: string; cooldownMs: number; distribution?: string; updatedAt: string } | undefined;
+  const puts: { rotateOn?: string; cooldownMs?: number; distribution?: string }[] = [];
   let failNext: { status: number; error: string } | undefined;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1212,6 +1348,7 @@ function stubUnreadableScreen(
       const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
         rotateOn?: string;
         cooldownMs?: number;
+        distribution?: string;
       };
       puts.push(body);
       if (failNext !== undefined) {
@@ -1228,6 +1365,7 @@ function stubUnreadableScreen(
       readable = {
         rotateOn: body.rotateOn,
         cooldownMs: body.cooldownMs,
+        ...(body.distribution === undefined ? {} : { distribution: body.distribution }),
         updatedAt: '2026-01-01T00:00:00.000Z',
       };
       return json(readable);
@@ -1287,11 +1425,14 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     expect(await screen.findByText(/切り替えの設定は読めない.*理由不明/)).toBeTruthy();
   });
 
-  it('片方しか選んでいないと保存が押せない。両方選んで初めて押せる', async () => {
+  // #6633 で配り方が3つ目の欄になった: 元は「両方選んで初めて押せる」。配り方を省くと読めない行が黙って failover で上書きされるので、3つ揃うまで押せない形へ広げた
+  it('どれかが欠けていると保存が押せない。配り方・条件・休止の既定の3つを選んで初めて押せる', async () => {
     stubUnreadableScreen({ reason: '理由' });
 
     renderTokens();
     await waitForPoolLoaded();
+
+    expect(screen.getByLabelText('配り方を選ぶ')).toHaveProperty('value', '');
 
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'off' },
@@ -1301,6 +1442,9 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
       target: { value: '1' },
     });
+    expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
+
+    fireEvent.change(screen.getByLabelText('配り方を選ぶ'), { target: { value: 'balanced' } });
     expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
   });
 
@@ -1310,6 +1454,7 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     renderTokens();
     await waitForPoolLoaded();
 
+    fireEvent.change(screen.getByLabelText('配り方を選ぶ'), { target: { value: 'failover' } });
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), { target: { value: 'off' } });
     fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（分）'), { target: { value: '-5' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -1318,12 +1463,13 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     expect(puts).toEqual([]);
   });
 
-  it('両方選んで保存すると PUT /tokens/policy に両方の欄が送られ、成功後は一覧が取り直されて通常の設定カードに戻る', async () => {
+  it('3つ選んで保存すると PUT /tokens/policy に3つの欄が送られ、成功後は一覧が取り直されて通常の設定カードに戻る', async () => {
     const { puts } = stubUnreadableScreen({ reason: '理由' });
 
     renderTokens();
     await waitForPoolLoaded();
 
+    fireEvent.change(screen.getByLabelText('配り方を選ぶ'), { target: { value: 'balanced' } });
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'overage_exhausted' },
     });
@@ -1334,7 +1480,9 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
 
     expect(await screen.findByLabelText('切り替える条件を変える')).toBeTruthy();
     expect(screen.queryByLabelText('切り替える条件を選ぶ')).toBeNull();
-    expect(puts).toEqual([{ rotateOn: 'overage_exhausted', cooldownMs: 3_600_000 }]);
+    expect(puts).toEqual([
+      { rotateOn: 'overage_exhausted', cooldownMs: 3_600_000, distribution: 'balanced' },
+    ]);
   });
 
   it('保存に失敗したら ErrorNote で理由を出し、下書きは残る', async () => {
@@ -1344,6 +1492,7 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     renderTokens();
     await waitForPoolLoaded();
 
+    fireEvent.change(screen.getByLabelText('配り方を選ぶ'), { target: { value: 'failover' } });
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), {
       target: { value: 'off' },
     });
@@ -1365,6 +1514,7 @@ describe('/tokens 画面 — 切り替えの設定が読めない（issue #2096�
     renderTokens();
     await waitForPoolLoaded();
 
+    fireEvent.change(screen.getByLabelText('配り方を選ぶ'), { target: { value: 'failover' } });
     fireEvent.change(screen.getByLabelText('切り替える条件を選ぶ'), { target: { value: 'off' } });
     fireEvent.change(screen.getByLabelText('休止の既定を選ぶ（時間）'), {
       target: { value: '1' },

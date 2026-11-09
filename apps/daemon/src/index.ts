@@ -831,6 +831,7 @@ export async function main(): Promise<void> {
     // 上限は env から読み直さず置き場の構成から渡す: 道具・担い手のプールが読み直すと枠が開くため。
     attachmentLimits: storage.attachmentLimits,
     accountUsage: () => usagePoller.state(),
+    tokenLoads: () => tokenLoadBook.snapshot(),
     scheduler: () => scheduler.list(),
     onScheduledRunNotStarted: (kind, delayMs) => scheduler.retrySoon(kind, delayMs),
     onScheduledRunClaimed: (kind, at) => scheduler.noteClaimed(kind, at),
