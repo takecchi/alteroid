@@ -187,6 +187,7 @@ async function open(spec: Spec = {}) {
   observations.length = 0;
   return {
     pool,
+    stores,
     before,
     /** 報告を 1 件流し、台帳へ最初に書かれた行・最後の行・一覧の印・回し手への観測を返す。 */
     async report(event: RunnerEvent) {
@@ -539,7 +540,12 @@ describe('report の段 2（台帳への写し）', () => {
 
   it('awaitingBackground が無い報告: 印を下ろす（欄ごと無い）', async () => {
     // 前の値は status が done の台帳にだけ残る（done 以外へ動く書き込みは `#persist` が下ろすので、running から始めると前の値が先に消えて見分けられない）
-    const s = await open({ job: { status: 'done', awaitingBackgroundSince: OLD_ISO } });
+    // 生きたセッションが居ると、起動時の取り直しが `running` へ戻して前の値を下ろす: 居ない形で起こす
+    const s = await open({
+      job: { status: 'done', awaitingBackgroundSince: OLD_ISO },
+      sessionAlive: false,
+    });
+    expect((await s.stores.jobs.getJob(JOB_ID))?.awaitingBackgroundSince).toBe(OLD_ISO);
     const r = await s.report(report());
     expect(Object.hasOwn(r.persisted ?? {}, 'awaitingBackgroundSince')).toBe(false);
   });
