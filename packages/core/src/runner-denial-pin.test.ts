@@ -522,6 +522,20 @@ describe('同じ拒否の 2 度目（seen の枝と #denied への書き込み�
     `);
   });
 
+  it('入力の無い 2 度目は #denied を書き換えない: live が 2 度続いても、後から入力を持つ result が来れば形の note が出る', async () => {
+    const rig = await open();
+    live(rig, { tool_name: 'Bash', tool_use_id: 'tu-twice' });
+    live(rig, { tool_name: 'Bash', tool_use_id: 'tu-twice' });
+    await tick();
+    result(rig, [{ tool_name: 'Bash', tool_use_id: 'tu-twice', tool_input: { command: 'ls' } }]);
+    await tick();
+    expect(notesOnly(rig.events)).toMatchInlineSnapshot(`
+      [
+        "note: 先に降ろした Bash の拒否について、ターン終わりの記録（via: result）に入力が載っていた。値には鍵が入りうるので本文は残さず、形だけ残す: 欄=command / 先頭の語=ls / chars=16",
+      ]
+    `);
+  });
+
   it('入力の形の note: 文字列・配列・欄なしのオブジェクト・数値・null（形だけで本文は残さない）', async () => {
     const rig = await open();
     const inputs: [string, unknown][] = [
