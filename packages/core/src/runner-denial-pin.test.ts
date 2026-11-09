@@ -814,6 +814,83 @@ describe('一時規則・1 回だけの許可の決着', () => {
   });
 });
 
+describe('#progressed を立てない（resume の作り直しで観測）', () => {
+  // 拒否だけを受けた resume は「まだ手が動いていない」ままなので、そのあとセッションが黙って落ちると作り直す（resume_failed・recovered）。
+  // 対照: 拒否が手が動いた印を立てるなら、作り直さず closed で終わる。
+  async function resumeThenDeny(
+    send: (rig: Rig) => void,
+  ): Promise<{ resumeFailed: number; closed: number; sessions: number }> {
+    const events: RunnerEvent[] = [];
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: dir,
+      emit: (event) => events.push(event),
+      queryFn: fn,
+      env: DENY_ENV,
+    });
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-dead',
+      cwd: dir,
+      request: '最初の依頼',
+      // 素材を 1 件渡す: 空だと作り直さない理由が `#progressed` だと確かめられない
+      entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+    });
+    const first = await vi.waitFor(() => {
+      const found = started[0];
+      if (found === undefined) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+    send({ started: first, events, host, clock: fakeClock(0) });
+    await tick();
+    first.finish();
+    await vi.waitFor(() => {
+      if (!events.some((e) => e.type === 'resume_failed' || e.type === 'closed')) {
+        throw new Error('resume_failed も closed もまだ来ていない');
+      }
+    });
+    return {
+      resumeFailed: events.filter((e) => e.type === 'resume_failed').length,
+      closed: events.filter((e) => e.type === 'closed').length,
+      sessions: started.length,
+    };
+  }
+
+  it('live の拒否だけを受けても、セッションが落ちれば作り直す（手が動いた印を立てない）', async () => {
+    expect(await resumeThenDeny((rig) => live(rig, { tool_name: 'Bash', tool_use_id: 'tu-p1' })))
+      .toMatchInlineSnapshot(`
+      {
+        "closed": 0,
+        "resumeFailed": 1,
+        "sessions": 2,
+      }
+    `);
+  });
+
+  it('失敗した result の拒否だけを受けても、作り直す（result 経由）', async () => {
+    expect(
+      await resumeThenDeny((rig) =>
+        rig.started.push({
+          type: 'result',
+          subtype: 'error_during_execution',
+          is_error: true,
+          errors: ['boom'],
+          session_id: 'sess-mgr',
+          uuid: 'uuid-result-fail',
+          permission_denials: [{ tool_name: 'Bash', tool_use_id: 'tu-p2' }],
+        } as unknown as SDKMessage),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "closed": 0,
+        "resumeFailed": 1,
+        "sessions": 2,
+      }
+    `);
+  });
+});
+
 describe('出来事が出る周回（同期のまま保つ）', () => {
   async function ticksUntil(rig: Rig, count: number): Promise<{ ticks: number; seen: number }> {
     let ticks = 0;
