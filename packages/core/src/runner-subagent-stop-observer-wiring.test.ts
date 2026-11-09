@@ -231,6 +231,17 @@ describe('配線', () => {
     expect(subagentNotes(rig.events).map((e) => e.managerId)).toEqual(['mgr-1']);
   });
 
+  it('emit の口の managerId: 起こし直しの note（stall 付き）にも、口の managerId が載る', async () => {
+    const rig = await open();
+    await register(rig, 'bg-1', 'agent-1');
+    rig.started.notify('bg-1');
+    await tick();
+    await fire(rig, 'SubagentStop', { ...STOP_BASE, background_tasks: [bg('bg-1')] });
+    expect(subagentNotes(rig.events).map((e) => [e.managerId, e.stall?.outcome])).toEqual([
+      ['mgr-1', 'woken'],
+    ]);
+  });
+
   it('stopState は PostToolUse（所有者の記録）と同じ器: 記録した作業者の分だけが起こし直しの対象になり、診断の旗は 1 つの器で共有される', async () => {
     const rig = await open();
     await register(rig, 'bg-mine', 'agent-1');
