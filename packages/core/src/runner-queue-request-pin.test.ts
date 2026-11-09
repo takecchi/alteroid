@@ -1347,9 +1347,10 @@ async function setupPeer(options: { throwOnSettled?: boolean } = {}) {
   })) as { content: { text: string }[] };
   const approvalId = /approval_id=(appr-[0-9a-f]+)/.exec(first.content[0]?.text ?? '')?.[1];
   const asks = (): Ask[] => rawAsksOf(events);
-  const noticeCount = (): number =>
-    sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length;
-  return { host: peerRunner, client, events, approvalId, asks, noticeCount, decisions };
+  const notices = (): string[] =>
+    sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ'));
+  const noticeCount = (): number => notices().length;
+  return { host: peerRunner, client, events, approvalId, asks, noticeCount, notices, decisions };
 }
 
 describe('peer の確認（source つきの ask）', () => {
@@ -1447,10 +1448,20 @@ describe('peer の知らせ（確認待ちの間に溜め、決着の後に届�
       decision: 'allow',
     });
     await until(() => s.noticeCount() >= 1);
-    expect({ before, afterAnswer: s.noticeCount() >= 1 }).toMatchInlineSnapshot(`
+    // 答えで解けた peer はこのあと自分のターンの終わりを知らせてくる。溜めてあった知らせが settle の中で先に届くなら、
+    // 最初の知らせにはそのターンの終わり（「終わった」）がまだ載らない（届けなければ、ターンの終わりと同じ 1 通に混ざる）
+    const firstNotice = s.notices()[0] ?? '';
+    expect({
+      before,
+      afterAnswer: s.noticeCount() >= 1,
+      firstNoticeHasFinishedTurn: firstNotice.includes('終わった'),
+      firstNoticeHasApproval: /approval_id=appr-[0-9a-f]+/.test(firstNotice),
+    }).toMatchInlineSnapshot(`
       {
         "afterAnswer": true,
         "before": 0,
+        "firstNoticeHasApproval": true,
+        "firstNoticeHasFinishedTurn": false,
       }
     `);
     await s.client.close();
