@@ -519,6 +519,13 @@ export interface CloneOptions {
   childEnvBase?: NodeJS.ProcessEnv;
   credentials?: () => Record<string, string>;
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
+  /**
+   * マネージャープールへ渡す現役の身元。省略すれば `tokenIdentity` と同じ（#6633）。
+   * 分ける理由: 配り方 balanced ではクローン自身の鍵（`tokenIdentity`）が割り当てで決まり、委譲の比べる先（現役）と一致しないため。
+   */
+  managerTokenIdentity?: ManagerPoolOptions['tokenIdentity'];
+  /** マネージャープールへそのまま渡す（`ManagerPoolOptions['tokenAssignment']`。#6633）。クローン自身は読まない。 */
+  managerTokenAssignment?: ManagerPoolOptions['tokenAssignment'];
   /** マネージャープールへそのまま渡す（`ManagerPoolOptions['tokenAvailability']`）。クローン自身は読まない。 */
   tokenAvailability?: ManagerPoolOptions['tokenAvailability'];
   // クローンは回すかどうかを判断しない: 枠に当たるとこのループはターンを回さないので、判断をここへ置くと一番要るときに動かないため
@@ -1023,6 +1030,8 @@ class Clone implements CloneHost {
       childEnvBase,
       credentials,
       tokenIdentity,
+      managerTokenIdentity,
+      managerTokenAssignment,
       tokenAvailability,
       onUsageObservation,
       onWorkerToolEvent,
@@ -1123,7 +1132,12 @@ class Clone implements CloneHost {
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
         // クローンの側とプールの側で別々の回し手へ渡さない: 同じ1本へ集めるから、世代の照合が「同じ当たりで1回だけ」を保証できるため
-        ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
+        ...((managerTokenIdentity ?? tokenIdentity) === undefined
+          ? {}
+          : { tokenIdentity: managerTokenIdentity ?? tokenIdentity }),
+        ...(managerTokenAssignment === undefined
+          ? {}
+          : { tokenAssignment: managerTokenAssignment }),
         ...(tokenAvailability === undefined ? {} : { tokenAvailability }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),

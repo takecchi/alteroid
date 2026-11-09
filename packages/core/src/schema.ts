@@ -544,6 +544,9 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       'parked',
       'recovered',
       'reopened',
+      // 配り方 balanced（#6633）: 割り当てた鍵1本だけを冷却へ入れた（現役は動かさない）／その持ち主を別の鍵へ移した
+      'cooled',
+      'reassigned',
     ]),
     signal: z
       .enum([

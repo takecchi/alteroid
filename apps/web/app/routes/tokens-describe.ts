@@ -161,6 +161,14 @@ export function describeEvent(
       return { label: '起動時に使用中のトークンを渡し直した', tone: 'neutral' };
     case 'restore_failed':
       return { label: '起動時の渡し直しに失敗', tone: 'danger' };
+    case 'cooled':
+      return {
+        label:
+          '割り当てたトークン1本が枠に当たったので休ませた（使用中のトークンは切り替えていない）',
+        tone: 'warn',
+      };
+    case 'reassigned':
+      return { label: '休ませたトークンを使っていた作業を、別のトークンへ移した', tone: 'neutral' };
     default:
       return { label: describeUnknown(event, '切り替えの出来事'), tone: 'neutral' };
   }
