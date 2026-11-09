@@ -4938,7 +4938,7 @@ class RunnerSession {
 
     // 道具名だけで束ねない: 「同じ拒否の2度目」と「live を見逃した初出」が潰れるため（`tool_use_id` は SDK の型で必須なのでこの経路はいま踏まれない）
     // 入力そのものを鍵に混ぜない: 鍵は `onForget` が日誌へそのまま並べ、道具の入力にはトークンが入りうるため
-    const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
+    const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 60))}`;
     // 引いたら消す: 生の入力を持ち回っていないので、同じ tool_use_id の拒否がもう一度来ても作り直せないため
     const inputHead = this.#preToolInputHeads.get(toolUseId);
     if (inputHead !== undefined) this.#preToolInputHeads.delete(toolUseId);
