@@ -243,7 +243,7 @@ export const INLINED_BY_FILE: Readonly<
       // 呼び出しの直後の `return;` は元のメソッドに残す（出した先の末尾の `return;` は差し戻すときに外す）
       {
         name: 'emit',
-        call: 'await this.#reportEmitter.emit(event, {said, failure, noCredentialDirHint, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn});',
+        call: 'this.#reportEmitter.emit(event, {said, failure, noCredentialDirHint, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn, liveBackground, outbox});',
         trailing: ' return;',
         from: 'runner-report-emit.ts',
       },

@@ -16,23 +16,15 @@ const NO_CREDENTIAL_DIR_HINT =
   '`ALTEROID_CREDENTIAL_DIR` 付きの runner（apps/runner）を別に起こし、デーモンの `ALTEROID_RUNNER_URL` で繋ぐこと。';
 
 /**
- * `RunnerSession` が口として渡すもの。10 本。
+ * `RunnerSession` が口として渡すもの。7 本。
  * 値で渡すのは作った後に変わらない欄（`managerId`。`RunnerSession` では `readonly`）だけ。
  * `sdkSession`・`pending`・`outwardActions` は参照のまま渡す（写すと、`RunnerSession` の他の経路が変えた状態をここが見られず、
  * ここが `splice(0)` した配列や `setStatus` した状態を他の経路が見られなくなる。`sdkSession` は getter を持つので、値へ写さない）。
- * 関数の口は async の皮で包まずに渡す（`#collectOutbox` は元から `Promise` を返すのでそのまま渡す。
- * 他は同期で、`await` を足すと `report` が見える周回数と、`report` を出した後に呼ぶ 2 つの順序が動くため）。
+ * 関数の口は async の皮で包まずに渡す（すべて同期で、`await` を足すと `report` を出した後に呼ぶ 2 つの順序と、呼び元の周回数が動くため）。
+ * 背景処理の一覧の読みと出し箱の取り込み（唯一の `await`）は `#applyTurnEnded` に残し、算出した値を引数で受ける:
+ * `emit` を `async` にして呼び元が `await` すると、出し箱が空の回にも 1 周回増えるため。
  */
 interface RunnerReportEmitterPorts {
-  /** `RunnerSession#liveBackgroundTasks`（SDK の背景処理と背景の peer を合わせた一覧）。同期。 */
-  liveBackgroundTasks: () => readonly { id: string; taskType: string }[];
-  /** `RunnerSession#outboxHasEntries`（出し箱が空でないか）。同期。 */
-  outboxHasEntries: () => boolean;
-  /** `RunnerSession#collectOutbox`（出し箱の取り込み）。`Promise` をそのまま返す。 */
-  collectOutbox: () => Promise<{
-    files?: RunnerOutboxFile[];
-    rejectedFiles?: RunnerOutboxRejectedFile[];
-  }>;
   /** `RunnerSession#sdkSession`（使うのは `setStatus`・`status`・`wantsTokenRecycle`・`wakeInput` だけ）。参照。 */
   sdkSession: Pick<RunnerSdkSession, 'setStatus' | 'status' | 'wantsTokenRecycle' | 'wakeInput'>;
   /** `RunnerSession#pending`（確認待ちの要求。中身だけが変わる参照で、差し替わらない。ここは読むだけ）。参照。 */
@@ -58,17 +50,18 @@ interface RunnerReportEmitArgs {
   workerRejectionsThisTurn: readonly string[];
   failedWorkerNotificationsThisTurn: number;
   failedWorkerNotificationsNamingLimitThisTurn: number;
+  /** 取り込みの `await` より前に 1 回だけ読んだ背景処理の一覧。 */
+  liveBackground: readonly { id: string; taskType: string }[];
+  /** 出し箱の取り込みの結果（空なら `{}`）。 */
+  outbox: { files?: RunnerOutboxFile[]; rejectedFiles?: RunnerOutboxRejectedFile[] };
 }
 
 /**
  * `RunnerSession#applyTurnEnded` の「後半」（報告の本文の組み立て・出し箱の取り込み・`setStatus`・`report` の送出・後始末の呼び出し）を受け持つ側。
  * 切り出し前の `RunnerSession` から切り出した。振る舞いは変えていない。自前の欄は無い。
- * `emit` は `async` のまま保つ。`await` は出し箱が空でないときの `#collectOutbox` の 1 か所だけ（空なら `await` を挟まず、最後まで同期で走る）。
+ * `emit` は同期・戻り値 void のまま保つ（`await` は無い。出し箱の取り込みの `await` は呼び元 `#applyTurnEnded` に残る）。
  */
 export class RunnerReportEmitter {
-  readonly #liveBackgroundTasks: RunnerReportEmitterPorts['liveBackgroundTasks'];
-  readonly #outboxHasEntries: RunnerReportEmitterPorts['outboxHasEntries'];
-  readonly #collectOutbox: RunnerReportEmitterPorts['collectOutbox'];
   readonly #sdkSession: RunnerReportEmitterPorts['sdkSession'];
   readonly #pending: RunnerReportEmitterPorts['pending'];
   readonly #outwardActions: RunnerReportEmitterPorts['outwardActions'];
@@ -78,9 +71,6 @@ export class RunnerReportEmitter {
   readonly #deliverPeerNotices: RunnerReportEmitterPorts['deliverPeerNotices'];
 
   constructor(ports: RunnerReportEmitterPorts) {
-    this.#liveBackgroundTasks = ports.liveBackgroundTasks;
-    this.#outboxHasEntries = ports.outboxHasEntries;
-    this.#collectOutbox = ports.collectOutbox;
     this.#sdkSession = ports.sdkSession;
     this.#pending = ports.pending;
     this.#outwardActions = ports.outwardActions;
@@ -90,7 +80,7 @@ export class RunnerReportEmitter {
     this.#deliverPeerNotices = ports.deliverPeerNotices;
   }
 
-  async emit(
+  emit(
     event: AgentTurnEnded,
     {
       said,
@@ -100,8 +90,10 @@ export class RunnerReportEmitter {
       workerRejectionsThisTurn,
       failedWorkerNotificationsThisTurn,
       failedWorkerNotificationsNamingLimitThisTurn,
+      liveBackground,
+      outbox,
     }: RunnerReportEmitArgs,
-  ): Promise<void> {
+  ): void {
     // 失敗した回の報告に失敗であることを載せる: 上限の英語文言が「マネージャーの報告」として流れ、「報告が来た」と「エラーで死んだ」が区別できなくなるため
     // 本文（`text`）の側でも包む: 構造化した `failure` を見ていない読み手にはエラー文が報告として見えるため
     // 失敗で終わった回は `contentless` に含めない: 上限に当たった事実をクローンが知る必要があるため
@@ -121,12 +113,6 @@ export class RunnerReportEmitter {
               ) + (noCredentialDirHint ? `\n\n${NO_CREDENTIAL_DIR_HINT}` : ''),
             contentless: false,
           };
-    // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
-    // 背景処理の完了待ちで畳む報告でも取り込む: デーモンはファイルの付いた報告を背景待ちでも畳まずに配る。残すと、背景処理が絶えない担当では成果物が出し箱に置き去りになる
-    // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
-    const liveBackground = this.#liveBackgroundTasks();
-    // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
-    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
     this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
     if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
     // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため

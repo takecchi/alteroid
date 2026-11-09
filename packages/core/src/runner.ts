@@ -2917,9 +2917,6 @@ class RunnerSession {
       unclassifiedFailures: this.#sdkSession.unclassifiedFailures,
     });
     this.#reportEmitter = new RunnerReportEmitter({
-      liveBackgroundTasks: () => this.#liveBackgroundTasks(),
-      outboxHasEntries: () => this.#outboxHasEntries(),
-      collectOutbox: () => this.#collectOutbox(),
       sdkSession: this.#sdkSession,
       pending: this.#pending,
       outwardActions: this.#outwardActions,
@@ -4561,8 +4558,14 @@ class RunnerSession {
       }
     }
 
-    // 報告の組み立てから送出・後始末（出し箱の取り込み・`setStatus`・`report`・起こしと peer の知らせ）は `RunnerReportEmitter` へ出した
-    await this.#reportEmitter.emit(event, {
+    // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
+    // 背景処理の完了待ちで畳む報告でも取り込む: デーモンはファイルの付いた報告を背景待ちでも畳まずに配る。残すと、背景処理が絶えない担当では成果物が出し箱に置き去りになる
+    // 取り込みの `await` より前に1回だけ読む: 背景の peer はこの間にも止まりうるので、取り込みの前後で別の一覧を見ないため
+    const liveBackground = this.#liveBackgroundTasks();
+    // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
+    const outbox = this.#outboxHasEntries() ? await this.#collectOutbox() : {};
+    // 報告の組み立てから送出・後始末（`setStatus`・`report`・起こしと peer の知らせ）は `RunnerReportEmitter` へ出した。同期で呼ぶ（`await` を足さない: 出し箱が空の回にも 1 周回増えるため）
+    this.#reportEmitter.emit(event, {
       said,
       failure,
       noCredentialDirHint,
@@ -4570,6 +4573,8 @@ class RunnerSession {
       workerRejectionsThisTurn,
       failedWorkerNotificationsThisTurn,
       failedWorkerNotificationsNamingLimitThisTurn,
+      liveBackground,
+      outbox,
     });
     return;
   }
