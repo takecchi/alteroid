@@ -34,6 +34,12 @@ import {
 import { createSerialQueue } from './serial-queue.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 import { fingerprintOf } from './credentials.js';
+import {
+  CANDIDATE_SWEEP_BUDGET_MS,
+  exhaustedOutcome,
+  parkedOutcome,
+  rotatedWhy,
+} from './token-rotator-finish-outcome.js';
 
 // runner がセッションの鍵を名乗るのと同じ指紋（`runner.ts` の `tokenFingerprintOf`）で現役を測る。値の無い行・現役の無い回は測らない
 function activeFingerprintOf(
@@ -217,10 +223,7 @@ export interface TokenRotator {
   restore(): Promise<TokenRestoreOutcome>;
 }
 
-// 件数ではなく時間で切る: probe は1本あたり最大20秒待つので、件数の上限では占有時間を縛れないため
-const CANDIDATE_SWEEP_BUDGET_MS = 60_000;
-
-interface CandidateSweep {
+export interface CandidateSweep {
   chosen?: { token: AgentToken; verdict: TokenCandidateVerdict };
   fellBackToUndecided: boolean;
   unusableLabels: string[];
@@ -586,11 +589,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ? ''
         : `。試した候補「${sweep.unusableLabels.join('」「')}」はどれも使えなかった`;
 
-    const unreadableTail = (generation: number): string =>
-      activeUnreadableReason === undefined
-        ? ''
-        : `\n**現役の指名が読めなかったので、世代 ${String(generation)} で撒き直した**（${activeUnreadableReason}）`;
-
     // 撒く直前に最新の行から読み直す: probe の間に PUT /tokens が値を差し替えると、probe 前の値を撒いて古い鍵のまま動くため。
     // 行が消えた・外された・失効した場合は撒かず null を返す（呼ぶ側が見送る。次の reconsider が選び直す）
     const nominate = async (
@@ -631,25 +629,17 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         generation: placed.generation,
         ...common,
         spread: placed.spread,
-        why: (() => {
-          const head = `${whyHead}。`;
-          const tail =
-            endedStaleRun === null ? '' : describeStaleRunEnd({ ...endedStaleRun, tokens: pool });
-          if (verdict.verdict === 'usable') {
-            return `${head}候補「${token.label}」は観測できた${tail}${unreadableTail(placed.generation)}`;
-          }
-          const stopped = sweep.stoppedByBudget
-            ? `（候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切ったところで倒した）`
-            : '';
-          if (sweep.fellBackToUndecided) {
-            return (
-              `${head}**\`usable\` と確かめられた候補は見つからなかった**ので、` +
-              `判定できなかった候補「${token.label}」へ倒した${stopped}` +
-              `——撒いて本番で確かめる（${verdict.reason}）${tail}${unreadableTail(placed.generation)}`
-            );
-          }
-          return `${head}候補「${token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）${tail}${unreadableTail(placed.generation)}`;
-        })(),
+        why: rotatedWhy({
+          whyHead,
+          token,
+          verdict,
+          generation: placed.generation,
+          sweep,
+          endedStaleRun,
+          pool,
+          activeUnreadableReason,
+          describeStaleRunEnd,
+        }),
       };
     }
 
@@ -665,65 +655,31 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const placed = await nominate(row);
         if (placed === null) return withheldOutcome(row.label);
         if (endedStaleRun !== null) staleRun = null;
-        return {
-          kind: 'parked' as const,
-          ...(outgoingId === undefined ? {} : { fromTokenId: outgoingId }),
-          tokenId: row.id,
-          label: row.label,
+        return parkedOutcome({
+          outgoingId,
+          row,
           generation: placed.generation,
-          cooldownUntil: earliest.cooldownUntil,
-          ...(earliest.cooldownSource === undefined
-            ? {}
-            : { cooldownSource: earliest.cooldownSource }),
-          ...common,
           spread: placed.spread,
-          why:
-            `${whyHead}。**いま通る候補は1本も無い**${skipped}。` +
-            `いちばん早く戻る「${row.label}」を撒いて待つ` +
-            `（${new Date(earliest.cooldownUntil).toISOString()} まで通らない）` +
-            (endedStaleRun === null
-              ? ''
-              : describeStaleRunEnd({ ...endedStaleRun, tokens: pool })) +
-            unreadableTail(placed.generation),
-        };
+          earliest,
+          common,
+          whyHead,
+          skipped,
+          endedStaleRun,
+          pool,
+          activeUnreadableReason,
+          describeStaleRunEnd,
+        });
       }
     }
 
-    // 器の環境変数の値を代わりに撒かない: トークンプールは DB 駆動で、環境変数へのフォールバックは残さないため
-    const current =
-      earliest !== undefined &&
-      earliest.tokenId !== active?.tokenId &&
-      activeRow?.cooldownUntil !== undefined
-        ? {
-            tokenId: activeRow.id,
-            label: activeRow.label,
-            cooldownUntil: activeRow.cooldownUntil,
-            ...(activeRow.cooldownSource === undefined
-              ? {}
-              : { cooldownSource: activeRow.cooldownSource }),
-          }
-        : undefined;
-
-    return {
-      kind: 'exhausted' as const,
-      ...(current === undefined ? {} : { current }),
-      // 打ち切ったときは earliest を出さない: 試していない候補が残っていて見立てが取れていないため
-      ...(sweep.stoppedByBudget || sweep.ranOut?.earliest === undefined
-        ? {}
-        : { earliest: sweep.ranOut.earliest }),
-      ...(sweep.stoppedByBudget ? { stoppedBy: 'budget' as const } : {}),
-      ...common,
-      why: sweep.stoppedByBudget
-        ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
-        : earliest !== undefined
-          ? // 同じ鍵と遅い鍵を言い分ける: 読む側が次に確かめるものが違うため
-            earliest.tokenId === active?.tokenId
-            ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
-            : `いま撒いてある${current === undefined ? '鍵' : `「${current.label}」`}のほうが早く戻る（現役を除いた候補の中でいちばん早い「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
-          : sweep.unusableLabels.length > 0
-            ? `試せる候補を使い切った${skipped}`
-            : (sweep.ranOut?.why ?? '候補が無い'),
-    };
+    return exhaustedOutcome({
+      sweep,
+      earliest,
+      activeTokenId: active?.tokenId,
+      activeRow,
+      common,
+      skipped,
+    });
   }
 
   return {
