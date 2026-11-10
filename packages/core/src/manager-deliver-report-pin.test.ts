@@ -1400,6 +1400,41 @@ describe('段4: synthesized の枝（queue へ積む）', () => {
     `);
   });
 
+  it('turn_failed と枠の失敗: quota は text だけから決まり、fullText に resets 風の文言（おとり）が在っても拾わない', async () => {
+    const DECOY = "You've hit your session limit · resets 11:45pm (Asia/Tokyo)";
+    const quotaOf = async (fields: { text: string; fullText: string }) => {
+      const s = await open();
+      const r = await s.report(
+        report({ synthesized: 'turn_failed', failure: QUOTA_FAILURE, ...fields }),
+      );
+      return (r.queues as unknown[][])[0]?.[3];
+    };
+    const seen = {
+      'text に resets（本物）・fullText に別の resets（おとり）': await quotaOf({
+        text: `${HEAD}\n${NOTICE}`,
+        fullText: `${HEAD}\n${DECOY}`,
+      }),
+      'text に resets が無く・fullText だけに resets（おとり）': await quotaOf({
+        text: HEAD,
+        fullText: `${HEAD}\n${DECOY}`,
+      }),
+    };
+    expect(seen).toMatchInlineSnapshot(`
+      {
+        "text に resets が無く・fullText だけに resets（おとり）": {},
+        "text に resets（本物）・fullText に別の resets（おとり）": {
+          "resetText": "resets 9:30am (Asia/Tokyo)",
+          "resetsAt": 1789432200000,
+          "sdkText": "You've hit your session limit · resets 9:30am (Asia/Tokyo)",
+          "sessionWindow": true,
+        },
+      }
+    `);
+    // 値そのもので縛る: おとりの時刻（11:45pm）が quota のどの欄にも入らない
+    expect(JSON.stringify(seen)).not.toContain('11:45pm');
+    expect(seen['text に resets が無く・fullText だけに resets（おとり）']).toEqual({});
+  });
+
   it('turn_failed でも枠の失敗でない（クラッシュ）: quota は付かない（第4引数が undefined）', async () => {
     const s = await open();
     const text = `${HEAD}\n${NOTICE}`;
