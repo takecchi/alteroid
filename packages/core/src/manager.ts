@@ -18,7 +18,7 @@ import {
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import { laterIso } from './later-iso.js';
-import { HELD_FORCE_FOLD_AFTER_MS, HeldMessages, type StaleHoldStuck } from './held-messages.js';
+import { HeldMessages, type StaleHoldStuck } from './held-messages.js';
 import { WITHHELD_REPORT_EXCERPT, resolveWithheldReportFlushMs } from './withheld-reports.js';
 import {
   decodeDenialKey,
@@ -148,6 +148,14 @@ import { ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-appl
 import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import { ManagerClosedNotice } from './manager-closed-notice.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
+import {
+  foldNoticeOf,
+  heldWaitReachedForceFold,
+  heldWaitStartedAt,
+  isBackgroundOnlyStuck,
+  rotationFoldDueAtOf,
+  staleTokenFoldOptionsOf,
+} from './manager-fold-stale-token.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import { ManagerNoteReceiver } from './manager-note.js';
 import { ManagerReportApply } from './manager-report-apply.js';
@@ -184,7 +192,6 @@ import { UsageWake } from './usage-wake.js';
 import { WithheldReportsStore } from './withheld-reports-store.js';
 import { notePhase } from './loop-stall.js';
 import {
-  FOLD_NOTICE_COMMANDS_MAX,
   abortTextsOf,
   composeFoldNotice,
   composePeerCloseNotices,
@@ -1331,17 +1338,6 @@ const MOVED_AWAY_IGNORED_EVENT_TYPES: ReadonlySet<string> = new Set([
   'parked_peers_closed',
   'rescue_restore_request',
 ]);
-
-// 読めない時刻と無い時刻は数えない: 全部無ければ `undefined`（待ちの数え始めが分からない）
-function earliestMs(times: readonly (string | undefined)[]): number | undefined {
-  return times
-    .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
-    .filter((at) => !Number.isNaN(at))
-    .reduce<number | undefined>(
-      (min, at) => (min === undefined ? at : Math.min(min, at)),
-      undefined,
-    );
-}
 
 /**
  * `Pool#send` の届け方。`mode === 'held-delivery'` は預かった伝言の届け直し（`HeldMessages#deliver`）だけが使う: 断られても預け直さず、預かりの列にも並ばない（並ぶと自分自身を待つ）。
@@ -2816,49 +2812,40 @@ class Pool implements ManagerPool {
   > {
     const { mode, pollRetry = false, onStuck } = delivery;
     const oldestHeldAt = record.job.heldMessages?.[0]?.heldAt;
-    // 待ちの数え始めは、いちばん古い預かりと、背景処理待ちに入った時刻の早いほう（#5041）: 担当は預かりより前から古い鍵のまま
-    // 背景処理を待っていて、話しかけたい伝言が届いた時点で、もう止まっている時間を数えるため（預かりだけから数えると、LAND-9 は8分で畳まれなかった）。
     // 畳むのは今どおり `StaleTokenFold` が「鍵が現役と食い違い、その鍵が ready でない」と判定した回だけ
     // （ready なら旧セッションへ届ける）。人が走らせる長い仕事を、鍵が使える間に奪わない。
     const awaitingSince = this.#withheld.awaitingBackgroundOf(managerId)?.since;
-    const waitStartedAt = earliestMs([oldestHeldAt, awaitingSince]);
+    const waitStartedAt = heldWaitStartedAt(oldestHeldAt, awaitingSince);
     const waitedLongEnough =
       mode === 'held-delivery' &&
       oldestHeldAt !== undefined &&
       waitStartedAt !== undefined &&
-      this.#now() - waitStartedAt >= HELD_FORCE_FOLD_AFTER_MS;
-    // 鍵の回転の起こし直しの待ちの数え始め（#5044）: 枠で止まった時刻と、背景処理待ちに入った時刻の早いほう。
-    // どちらも分からなければ待たない（#4850 の今まで）: 数え始めの無い待ちは、上限が来ないまま古い鍵で居座るため
-    const rotationWaitStartedAt =
-      mode === 'usage-rotation'
-        ? earliestMs([
-            // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
-            this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
-            awaitingSince,
-          ])
-        : undefined;
-    const rotationFoldDueAt =
-      rotationWaitStartedAt === undefined
-        ? undefined
-        : rotationWaitStartedAt + HELD_FORCE_FOLD_AFTER_MS;
-    const folded = await this.#staleTokenFold.fold(record, runner, managerId, {
-      foldBackgroundAfterWait: waitedLongEnough,
-      foldBackgroundIfHeldTokenNotReady: mode === 'usage-rotation',
-      ...(rotationFoldDueAt === undefined || this.#now() >= rotationFoldDueAt
-        ? {}
-        : { rotationFoldDueAt }),
-      skipUnchangedDeclineRecord: mode === 'held-delivery' && pollRetry,
-    });
+      heldWaitReachedForceFold(this.#now(), waitStartedAt);
+    const rotationFoldDueAt = rotationFoldDueAtOf(
+      mode,
+      // 台帳の値を素通しにしない（`ManagerSummary.usageStoppedAt` の doc）: 印が真の参照のため
+      this.#usageStopped.has(managerId) ? record.job.usageStoppedAt : undefined,
+      awaitingSince,
+    );
+    const folded = await this.#staleTokenFold.fold(
+      record,
+      runner,
+      managerId,
+      staleTokenFoldOptionsOf({
+        waitedLongEnough,
+        mode,
+        pollRetry,
+        rotationFoldDueAt,
+        now: rotationFoldDueAt === undefined ? undefined : this.#now(),
+      }),
+    );
     if (folded.declined !== undefined) {
       if (waitedLongEnough && folded.stuck !== undefined) onStuck?.(folded.stuck);
       // 断った本文を捨てない: 呼び手が台帳で追って送り直すしかなく、追い損ねた伝言は誰にも届かないまま消えるため。
       if (holdable) {
         // 畳めない理由が背景処理だけなら、待ちの上限で畳んで届ける。その時刻を返事で言う: 言わないと、呼び手はいつ届くか分からず、
         // 背景処理ごと捨てる manager_stop → manager_start を選ぶ（2026-10-19 に4回。どれも上限の前に手で止めた）
-        const backgroundOnly =
-          folded.stuck !== undefined &&
-          folded.stuck.blockers.length === 1 &&
-          (folded.stuck.backgroundTasks ?? 0) > 0;
+        const backgroundOnly = isBackgroundOnlyStuck(folded.stuck);
         const foldDueAt = backgroundOnly
           ? this.#held.foldDueAt(oldestHeldAt, awaitingSince)
           : undefined;
@@ -2875,22 +2862,11 @@ class Pool implements ManagerPool {
     const staleDelivery = folded.staleDelivery;
     if (folded.foldedBackground !== undefined || folded.foldedPeers !== undefined) {
       // 畳んだ事実は届くまで台帳に残す: この後の resume が失敗して預かりのまま再試行になると、旧セッションはもう無く、畳んだと知る手が無くなるため。
-      const peers = (folded.foldedPeers ?? 0) + (record.job.pendingFoldNotice?.peers ?? 0);
-      record.job.pendingFoldNotice = {
-        backgroundTasks:
-          (folded.foldedBackground ?? 0) + (record.job.pendingFoldNotice?.backgroundTasks ?? 0),
-        ...(peers === 0 ? {} : { peers }),
-        ...(folded.foldedBackgroundCommands === undefined &&
-        record.job.pendingFoldNotice?.commands === undefined
-          ? {}
-          : {
-              commands: [
-                ...(record.job.pendingFoldNotice?.commands ?? []),
-                ...(folded.foldedBackgroundCommands ?? []),
-              ].slice(0, FOLD_NOTICE_COMMANDS_MAX),
-            }),
-        at: this.#nowIso(),
-      };
+      record.job.pendingFoldNotice = foldNoticeOf(
+        folded,
+        record.job.pendingFoldNotice,
+        this.#nowIso(),
+      );
       // 書けなくても進む: 背景処理は殺してあり、この回に届けば断り書きは付く（失うのは再起動を跨ぐ分だけ）。
       await this.#persist(record).catch(() => undefined);
     }
