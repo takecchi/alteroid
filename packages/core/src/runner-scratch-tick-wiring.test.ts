@@ -195,10 +195,11 @@ describe('Host.constructor → RunnerScratchTick の配線', () => {
 
   it('emit の口は Host の emit へ同期で届ける', () => {
     const { events } = build();
-    (only().ports['emit'] as (event: RunnerEvent) => void)({
+    const returned: unknown = (only().ports['emit'] as (event: RunnerEvent) => unknown)({
       type: 'shutting_down',
       runnerId: 'runner-wiring',
     });
+    expect(returned, 'emit は同期で void を返す').toBeUndefined();
     expect(events.at(-1)).toEqual({ type: 'shutting_down', runnerId: 'runner-wiring' });
   });
 
