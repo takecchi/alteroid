@@ -143,9 +143,9 @@ import type {
 import { externalOutputLimits } from './schema.js';
 import { describeUnreadableManagerRow, UnreadableJobError, type Stores } from './store.js';
 import { isManagerInFlight } from './job-status-running.js';
-import { ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-apply.js';
-import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
-import { ManagerClosedNotice } from './manager-closed-notice.js';
+import { type ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-apply.js';
+import type { ManagerClosedFrontReceiver } from './manager-closed-front.js';
+import type { ManagerClosedNotice } from './manager-closed-notice.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
 import {
   carriesFilesOf,
@@ -166,14 +166,15 @@ import {
   staleTokenFoldOptionsOf,
 } from './manager-fold-stale-token.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
-import { ManagerNoteReceiver } from './manager-note.js';
-import { ManagerReportApply } from './manager-report-apply.js';
+import type { ManagerNoteReceiver } from './manager-note.js';
+import { createReceiversTail } from './manager-pool-receivers-tail.js';
+import type { ManagerReportApply } from './manager-report-apply.js';
 import {
   bucketManagersByRunner,
   buildRunnerBacklog,
   buildRunnerOverview,
 } from './manager-runner-overview.js';
-import { ManagerSelfFencedReceiver } from './manager-self-fenced.js';
+import type { ManagerSelfFencedReceiver } from './manager-self-fenced.js';
 import { ManagerSessionReceiver } from './manager-session.js';
 import { ManagerToolUseReceiver } from './manager-tool-use.js';
 import { askDeliveryOf, ManagerWaitingReceiver } from './manager-waiting.js';
@@ -2200,47 +2201,30 @@ class Pool implements ManagerPool {
         this.#emit(managerId, kind, text, requestId, markup),
       nowIso: () => this.#nowIso(),
     });
-    this.#selfFenced = new ManagerSelfFencedReceiver({
-      now: () => this.#now(),
-      journalExchange: this.#journalExchange.bind(this),
-      persist: (record) => this.#persist(record),
-      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
-      withdrawWaiting: (record, reason) => this.#withdrawWaiting(record, reason),
-      scheduleReattach: (runnerId) => this.#scheduleReattach(runnerId),
-    });
-    this.#closedFront = new ManagerClosedFrontReceiver({
-      nowIso: () => this.#nowIso(),
-      journalExchange: this.#journalExchange.bind(this),
-      persist: (record) => this.#persist(record),
-      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
-      retire: (managerId) => this.#retire(managerId),
-    });
-    this.#reportApply = new ManagerReportApply({
-      nowIso: () => this.#nowIso(),
-      usageStopped: this.#usageStopped,
-      resetTimeSkewMatches: this.#resetTimeSkewMatches,
-    });
-    this.#closedApply = new ManagerClosedApply({
+    const tail = createReceiversTail({
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
-      withdrawWaiting: (record, reason) => this.#withdrawWaiting(record, reason),
-    });
-    this.#closedNotice = new ManagerClosedNotice({
-      persist: (record) => this.#persist(record),
-      journalExchange: this.#journalExchange.bind(this),
       emit: (...args) => this.#emit(...args),
-      queueSynthesizedNotice: (...args) => this.#queueSynthesizedNotice(...args),
-      withheld: this.#withheld,
-      synthesized: this.#synthesized,
-    });
-    this.#note = new ManagerNoteReceiver({
       persist: (record) => this.#persist(record),
       journal: (entry) => this.#journal(entry),
       journalExchange: this.#journalExchange.bind(this),
-      emit: (...args) => this.#emit(...args),
+      withdrawWaiting: (record, reason) => this.#withdrawWaiting(record, reason),
+      scheduleReattach: (runnerId) => this.#scheduleReattach(runnerId),
+      retire: (managerId) => this.#retire(managerId),
+      queueSynthesizedNotice: (...args) => this.#queueSynthesizedNotice(...args),
+      withheld: this.#withheld,
+      synthesized: this.#synthesized,
+      usageStopped: this.#usageStopped,
+      resetTimeSkewMatches: this.#resetTimeSkewMatches,
       workerLimitStopped: this.#workerLimitStopped,
       tokenIdentities: this.#tokenIdentities,
     });
+    this.#selfFenced = tail.selfFenced;
+    this.#closedFront = tail.closedFront;
+    this.#reportApply = tail.reportApply;
+    this.#closedApply = tail.closedApply;
+    this.#closedNotice = tail.closedNotice;
+    this.#note = tail.note;
     this.#onUsageObservation = onUsageObservation;
     // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
