@@ -1409,6 +1409,38 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
     `);
   });
 
+  it('畳み（stop）で解けた確認: settled に withdrawn が載り、note #6 も #7 も出ない（クローンの判断として書かない）。no-retry。許可は置かれない', async () => {
+    const rig = await open();
+    const called = fire(rig, { tool_use_id: 'tu-s' });
+    await rig.host.stop('mgr-1');
+    await until(called.done);
+    expect({
+      value: called.value(),
+      log: view(rig.events).filter(
+        (line) =>
+          line.startsWith('ask:') ||
+          line.startsWith('settled:') ||
+          line.includes('分類器の拒否') ||
+          line.includes('クローンが'),
+      ),
+      waiting: waitingIds(rig),
+      flagAllows: rig.started.flagAllows,
+    }).toMatchInlineSnapshot(`
+      {
+        "flagAllows": [],
+        "log": [
+          "note: 分類器の拒否のフックが届いた（manager:mgr-1・Bash・tool_use_id=tu-s）。理由の先頭: 分類器が拒否した（テスト）（issue #1766）",
+          "ask: tu-s (permission)",
+          "settled: tu-s (withdrawn)",
+        ],
+        "value": {
+          "continue": true,
+        },
+        "waiting": [],
+      }
+    `);
+  });
+
   it('持ち時間切れ（signal の中断）: settled → note #6。no-retry。許可は置かれず、遅れて届いた allow は宛先なし', async () => {
     const rig = await open();
     const controller = new AbortController();
