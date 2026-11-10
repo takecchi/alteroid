@@ -156,6 +156,8 @@ describe('RunnerScratchTick.tick', () => {
   afterEach(async () => {
     vi.useRealTimers();
     await settle();
+    // `unhandledRejection` は微小タスクが空いた後の macrotask で届く: 数回譲る（時間は進めない）
+    for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
     process.off('unhandledRejection', onUnhandled);
     // `.catch` が外れると、拒否が誰にも受けられずここへ来る
     expect(unhandled).toEqual([]);
