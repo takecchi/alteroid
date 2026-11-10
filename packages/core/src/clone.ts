@@ -219,6 +219,7 @@ import { createCloneMcpServer, type ToolContext } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
+import { quotaNoticeOfEnded, quotaNoticeOfError } from './clone-distill-quota-notice.js';
 import { describeReopenArchive } from './clone-reopen.js';
 import {
   describeFailureJournalLine,
@@ -4731,15 +4732,8 @@ class Clone implements CloneHost {
         // 成功の判定は `succeeded`: `#runTurn` を通らないので `TurnOutcome` が無く、成否はターンの終わりからしか取れない。
         // 失敗は投げる（#4705）: 枠切れ・実行中の失敗は例外ではなく `succeeded: false` で届く。呼び手は「投げなければ成功」と読み、墓標を立てない・下ろすため
         if (!ended.succeeded) {
-          const candidates = [ended.failure?.text, ended.body, ...ended.errorLines];
-          for (const candidate of candidates) {
-            if (candidate === undefined) continue;
-            const notice = classifyUsageNotice(candidate);
-            if (notice?.kind === 'reached') {
-              await observeQuota(notice);
-              break;
-            }
-          }
+          const notice = quotaNoticeOfEnded(ended);
+          if (notice !== undefined) await observeQuota(notice);
           throw new Error('蒸留のターンが成功で終わらなかった（枠切れ・実行中の失敗など）');
         }
         await this.#journal(distillSucceededEntry('pre_compact'));
@@ -4747,13 +4741,8 @@ class Clone implements CloneHost {
       }
     } catch (error) {
       // 例外で来た枠切れ（429）もここで観測へ上げる。`succeeded: false` で来た分は上で上げて、同じ Error を投げているのでここでは数えない
-      const raw = String(error);
-      const classified = classifyUsageNotice(raw);
-      if (classified?.kind === 'reached') {
-        await observeQuota(classified);
-      } else if (isRateLimitReason(raw)) {
-        await observeQuota({ kind: 'reached', text: reasonOf(error) });
-      }
+      const notice = quotaNoticeOfError(error);
+      if (notice !== undefined) await observeQuota(notice);
       throw error;
     }
     throw new Error('蒸留のターンが終わりを告げないまま閉じた');
