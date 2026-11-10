@@ -180,7 +180,6 @@ import {
   openStagedOutboxFile,
   outboxCollectFailureRefusals,
   prepareManagerOutbox,
-  pruneStaleOutboxRoots,
   removeManagerOutbox,
   removeStagedOutboxFile,
   RUNNER_OUTBOX_ENV,
@@ -262,6 +261,7 @@ import { RunnerDenialJudge } from './runner-denial-judge.js';
 import { RunnerDenialNotice } from './runner-denial-notice.js';
 import { RunnerFailureClassifier, resultTextOf } from './runner-failure-classify.js';
 import { RunnerReportEmitter, reportText } from './runner-report-emit.js';
+import { RunnerScratchTick } from './runner-scratch-tick.js';
 import { decideAnswer } from './runner-decide-answer.js';
 import { type PendingRequest, RunnerRequestQueue } from './runner-request-queue.js';
 import { RunnerResumeState } from './runner-resume-state.js';
@@ -888,9 +888,6 @@ class Host implements RunnerHost {
   #rescueTimer: ReturnType<typeof setInterval> | null = null;
   #scratchTimer: ReturnType<typeof setInterval> | null = null;
   readonly #scratchAbort = new AbortController();
-  #scratchRunning: Promise<void> | null = null;
-  #attachmentPruning: Promise<void> | null = null;
-  #outboxPruning: Promise<void> | null = null;
   readonly #knownManagerIds = new Set<string>();
   // 担当ごとに受け入れた lease の最大の世代。セッションが閉じても消さない: 世代の確かめはセッション単位で、閉じると古い世代の起こし直しが素通しになるため（#5507）
   readonly #fenceMemory = new Map<string, number>();
@@ -1023,55 +1020,22 @@ class Host implements RunnerHost {
         liveManagerIds: () => [...this.#sessions.keys()],
         knownManagerIds: () => [...this.#knownManagerIds],
       });
+      // タイマーの 1 周期（添付 → 出し箱 → MCP 設定 → scratch の掃き）は `RunnerScratchTick` へ出した。同期で呼ぶ（`await` を足さない・`async` で包まない: 同じ tick の中で順に呼ぶため）
+      const scratchTick = new RunnerScratchTick({
+        attachmentsRoot: this.#attachmentsRoot,
+        outboxRoot: this.#outboxRoot,
+        outboxStagedRoot: this.#outboxStagedRoot,
+        rescueStagedRoot: this.#rescueStagedRoot,
+        sessionKeys: () => [...this.#sessions.keys()],
+        outboxRemoval: () => this.#outboxRemoval(),
+        kickMcpConfigSweep: () => this.#kickMcpConfigSweep(),
+        sweeper,
+        scratchAbort: this.#scratchAbort,
+        runnerId: this.runnerId,
+        emit: (event) => this.#emit(event),
+      });
       const scratchTimer = setInterval(
-        () => {
-          if (this.#attachmentPruning === null) {
-            const prune = pruneStaleAttachmentDirs(
-              this.#attachmentsRoot,
-              [...this.#sessions.keys()],
-              Date.now(),
-            )
-              .catch(() => 0)
-              .then(() => undefined)
-              .finally(() => {
-                this.#attachmentPruning = null;
-              });
-            this.#attachmentPruning = prune;
-          }
-          // 出し箱と退避先の取りこぼしも、添付と同じ周期・同じ基準（生きた委譲に当たらず24時間触れていない）で消す
-          // `#attachmentPruning` の鎖に乗せない: 添付の掃除が長引いても出し箱の掃除を止めないため（失敗は握る）
-          // 出し箱の root は子の権限で消す（担い手が書ける木を runner の権限で再帰削除しない）
-          // 非同期（#4906）: 同一プロセスの runner では、走査と削除の同期 I/O がデーモンのメインのループを止める。重ならないよう1本ずつ走らせる
-          if (this.#outboxPruning === null) {
-            this.#outboxPruning = pruneStaleOutboxRoots(
-              {
-                outboxRoot: this.#outboxRoot,
-                stagedRoot: this.#outboxStagedRoot,
-                rescueStagedRoot: this.#rescueStagedRoot,
-              },
-              () => [...this.#sessions.keys()],
-              Date.now(),
-              this.#outboxRemoval(),
-            )
-              .catch(() => undefined)
-              .finally(() => {
-                this.#outboxPruning = null;
-              });
-          }
-          // scratch の掃きの鎖に乗せない: あちらは git の判定で長引きうるが、資格入りのファイルを長く残さないため
-          this.#kickMcpConfigSweep();
-          if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
-          const run = sweeper
-            .sweep(this.#scratchAbort.signal, this.runnerId)
-            .then((event) => {
-              if (event !== null && !this.#scratchAbort.signal.aborted) this.#emit(event);
-            })
-            .catch(() => {})
-            .finally(() => {
-              this.#scratchRunning = null;
-            });
-          this.#scratchRunning = run;
-        },
+        () => scratchTick.tick(),
         intervalMs ?? resolveScratchSweepIntervalMs(this.#env),
       );
       scratchTimer.unref?.();
