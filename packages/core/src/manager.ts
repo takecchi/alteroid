@@ -163,6 +163,7 @@ import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import type { ManagerNoteReceiver } from './manager-note.js';
 import { createFoldHeld } from './manager-pool-fold-held.js';
 import { createReceiversTail } from './manager-pool-receivers-tail.js';
+import { createUsageCollaborators } from './manager-pool-usage.js';
 import { createWindows } from './manager-pool-windows.js';
 import type { ManagerReportApply } from './manager-report-apply.js';
 import {
@@ -182,7 +183,7 @@ import {
   unpushedWorkObservationOf,
   type ManagerUnpushedWork,
 } from './unpushed-work-observation.js';
-import { StaleTokenFold } from './stale-token-fold.js';
+import type { StaleTokenFold } from './stale-token-fold.js';
 import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
 import type { RescueSweeper } from './rescue-sweeper.js';
 import type { ManagerRescueStash } from './manager-rescue-stash.js';
@@ -193,8 +194,8 @@ import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import { classifyUsageNotice, isRateLimitReason } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import { UsageRecordOrder, type UsageRecordTicket } from './usage.js';
-import { UsageReceiver } from './usage-receiver.js';
-import { UsageWake } from './usage-wake.js';
+import type { UsageReceiver } from './usage-receiver.js';
+import type { UsageWake } from './usage-wake.js';
 import { WithheldReportsStore } from './withheld-reports-store.js';
 import { notePhase } from './loop-stall.js';
 import {
@@ -2041,7 +2042,9 @@ class Pool implements ManagerPool {
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
     this.#tokenAssignment = tokenAssignment;
-    this.#usageWake = new UsageWake({
+    const u = createUsageCollaborators({
+      stores,
+      tokenAvailability,
       records: this.#records,
       usageStopped: this.#usageStopped,
       usageWakeOwed: this.#usageWakeOwed,
@@ -2053,59 +2056,40 @@ class Pool implements ManagerPool {
       resetTimeSkewMatches: this.#resetTimeSkewMatches,
       supersedePending: this.#supersedePending,
       tokenIdentities: this.#tokenIdentities,
-      stores,
+      resumedCount: this.#resumedCount,
       now: () => this.#now(),
+      nowIso: () => this.#nowIso(),
       stopped: () => this.#stopped,
       load: (managerId) => this.#load(managerId),
       findJob: (managerId) => this.#findJob(managerId),
       persist: (record) => this.#persist(record),
       journal: (entry) => this.#journal(entry),
-      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
       journalExchange: this.#journalExchange.bind(this),
       tokenIdentity: (managerId) => this.#targetIdentityOf(managerId),
-      tokenAvailability:
-        tokenAvailability === undefined ? undefined : (tokenId) => tokenAvailability(tokenId),
       send: (managerId, message, delivery) => this.#send(managerId, message, {}, delivery),
       queueSynthesizedNotice: (managerId, label, text) =>
         this.#queueSynthesizedNotice(managerId, label, text),
+      receiverQueueSynthesizedNotice: (managerId, label, text, quotaMark) =>
+        this.#queueSynthesizedNotice(managerId, label, text, quotaMark),
       observeForTokenRotation: (managerId, observation, heldFingerprint) =>
         this.#observeForTokenRotation(managerId, observation, heldFingerprint),
-      sessionTokenFingerprintOf: (managerId) => this.#sessionTokenFingerprintOf(managerId),
-      beforeWakes: (wakeIds) => this.#autoFold.beforeWakes(wakeIds),
-      rateLimits: () => this.#usageReceiver.rateLimits,
-    });
-    this.#staleTokenFold = new StaleTokenFold({
-      resumedCount: this.#resumedCount,
-      rotationFoldDueAt: this.#rotationFoldDueAt,
-      tokenIdentities: this.#tokenIdentities,
-      tokenIdentity: (managerId) => this.#targetIdentityOf(managerId),
-      tokenAvailability:
-        tokenAvailability === undefined ? undefined : (tokenId) => tokenAvailability(tokenId),
+      receiverObserveForTokenRotation: (managerId, observation) =>
+        this.#observeForTokenRotation(managerId, observation),
       sessionTokenFingerprintOf: (managerId) => this.#sessionTokenFingerprintOf(managerId),
       observedTokenFingerprint: (runnerId, managerId) =>
         this.#observedSessionField('sessionTokenFingerprints', runnerId, managerId),
-      journal: (entry) => this.#journal(entry),
+      movedAwayFrom: (record, fromRunnerId) => this.#movedAwayFrom(record, fromRunnerId),
+      unpushedWork: (managerId, options) => this.unpushedWork(managerId, options),
+      beforeWakes: (wakeIds) => this.#autoFold.beforeWakes(wakeIds),
+      rateLimits: () => this.#usageReceiver.rateLimits,
       lastStaleDecline: (managerId) => this.#held.lastStaleDecline(managerId),
       rememberStaleDecline: (managerId, declineRecord) =>
         this.#held.rememberStaleDecline(managerId, declineRecord),
-      unpushedWork: (managerId, options) => this.unpushedWork(managerId, options),
-    });
-    this.#usageReceiver = new UsageReceiver({
-      stores: this.#stores,
-      now: () => this.#now(),
-      nowIso: () => this.#nowIso(),
-      tokenIdentities: this.#tokenIdentities,
-      usageStopped: this.#usageStopped,
-      journal: (entry) => this.#journal(entry),
-      journalExchange: this.#journalExchange.bind(this),
-      persist: (record) => this.#persist(record),
-      movedAwayFrom: (record, fromRunnerId) => this.#movedAwayFrom(record, fromRunnerId),
-      observeForTokenRotation: (managerId, observation) =>
-        this.#observeForTokenRotation(managerId, observation),
       rememberResetTimeSkew: (event) => this.#usageWake.rememberResetTimeSkew(event),
-      queueSynthesizedNotice: (managerId, label, text, quotaMark) =>
-        this.#queueSynthesizedNotice(managerId, label, text, quotaMark),
     });
+    this.#usageWake = u.usageWake;
+    this.#staleTokenFold = u.staleTokenFold;
+    this.#usageReceiver = u.usageReceiver;
     this.#archiveReceiver = new ArchiveReceiver({
       stores: this.#stores,
       fetchArchiveRetrying: (managerId, archiveId, fromRunnerId) =>
