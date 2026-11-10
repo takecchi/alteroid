@@ -35,7 +35,6 @@ import {
 import {
   QUOTA_STOP_WINDOW_MS,
   failedReportBodyOf,
-  partialBeforeFailureOf,
   quotaMarkOf,
   type QuotaMark,
 } from './quota-stop-notice.js';
@@ -149,6 +148,16 @@ import { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import { ManagerClosedNotice } from './manager-closed-notice.js';
 import { ManagerDenialReceiver } from './manager-denial.js';
 import {
+  carriesFilesOf,
+  foldedReportDecisionOf,
+  foldedTurnOf,
+  hasReportFileRefs,
+  outwardReportDecisionOf,
+  overtakenReportDecisionOf,
+  quotaMarkArgsOf,
+  reportEmitTextOf,
+} from './manager-deliver-report.js';
+import {
   foldNoticeOf,
   heldWaitReachedForceFold,
   heldWaitStartedAt,
@@ -203,7 +212,6 @@ import {
   notifyExcerptLines,
   remainingFoldNotice,
   remainingPeerCloseNotice,
-  reportDeliveryTextOf,
   reportFullTextOf,
   restartNudge,
   resumeFailureDetail,
@@ -6429,27 +6437,19 @@ class Pool implements ManagerPool {
     fromRunnerId: string,
   ): Promise<void> {
     // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも配る: 成果物を握り潰さない。何も添えられていない報告は `await` を挟まない。
-    const reportFiles =
-      (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
-        ? await this.#fetchReportFiles(event, fromRunnerId)
-        : undefined;
-    const carriesFiles =
-      reportFiles !== undefined &&
-      (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
+    const reportFiles = hasReportFileRefs(event)
+      ? await this.#fetchReportFiles(event, fromRunnerId)
+      : undefined;
+    const carriesFiles = carriesFilesOf(reportFiles);
     // 中身の無い報告は記録だけ残しクローンのターンを起こさない。`event.text` の文字列ではなく構造化された印 `contentless` で判定する。
     if (event.contentless === true && !carriesFiles) return;
     // 背景処理の完了待ちで畳んだターンの報告は記録だけ残し受信箱へ回さない（`event.text` の中身では判定しない）。捨てるのではなく後で必ず配る: 次の本物の報告が `#emit()` を通るときに上書きされ、来なければ `case 'closed'` と `flushWithheldReports()` が配る。
     // 配らなかった判断は日誌の `decision` に残る（本文は上の `exchange` に全文あるので抜粋でよい）。
     // 外へ出した成果（マージ・PR の作成・push など）を含む報告は畳まない: 30分のまとめ配りまで待たせると、他の担当への連絡がその分遅れるため。判定は本文ではなく、runner が見た実際のコマンド（`outwardActions`）だけで行う
     if (event.awaitingBackground !== undefined && event.outwardActions !== undefined) {
-      await this.#journal({
-        type: 'decision',
-        decision: `[${event.managerId}] 背景処理の完了待ちのターンだが、外へ出した成果を含むので受信箱へ回す`,
-        grounds:
-          `managerId=${event.managerId} ` +
-          `outwardActions=${event.outwardActions.join(', ')} ` +
-          `awaitingBackground.count=${String(event.awaitingBackground.count)}`,
-      });
+      await this.#journal(
+        outwardReportDecisionOf(event.managerId, event.outwardActions, event.awaitingBackground),
+      );
     }
     if (
       event.awaitingBackground !== undefined &&
@@ -6457,16 +6457,7 @@ class Pool implements ManagerPool {
       !carriesFiles
     ) {
       const awaitingBackground = event.awaitingBackground;
-      await this.#journal({
-        type: 'decision',
-        decision: `[${event.managerId}] 背景処理の完了待ちで畳んだターンの報告なので受信箱へは回さない`,
-        grounds:
-          `managerId=${event.managerId} ` +
-          `awaitingBackground.count=${String(awaitingBackground.count)} ` +
-          `breakdown=${awaitingBackground.breakdown} ` +
-          `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
-        routine: true,
-      });
+      await this.#journal(foldedReportDecisionOf(event.managerId, event.text, awaitingBackground));
       // 畳む前に像と状態を見直す: 上の `await` の間に `abort()` / `#retire()` が走り切ると在庫が消えており、ここで積むと止めた委譲の報告を `flushWithheldReports()` が受信箱へ配ってしまう（#5504）。日誌の `decision` は事実として残す。
       if (record.job.status === 'stopped') return;
       // 人間・クローンが止めたのではなく、同じ担当の `closed`（done など）に追い越されて `#retire()` されただけなら、積まずに今すぐ配る: 積んでも `closed` はもう在庫を見終えており、`flushWithheldReports()` も像が無くて拾わないので、本文がクローンへ届かず消える。`closed` の「report 無し」の知らせは `lastReportAt` が書かれていて出ないので、二重にもならない。
@@ -6474,22 +6465,16 @@ class Pool implements ManagerPool {
         this.#emit(
           event.managerId,
           'report',
-          this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
+          reportEmitTextOf(this.#tokenSavingExcerpt, event),
           undefined,
           undefined,
           'full',
-          event.failure !== undefined || event.unreported !== undefined,
+          foldedTurnOf(event),
         );
         // 上で書いた「受信箱へは回さない」の decision は消せないので、実際には配ったことを日誌に足す（日誌だけ読む人に「配られていない」と読ませない）。
-        await this.#journal({
-          type: 'decision',
-          decision: `[${event.managerId}] 同じ担当の closed に追い越されたので、畳まずに受信箱へ配った`,
-          grounds:
-            `managerId=${event.managerId} ` +
-            `awaitingBackground.count=${String(awaitingBackground.count)} ` +
-            `本文冒頭: ${excerptLine(event.text, WITHHELD_REPORT_EXCERPT)}`,
-          routine: true,
-        });
+        await this.#journal(
+          overtakenReportDecisionOf(event.managerId, event.text, awaitingBackground),
+        );
         return;
       }
       this.#withheld.withhold(event.managerId, event.text, awaitingBackground);
@@ -6497,7 +6482,7 @@ class Pool implements ManagerPool {
     }
     // `event.text` を包まない: runner 側で複数の書き手（マネージャー・SDK・runner）の断片が既に1本の文字列に連結されており、この層には `codeSpan()` で包む境目が無い。包むなら連結する側（`runner.ts`）。
     // `foldedTurn` は本文の文言ではなく構造化された印（`event.failure` / `event.unreported`）だけで判定する。
-    const foldedTurn = event.failure !== undefined || event.unreported !== undefined;
+    const foldedTurn = foldedTurnOf(event);
     // `synthesized` が無い（旧 runner）ときは常に即配る側へ倒す: 版がずれた窓では必ず「起こす側」にする。
     // 合流窓へ積む枝では `foldedTurn` を渡さない: 複数の断片を1本にまとめる口で単発の bool を渡す場所が無く、`#flushSynthesizedNoticeFor` が `label` から判定し直す。
     if (event.synthesized !== undefined && !carriesFiles) {
@@ -6508,12 +6493,8 @@ class Pool implements ManagerPool {
         event.failure !== undefined &&
         isQuotaFailure(event.failure)
       ) {
-        const body = failedReportBodyOf(event.text);
-        const said = partialBeforeFailureOf(event.text);
-        quota = quotaMarkOf(body === undefined ? {} : { text: body }, this.#now(), {
-          ...(body === undefined ? {} : { sdkText: body }),
-          ...(said === undefined ? {} : { said }),
-        });
+        const quotaMarkArgs = quotaMarkArgsOf(event.text);
+        quota = quotaMarkOf(quotaMarkArgs.source, this.#now(), quotaMarkArgs.extra);
       }
       this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text, quota);
     } else {
@@ -6521,7 +6502,7 @@ class Pool implements ManagerPool {
         event.managerId,
         'report',
         // 系統3の節約が無効なら、途中の発言を含む全文を配る（#5269 の前の形）
-        this.#tokenSavingExcerpt ? reportDeliveryTextOf(event) : reportFullTextOf(event),
+        reportEmitTextOf(this.#tokenSavingExcerpt, event),
         undefined,
         undefined,
         'full',
