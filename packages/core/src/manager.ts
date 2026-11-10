@@ -127,7 +127,6 @@ import type {
   RunnerRevisionStatus,
   RunnerWaiting,
 } from './runner-protocol.js';
-import { definedProps } from './defined-props.js';
 import { probeRunnerFingerprint, type RunnerFingerprintProbe } from './runner-probe.js';
 import { brief } from './runner.js';
 import type {
@@ -152,6 +151,11 @@ import { ManagerDenialReceiver } from './manager-denial.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import { ManagerNoteReceiver } from './manager-note.js';
 import { ManagerReportApply } from './manager-report-apply.js';
+import {
+  bucketManagersByRunner,
+  buildRunnerBacklog,
+  buildRunnerOverview,
+} from './manager-runner-overview.js';
 import { ManagerSelfFencedReceiver } from './manager-self-fenced.js';
 import { ManagerSessionReceiver } from './manager-session.js';
 import { ManagerToolUseReceiver } from './manager-tool-use.js';
@@ -3416,30 +3420,7 @@ class Pool implements ManagerPool {
     const managers = await this.list();
     const entries = this.#runners.entries();
 
-    // `runnerId` が無い分はどの器にも混ぜず別枠へ: 0 に畳むと「記録が無いマネージャーは存在しない」と読める。
-    const byRunner = new Map<string, RunnerManagerEntry[]>();
-    const unassigned: RunnerManagerEntry[] = [];
-    for (const manager of managers) {
-      // `live` を落とさない: 落とすと `runner_list` の側でだけ「走行中」と「走行中だがセッション切断」が潰れる（`RunnerManagerEntry` の doc）。
-      const item: RunnerManagerEntry = {
-        managerId: manager.managerId,
-        status: manager.status,
-        live: manager.live,
-        ...definedProps({
-          awaitingBackground: manager.awaitingBackground,
-          tokenGeneration: manager.tokenGeneration,
-          activeTokenGeneration: manager.activeTokenGeneration,
-          tokenGenerationUnknownReason: manager.tokenGenerationUnknownReason,
-        }),
-      };
-      if (manager.runnerId === undefined) {
-        unassigned.push(item);
-        continue;
-      }
-      const bucket = byRunner.get(manager.runnerId);
-      if (bucket) bucket.push(item);
-      else byRunner.set(manager.runnerId, [item]);
-    }
+    const { byRunner, unassigned } = bucketManagersByRunner(managers);
 
     // 指紋・資源は明示的に頼まれたときだけ聞きに行く。同じ `open` を材料にして往復を増やさない。
     const open =
@@ -3458,9 +3439,6 @@ class Pool implements ManagerPool {
           probeRunnerFingerprint(client, options.fingerprints, (c) => c.profile()),
           probeRunnerFingerprint(client, options.fingerprints, (c) => c.mcpServers()),
         ]);
-        const credentials = credentialsProbed.value;
-        const profile = profileProbed.value;
-        const mcpServers = mcpServersProbed.value;
         // 訊けなかった理由は `resourcesProbe` が持つ（失敗・「繋がっていない」を `undefined` に潰さない）。
         // `asked` で `value` が `undefined` のままでも、応答が資源を名乗らなかっただけで失敗ではない。
         const resourcesProbed = await probeRunnerFingerprint(client, options.resources, (c) =>
@@ -3471,18 +3449,17 @@ class Pool implements ManagerPool {
 
         // `pendingEvents` が `undefined`（古い runner・応答の形が壊れていた）のときは書かない: 0 で埋めない。
         if (entry.runnerId !== undefined && resources?.pendingEvents !== undefined) {
-          this.#runnerBacklog.set(entry.runnerId, {
-            runnerId: entry.runnerId,
-            pendingEvents: resources.pendingEvents,
-            ...(resources.oldestPendingAt === undefined
-              ? {}
-              : { oldestPendingAt: resources.oldestPendingAt }),
-            observedAt: this.#nowIso(),
-            // `resources()` は instanceId を運ばないので、名簿がいま知っている値を観測時点のものとして凍結する。
-            ...(entry.instanceId === undefined
-              ? {}
-              : { instanceIdAtObservation: entry.instanceId }),
-          });
+          this.#runnerBacklog.set(
+            entry.runnerId,
+            buildRunnerBacklog(
+              { runnerId: entry.runnerId, instanceId: entry.instanceId },
+              {
+                pendingEvents: resources.pendingEvents,
+                oldestPendingAt: resources.oldestPendingAt,
+              },
+              this.#nowIso(),
+            ),
+          );
         }
 
         const pidsSaturation =
@@ -3490,34 +3467,14 @@ class Pool implements ManagerPool {
             ? undefined
             : this.#runners.pidsSaturationOf(entry.runnerId, resources?.pids);
 
-        const overview: RunnerOverview = {
-          label: entry.label,
-          state: entry.state,
-          since: entry.since,
-          ...(entry.error === undefined ? {} : { error: entry.error }),
-          ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
-          ...(entry.workspacePath === undefined ? {} : { workspacePath: entry.workspacePath }),
-          ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
-          ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
-          managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
-          ...(credentials === undefined ? {} : { credentials }),
-          ...(credentialsProbed.probe === undefined
-            ? {}
-            : { credentialsProbe: credentialsProbed.probe }),
-          ...(profile === undefined ? {} : { profile }),
-          ...(profileProbed.probe === undefined ? {} : { profileProbe: profileProbed.probe }),
-          ...(mcpServers === undefined ? {} : { mcpServers }),
-          ...(mcpServersProbed.probe === undefined
-            ? {}
-            : { mcpServersProbe: mcpServersProbed.probe }),
-          ...(resources === undefined ? {} : { resources }),
-          ...(resourcesProbed.probe === undefined ? {} : { resourcesProbe: resourcesProbed.probe }),
-          ...(pidsSaturation === undefined ? {} : { pidsSaturation }),
-          revision: entry.revision,
-          // `fingerprints` の要否を見ない: 往復を払わない（記憶を読むだけ）ので opt-in にする理由が無い。
-          ...(pushHealth === undefined ? {} : { pushHealth }),
-          managerPeers: this.managerPeersOf(entry.runnerId),
-        };
+        const overview: RunnerOverview = buildRunnerOverview(
+          entry,
+          entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
+          { credentialsProbed, profileProbed, mcpServersProbed, resourcesProbed, resources },
+          pushHealth,
+          pidsSaturation,
+          this.managerPeersOf(entry.runnerId),
+        );
 
         // `undefined`（pids を見ていない）と `[]`（見たが候補が無かった・全部見送った）を混ぜない:
         // `autoFolded.length===0` で測ると「逼迫していたが候補が0件」と「逼迫を見なかった」が同じ形に潰れる。
