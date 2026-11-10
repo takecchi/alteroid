@@ -242,7 +242,6 @@ const RETRY = {
   continue: true,
   hookSpecificOutput: { hookEventName: 'PermissionDenied', retry: true },
 };
-const NO_RETRY = { continue: true };
 
 /** `PermissionDenied` フックを実際に呼ぶ。`undefined` を渡した欄は、SDK が欄ごと送らない形（`tool_name` が無い・`tool_input` が無い）になる。 */
 function fire(
@@ -648,7 +647,9 @@ describe('早期 return（note #3・#4）: クローンへ確認を上げず no-
     const rig = await open();
     const called = fire(rig, { tool_use_id: undefined });
     const [ask] = asksOf(rig.events);
-    expect(ask?.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(ask?.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(view(rig.events).some((line) => line.includes('tool_use_id=無し'))).toBe(true);
     await answerAllow(rig, ask?.requestId ?? '');
     await until(called.done);
@@ -1072,6 +1073,10 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
     }
     await until(called.done);
     const input = (overrides.tool_input ?? { command: 'echo hi' }) as unknown;
+    const agent =
+      overrides.agent_id === undefined
+        ? {}
+        : { agent_id: overrides.agent_id, agent_type: overrides.agent_type };
     return {
       summary,
       askLog,
@@ -1082,7 +1087,13 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
       status: statusOf(rig),
       flagAllows: rig.started.flagAllows,
       // 撃ち直し: 許可が置かれていれば allow、置かれていなければ continue
-      retryDecision: await pre(rig, 'tu-s-retry', String(overrides.tool_name ?? 'Bash'), input),
+      retryDecision: await pre(
+        rig,
+        'tu-s-retry',
+        String(overrides.tool_name ?? 'Bash'),
+        input,
+        agent,
+      ),
     };
   }
 
@@ -1130,9 +1141,8 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
   });
 
   it('allow（Bash 以外）: 規則は足さず黙って note #8（一時規則を足していない文面）。summary は従来の段落', async () => {
-    expect(
-      await run('allow', { tool_name: 'Read', tool_input: { file_path: '/tmp/a' } }),
-    ).toMatchInlineSnapshot(`
+    expect(await run('allow', { tool_name: 'Read', tool_input: { file_path: '/tmp/a' } }))
+      .toMatchInlineSnapshot(`
       {
         "answered": {
           "decision": "allow",
@@ -1170,9 +1180,7 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
   });
 
   it('allow（`*` を含む Bash）: 規則にできない旨の note → note #8（足していない文面）。summary は従来の段落', async () => {
-    expect(
-      await run('allow', { tool_input: { command: 'ls /tmp/*' } }),
-    ).toMatchInlineSnapshot(`
+    expect(await run('allow', { tool_input: { command: 'ls /tmp/*' } })).toMatchInlineSnapshot(`
       {
         "answered": {
           "decision": "allow",
@@ -1287,10 +1295,9 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
     `);
   });
 
-  it('allow（理由なし・作業者・入力の先頭が取れない）: summary の欄の埋め方と、作業者の担い手名', async () => {
-    expect(
-      await run('allow', { ...WORKER, reason: undefined, tool_input: { command: '' } }),
-    ).toMatchInlineSnapshot(`
+  it('allow（理由なし・作業者・空の command）: summary の欄の埋め方（理由なしは「(無し)」）と、作業者の担い手名。撃ち直しは同じ作業者にだけ効く', async () => {
+    expect(await run('allow', { ...WORKER, reason: undefined, tool_input: { command: '' } }))
+      .toMatchInlineSnapshot(`
       {
         "answered": {
           "decision": "allow",
@@ -1312,7 +1319,7 @@ describe('S2/S3/S4: 答えと note #6〜#8・retry の値', () => {
           "note: 分類器が止めた worker:mgr-1:worker-x の Bash 呼び出しを、クローンの allow を受けて、同じ入力の1回だけを通す一時規則としてこのセッションに足した（担当 mgr-1・10分で外す。そのセッションの他の作業者が同じ入力を撃っても、1回使えば外れる。#4905）。入力の先頭（伏せ字）: ",
           "note: クローンが分類器の拒否（worker:mgr-1:worker-x・Bash）を1回だけ許可した。同じ入力で撃ち直されたときにだけ、10分以内なら1回通す（issue #1105 P1）。撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない（撃ち直しが来なければ、この許可は使われないまま期限が切れる）。同じ入力の1回だけを10分通す一時規則をこのセッションに足した（そのセッションの他の作業者にも効く。#4905）。撃ち直すなら入力を1字も変えないこと。それでも拒否されたら、別の手（入力を変える・手順を分ける・人間に頼む）を取ること。担い手へ manager_send で伝えるときも、この趣旨で書く。これで通るかは確かめていない。",
         ],
-        "retryDecision": "continue",
+        "retryDecision": "allow",
         "status": "running",
         "summary": "分類器が worker:mgr-1:worker-x の Bash 呼び出しを拒否した。この1回だけ許可しますか。
 
@@ -1610,16 +1617,35 @@ describe('周回数（マイクロタスク。`#onPermissionDenied` の await 4 
     `);
   });
 
-  it('早期 return と解けたあとの再送は await を挟まない: フックは同期のうちに決着する（解けるのは 1 周回のうち）', async () => {
-    const rig = await open();
-    const noName = fire(rig, { tool_name: undefined, tool_use_id: 'tu-l1' });
-    const noInput = fire(rig, { tool_input: undefined, tool_use_id: 'tu-l2' });
-    const noNameLaps = await lapsUntil(noName.done);
-    const noInputLaps = await lapsUntil(noInput.done);
-    expect({ noNameLaps, noInputLaps }).toMatchInlineSnapshot(`
+  it('早期 return・再拒否（note #5）・解けたあとの再送は、`#onPermissionDenied` の中で await を挟まない: フックが解ける周回は口の async ぶんだけ', async () => {
+    const lapsOf = async (
+      overrides: Record<string, unknown>,
+      prepare?: (rig: Rig) => Promise<void>,
+    ) => {
+      const rig = await open();
+      if (prepare !== undefined) await prepare(rig);
+      const called = fire(rig, overrides);
+      return lapsUntil(called.done);
+    };
+    expect({
+      noName: await lapsOf({ tool_name: undefined }),
+      noInput: await lapsOf({ tool_input: undefined }),
+      reDenied: await lapsOf(
+        { tool_use_id: 'tu-3', tool_input: { command: 'echo again' } },
+        async (rig) => {
+          await allowFlow(rig, 'tu-1', { command: 'echo again' });
+          expect(await pre(rig, 'tu-2', 'Bash', { command: 'echo again' })).toBe('allow');
+        },
+      ),
+      resolvedResend: await lapsOf({ tool_use_id: 'tu-1' }, async (rig) => {
+        await allowFlow(rig, 'tu-1', { command: 'echo hi' });
+      }),
+    }).toMatchInlineSnapshot(`
       {
-        "noInputLaps": 0,
-        "noNameLaps": 2,
+        "noInput": 2,
+        "noName": 2,
+        "reDenied": 2,
+        "resolvedResend": 2,
       }
     `);
   });
@@ -1697,9 +1723,8 @@ describe('emit が同期で投げたとき（どの出力が投げても、フ�
   };
 
   it('入口の note（#2）が投げる: フックは拒否され、ask は出ず、何も積まれない', async () => {
-    expect(
-      await runThrow({ label: '#2', match: noteIncludes('分類器の拒否のフックが届いた') }),
-    ).toMatchInlineSnapshot(`
+    expect(await runThrow({ label: '#2', match: noteIncludes('分類器の拒否のフックが届いた') }))
+      .toMatchInlineSnapshot(`
       {
         "answerOutcome": null,
         "flagAllows": [],
@@ -1830,7 +1855,7 @@ describe('emit が同期で投げたとき（どの出力が投げても、フ�
     `);
   });
 
-  it('ask が投げる: フックは拒否され、確認は #pending に残る。あとで答えても、フックはもう終わっていて note も規則も出ない', async () => {
+  it('ask が投げる: フックは拒否される（確認が #pending に残ることは runner-queue-request-pin.test.ts が縛る）。あとで答えて解いても、フックはもう終わっていて note も規則も出ない', async () => {
     expect(
       await runThrow({
         label: 'ask',
