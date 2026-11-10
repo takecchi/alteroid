@@ -242,14 +242,9 @@ import {
   describeDenialStreakForClone,
 } from './classifier-denial-streak.js';
 import {
-  buildDenialAllowedButDeniedNote,
   buildDenialAllowedByCloneNote,
   buildDenialAskSummary,
   buildDenialDeniedByCloneNote,
-  buildDenialEntryNote,
-  buildDenialNoMatchKeyNote,
-  buildDenialNoToolNameNote,
-  buildDenialStreakNote,
   buildDenialTimedOutNote,
 } from './runner-permission-denied-text.js';
 import {
@@ -263,6 +258,7 @@ import { RunnerBashGuard } from './runner-bash-guard.js';
 import { OWNER_RECORDABLE_TASK_TYPES } from './runner-background-task-rows.js';
 import { RunnerStopObserver } from './runner-stop-observer.js';
 import { RunnerSubagentStopObserver } from './runner-subagent-stop.js';
+import { RunnerDenialJudge } from './runner-denial-judge.js';
 import { RunnerDenialNotice } from './runner-denial-notice.js';
 import { RunnerFailureClassifier, resultTextOf } from './runner-failure-classify.js';
 import { RunnerReportEmitter, reportText } from './runner-report-emit.js';
@@ -328,6 +324,8 @@ import {
   actorOf,
   brief,
   digestOf,
+  oneShotActorOf,
+  oneShotAllowKey,
   workerActorOf,
 } from './runner-actor-keys.js';
 import {
@@ -2583,6 +2581,7 @@ class RunnerSession {
   readonly #stopObserver: RunnerStopObserver;
   readonly #subagentStopObserver: RunnerSubagentStopObserver;
   readonly #denialNotice: RunnerDenialNotice;
+  readonly #denialJudge: RunnerDenialJudge;
   readonly #failureClassifier: RunnerFailureClassifier;
   readonly #reportEmitter: RunnerReportEmitter;
   readonly #requestQueue: RunnerRequestQueue;
@@ -2808,6 +2807,18 @@ class RunnerSession {
       note: (text) => this.#note(text),
       emit: (event) => this.#emit(event),
       managerId: this.#id,
+    });
+    this.#denialJudge = new RunnerDenialJudge({
+      settleSessionAllowRuleUse: (toolUseId, outcome) =>
+        this.#settleSessionAllowRuleUse(toolUseId, outcome),
+      sweepExpiredSessionAllowRules: () => this.#sweepExpiredSessionAllowRules(),
+      denialStreaks: this.#denialStreaks,
+      note: (text) => this.#note(text),
+      managerId: this.#id,
+      env: this.#env,
+      vaultValues: () => this.#vaultValues(),
+      oneShotAllowedToolUses: this.#oneShotAllowedToolUses,
+      allowedButDenied: this.#allowedButDenied,
     });
     this.#failureClassifier = new RunnerFailureClassifier({
       emit: (event) => this.#emit(event),
@@ -4920,58 +4931,14 @@ class RunnerSession {
   }
 
   // `#onPermission` の実装を直接再利用しない: あちらは `PermissionResult` を組み立てる関数で、両方に手を入れると再送や `withdrawn`/`aborted` の挙動を壊しかねないため
-  // 鍵が作れない入力はクローンへ確認を上げず `no-retry` で終える: 一致させる鍵が無いと撃ち直しを安全に特定できないため
-  // 鍵は入力全体（`matchInputOf`）で作る: `command` だけだと `run_in_background` 等だけが違う撃ち直しにまで許可が及ぶため
+  // 鍵が作れない入力・鍵の作り方の意図は `runner-denial-judge.ts` の `judge` の直前へ移した
   // フックの持ち時間切れは安全側（`no-retry`）で確定し `#pending` から外す: 遅れて届いた `allow` を構造的に捨てるため。`settled.withdrawn` を使い回さない: 「CLI に一度も届かなかった」と区別できなくなるため
   async #onPermissionDenied(
     record: AgentPermissionDeniedRecord,
   ): Promise<AgentPermissionDeniedDecision> {
-    const actor = actorOf(this.#id, record);
-    const toolName = record.toolName;
-
-    // 道具名や入力の鍵が取れない回より前に置く: 一時規則に当たった呼び出しの拒否は、この先で早く返る回でも決着させるため（#4905）
-    this.#settleSessionAllowRuleUse(record.toolUseId, { kind: 'denied', via: 'PermissionDenied' });
-    this.#sweepExpiredSessionAllowRules();
-
-    // 道具名や入力の鍵が取れない回も数える: 分類器が止めた事実は変わらず、CLI の数えも進むため
-    const streakActor = record.agentId ?? 'manager';
-    if (this.#denialStreaks.noteDenial(streakActor, record.reason)) {
-      const view = this.#denialStreaks.view(streakActor);
-      this.#note(buildDenialStreakNote(actor, streakActor, view));
-    }
-
-    this.#note(buildDenialEntryNote(actor, toolName, record.toolUseId, record.reason));
-
-    if (toolName === undefined) {
-      this.#note(buildDenialNoToolNameNote(actor));
-      return { kind: 'no-retry' };
-    }
-
-    const matchInput = matchInputOf(record.toolInput);
-    if (matchInput === undefined) {
-      this.#note(buildDenialNoMatchKeyNote(actor, toolName));
-      return { kind: 'no-retry' };
-    }
-
-    const inputHead = buildDenialInputHead(record.toolInput, this.#env, this.#vaultValues());
-    const permitKey = oneShotAllowKey(
-      oneShotActorOf(this.#id, record),
-      toolName,
-      digestOf(matchInput),
-    );
-    const id = record.toolUseId ?? randomUUID();
-
-    // allow を返した撃ち直しがそれでも拒否された呼び出しは、確認を重ねて上げずに止める: 上げても同じ入力は通らないことがあり、確認が1件ずつ積み上がるため（#4904）
-    // 拒否の合図と `#noteDenial` のどちらが先に届いても拾えるよう、控え済みの鍵と、まだ決着していない allow の撃ち直しの両方を見る
-    const nowMs = Date.now();
-    const pendingRetry = this.#oneShotAllowedToolUses
-      .entries()
-      .some(([, use]) => use.key === permitKey && use.at + ONE_SHOT_ALLOW_TTL_MS > nowMs);
-    const deniedAgain = this.#allowedButDenied.get(permitKey);
-    if (pendingRetry || (deniedAgain !== undefined && deniedAgain.expiresAt > nowMs)) {
-      this.#note(buildDenialAllowedButDeniedNote(actor, toolName));
-      return { kind: 'no-retry' };
-    }
+    const judged = this.#denialJudge.judge(record);
+    if (judged.kind === 'decided') return judged.decision;
+    const { actor, toolName, streakActor, inputHead, permitKey, id } = judged;
 
     const already = this.#pending.find((request) => request.id === id);
     if (already) {
@@ -5962,21 +5929,6 @@ function describeQuestion(question: unknown): string | undefined {
     })
     .filter((line): line is string => line !== undefined);
   return lines.length > 0 ? [text, ...lines].join('\n') : text;
-}
-
-// 区切りに `\u0000` を使う: `actor` / `tool` の値には現れない制御文字のため
-// 表示用の `actor` を鍵に使わない: 型までしか区別せず、同じ型の作業者が並行に2体いると片方への許可をもう片方が使えてしまうため（`agentId` で区別する）
-function oneShotActorOf(
-  managerId: string,
-  record: { readonly agentId?: string | undefined },
-): string {
-  return record.agentId === undefined
-    ? `manager:${managerId}`
-    : `worker:${managerId}:agent=${record.agentId}`;
-}
-
-function oneShotAllowKey(actor: string, tool: string, digest: string): string {
-  return `${actor}\u0000${tool}\u0000${digest}`;
 }
 
 // プロファイル評価と共有する: 評価だけ root で走らせると、降りた先では読めないプロファイルを「置けた」と報告するため

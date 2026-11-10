@@ -27,6 +27,21 @@ export function actorOf(
     : workerActorOf(managerId, record.agentType);
 }
 
+// 区切りに `\u0000` を使う: `actor` / `tool` の値には現れない制御文字のため
+// 表示用の `actor` を鍵に使わない: 型までしか区別せず、同じ型の作業者が並行に2体いると片方への許可をもう片方が使えてしまうため（`agentId` で区別する）
+export function oneShotActorOf(
+  managerId: string,
+  record: { readonly agentId?: string | undefined },
+): string {
+  return record.agentId === undefined
+    ? `manager:${managerId}`
+    : `worker:${managerId}:agent=${record.agentId}`;
+}
+
+export function oneShotAllowKey(actor: string, tool: string, digest: string): string {
+  return `${actor}\u0000${tool}\u0000${digest}`;
+}
+
 // 切り口を補助面の文字（絵文字の多く）の途中に置かない: 素の `slice` だと高サロゲートだけが残り、UTF-8 で届いたところで U+FFFD に化けるため
 export function brief(value: unknown, limit = 200): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
