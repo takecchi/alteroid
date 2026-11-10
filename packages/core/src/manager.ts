@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import { assertNever } from './assert-never.js';
 import { ArchiveReceiver } from './archive-receiver.js';
-import { AutoFold } from './auto-fold.js';
+import type { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
-import { DenialRenotifier } from './denial-renotify.js';
+import type { DenialRenotifier } from './denial-renotify.js';
 import {
   journalEntryShape,
   noteBackgroundFailure,
@@ -18,7 +18,7 @@ import {
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
 import { laterIso } from './later-iso.js';
-import { HeldMessages, type StaleHoldStuck } from './held-messages.js';
+import type { HeldMessages, StaleHoldStuck } from './held-messages.js';
 import { WITHHELD_REPORT_EXCERPT, resolveWithheldReportFlushMs } from './withheld-reports.js';
 import {
   decodeDenialKey,
@@ -95,7 +95,7 @@ import {
 } from './runner-protocol.js';
 import { attachmentRefsOf, ManagerAttachmentsRefusedError } from './manager-attachments.js';
 import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
-import { AttachmentStager } from './attachment-stager.js';
+import type { AttachmentStager } from './attachment-stager.js';
 import {
   fetchManagerOutbox,
   rejectedFileOf,
@@ -161,6 +161,7 @@ import {
 } from './manager-fold-stale-token.js';
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import type { ManagerNoteReceiver } from './manager-note.js';
+import { createFoldHeld } from './manager-pool-fold-held.js';
 import { createReceiversTail } from './manager-pool-receivers-tail.js';
 import { createWindows } from './manager-pool-windows.js';
 import type { ManagerReportApply } from './manager-report-apply.js';
@@ -183,8 +184,8 @@ import {
 } from './unpushed-work-observation.js';
 import { StaleTokenFold } from './stale-token-fold.js';
 import { markRescueGoneWhileAlive } from './rescue-cleanup.js';
-import { RescueSweeper } from './rescue-sweeper.js';
-import { ManagerRescueStash } from './manager-rescue-stash.js';
+import type { RescueSweeper } from './rescue-sweeper.js';
+import type { ManagerRescueStash } from './manager-rescue-stash.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import type { NoticeResetMatch } from './token-reset-match.js';
@@ -1918,15 +1919,29 @@ class Pool implements ManagerPool {
       runnerOf: (record) => this.#runnerOf(record),
       runnerHasCapability: (runnerId, capability) => this.runnerHasCapability(runnerId, capability),
     });
-    this.#autoFold = new AutoFold({
+    const e = createFoldHeld({
       runners,
+      stores,
+      attachmentLimits,
+      records: this.#records,
+      usageStopped: this.#usageStopped,
+      resuming: this.#resuming,
       now: () => this.#now(),
+      nowIso: () => this.#nowIso(),
       stopped: () => this.#stopped,
       retainedIds: () => [
         ...this.#usageStopped,
         ...this.#workerLimitStopped.keys(),
         ...this.#held.jobIds(),
       ],
+      journal: (entry) => this.#journal(entry),
+      journalExchange: this.#journalExchange.bind(this),
+      persist: (record) => this.#persist(record),
+      load: (managerId) => this.#load(managerId),
+      send: (managerId, message, options, delivery) =>
+        this.#send(managerId, message, options, delivery),
+      emit: (...args) => this.#emit(...args),
+      queueNotice: (managerId, label, text) => this.#queueSynthesizedNotice(managerId, label, text),
       runnerHasCapability: (runnerId, capability) => this.runnerHasCapability(runnerId, capability),
       findJob: (managerId) => this.#findJob(managerId),
       runnerIdOf: (managerId) => this.runnerIdOf(managerId),
@@ -1938,60 +1953,20 @@ class Pool implements ManagerPool {
           signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
         }),
       abort: (managerId, reason, by) => this.abort(managerId, reason, by),
-      journal: (entry) => this.#journal(entry),
-    });
-    this.#denialRenotifier = new DenialRenotifier({
-      records: this.#records,
-      now: () => this.#now(),
-      stopped: () => this.#stopped,
-      emitReport: (managerId, text) => {
-        this.#emit(managerId, 'report', text);
-      },
-      journalExchange: this.#journalExchange.bind(this),
-    });
-    this.#rescueSweeper = new RescueSweeper({
-      records: this.#records,
-      stores,
-      now: () => this.#now(),
-      nowIso: () => this.#nowIso(),
-      stopped: () => this.#stopped,
-      journal: (entry) => this.#journal(entry),
-      persist: (record) => this.#persist(record),
       runnerOf: (record) => this.#runnerOf(record),
       runnersOrEmpty: () => this.#runnersOrEmpty(),
-    });
-    this.#attachmentStager = new AttachmentStager({
-      awaitHello: (runnerId) => this.#awaitHello(runnerId),
-      hasCapability: (runnerId, capability) => this.runnerHasCapability(runnerId, capability),
-      openAttachment: (id) => this.#stores.attachments.open(id),
-    });
-    this.#rescueStash = new ManagerRescueStash({
-      stores,
-      attachmentLimits,
       runnerOrNull: (runnerId) => this.#runnerOrNull(runnerId),
-      runnerHasCapability: (runnerId, capability) => this.runnerHasCapability(runnerId, capability),
-      instanceIdOf: (runnerId) => this.#sighting(runnerId).instanceId,
+      awaitHello: (runnerId) => this.#awaitHello(runnerId),
+      openAttachment: (id) => this.#stores.attachments.open(id),
+      sighting: (runnerId) => this.#sighting(runnerId),
       swapNote: (runnerId, before) => this.#swapNote(runnerId, before),
-      nowIso: () => this.#nowIso(),
-      persist: (record) => this.#persist(record),
-      journal: (entry) => this.#journal(entry),
-      records: this.#records,
-      load: (managerId) => this.#load(managerId),
-      send: (managerId, text, options) => this.#send(managerId, text, options, { mode: 'caller' }),
     });
-    this.#held = new HeldMessages({
-      records: this.#records,
-      load: (managerId) => this.#load(managerId),
-      persist: (record) => this.#persist(record),
-      journal: (entry) => this.#journal(entry),
-      queueNotice: (managerId, label, text) => this.#queueSynthesizedNotice(managerId, label, text),
-      send: (managerId, message, delivery) => this.#send(managerId, message, {}, delivery),
-      now: () => this.#now(),
-      nowIso: () => this.#nowIso(),
-      stopped: () => this.#stopped,
-      usageStopped: this.#usageStopped,
-      resuming: this.#resuming,
-    });
+    this.#autoFold = e.autoFold;
+    this.#denialRenotifier = e.denialRenotifier;
+    this.#rescueSweeper = e.rescueSweeper;
+    this.#attachmentStager = e.attachmentStager;
+    this.#rescueStash = e.rescueStash;
+    this.#held = e.held;
     this.#pushLedger = new PushLedger({
       services: {
         profile,
