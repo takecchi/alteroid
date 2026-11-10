@@ -4,7 +4,20 @@ import type { AgentPermissionDecision } from './agent-session.js';
 import { type PendingRequest, RunnerRequestQueue } from './runner-request-queue.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-// `RunnerRequestQueue`（`RunnerSession#queueRequest` を切り出した協力者）を、口を偽物にして直に縛る。
+// `decideAnswer` は口ではなく `runner-decide-answer.js` からの直の import になったので、モジュールごと偽物にして、
+// 以前の口の偽物と同じ確認（呼ぶ順・回数・渡す引数・投げたときの伝わり方）を保つ。実物を通す縛りは pin が持つ。
+const decideAnswerMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      kind: 'question' | 'permission',
+      decision: 'allow' | 'deny' | undefined,
+      message: string,
+    ) => { decision: 'allow' | 'deny'; unreadable: boolean }
+  >(),
+);
+vi.mock('./runner-decide-answer.js', () => ({ decideAnswer: decideAnswerMock }));
+
+// `RunnerRequestQueue`（`RunnerSession#queueRequest` を切り出した協力者）を、口と `decideAnswer` を偽物にして直に縛る。
 // 外から見える結果の縛りは `runner-queue-request-pin.test.ts`（切り出し前の作りで通した pin）、呼び元からの配線は `runner-request-queue-wiring.test.ts`。
 // ここで縛るのは: 口を呼ぶ順と回数・`ask` が `signal` の確かめより先であること・各口が同期で投げたときの伝わり方・
 // `pending`／`resolved`／`sdkSession` を参照のまま使うこと・戻りが同期であること。
@@ -68,13 +81,15 @@ function rig(
       log.push('deliverPeerNotices');
       if (options.deliverThrows === true) throw new Error('deliverPeerNotices が投げた');
     },
-    decideAnswer:
-      options.decideAnswer ??
+  });
+  decideAnswerMock.mockReset();
+  decideAnswerMock.mockImplementation(
+    options.decideAnswer ??
       ((kind, decision, message) => {
         log.push(`decideAnswer:${kind}:${String(decision)}:${message}`);
         return { decision: decision ?? 'allow', unreadable: false };
       }),
-  });
+  );
   return { log, queue, pending, sdk, resolved, events };
 }
 

@@ -3,17 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { createRunnerHost, decideAnswer, type RunnerHost } from './runner.js';
+import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerRequestQueue } from './runner-request-queue.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 // `RunnerSession` が `RunnerRequestQueue` へ口を渡す所（コンストラクタ）と、呼び元 2 か所（`#onPermission`・`#onPermissionDenied`）が
 // `queueRequest` を呼ぶ所を、`runner-queue-request-pin.test.ts` が縛れない側から縛る。
 // 協力者を、構築と呼び出しを横から控える薄い派生に差し替える（本体は本物。控えるだけで挙動は変えない）。
-// - 口は 7 本で、`pending`・`resolved`・`sdkSession` は `RunnerSession` が持つ本物の参照（写していない）。
+// - 口は 6 本で、`pending`・`resolved`・`sdkSession` は `RunnerSession` が持つ本物の参照（写していない）。
 //   別の器・写し（`[...pending]` など）を渡すと、`state().waiting`・再送の判定・`state().status` が口を通した変更を見られず赤くなる。
-// - 関数の口（`emit`・`deliverPeerNotices`）は `async` で包まない（戻りが Promise でない）。`decideAnswer` は `runner.ts` の公開関数そのもの
-//   （`Session#answer()` と共有する唯一の実装。写すと、片方だけ変わったときに黙ってずれる）。
+// - 関数の口（`emit`・`deliverPeerNotices`）は `async` で包まない（戻りが Promise でない）。`decideAnswer` は口ではなく、
+//   `RunnerRequestQueue` が `runner-decide-answer.ts` から直に import する（結果の縛りは pin と `runner-request-queue.test.ts`）。
 // - 呼び元 2 か所は、`queueRequest` を 1 回ずつ同期で呼び、戻りの `result`・`answered` をそのまま使う（呼び元の周回数は pin が縛る）。
 // 実時間では待たない。
 
@@ -110,11 +110,10 @@ function ports(): Record<string, unknown> {
 }
 
 describe('口の渡し方', () => {
-  it('セッション 1 本につき 1 つ作り、口は 7 本（名前を固定する）', async () => {
+  it('セッション 1 本につき 1 つ作り、口は 6 本（名前を固定する）', async () => {
     await open();
     expect(Object.keys(ports()).sort()).toMatchInlineSnapshot(`
       [
-        "decideAnswer",
         "deliverPeerNotices",
         "emit",
         "managerId",
@@ -188,11 +187,6 @@ describe('口の渡し方', () => {
   it('deliverPeerNotices は同期で、戻りは Promise でない', async () => {
     await open();
     expect((ports().deliverPeerNotices as () => unknown)()).toBeUndefined();
-  });
-
-  it('decideAnswer は runner.ts の公開関数そのもの（写しでも async の皮でもない）', async () => {
-    await open();
-    expect(ports().decideAnswer).toBe(decideAnswer);
   });
 });
 

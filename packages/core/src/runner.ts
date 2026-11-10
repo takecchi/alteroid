@@ -2921,7 +2921,6 @@ class RunnerSession {
       emit: (event) => this.#emit(event),
       managerId: this.#id,
       deliverPeerNotices: () => this.#deliverPeerNotices(),
-      decideAnswer,
     });
     this.#mcpServers = options.mcpServers;
     this.#permissionRules = options.permissionRules;
