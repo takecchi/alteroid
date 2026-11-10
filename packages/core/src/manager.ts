@@ -32,19 +32,13 @@ import {
   workspaceLocatorFrom,
   type WorkspacePolicy,
 } from './workspace-policy.js';
-import {
-  QUOTA_STOP_WINDOW_MS,
-  failedReportBodyOf,
-  quotaMarkOf,
-  type QuotaMark,
-} from './quota-stop-notice.js';
-import { QuotaStopWindows } from './quota-stop-windows.js';
-import { RestoredWindows } from './restored-windows.js';
-import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
-import { ResumeEventWindows } from './resume-event-windows.js';
+import { failedReportBodyOf, quotaMarkOf, type QuotaMark } from './quota-stop-notice.js';
+import type { QuotaStopWindows } from './quota-stop-windows.js';
+import type { RestoredWindows } from './restored-windows.js';
+import type { ResumeEventWindows } from './resume-event-windows.js';
 import type { ClassifierDenialOverLimit } from './classifier-denial-streak.js';
-import { resolveSynthesizedNoticeWindowMs, type FoldWhenBack } from './synthesized-notice.js';
-import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
+import type { FoldWhenBack } from './synthesized-notice.js';
+import type { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { isQuotaFailure } from './sdk-failure.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -168,6 +162,7 @@ import {
 import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import type { ManagerNoteReceiver } from './manager-note.js';
 import { createReceiversTail } from './manager-pool-receivers-tail.js';
+import { createWindows } from './manager-pool-windows.js';
 import type { ManagerReportApply } from './manager-report-apply.js';
 import {
   bucketManagersByRunner,
@@ -2039,57 +2034,34 @@ class Pool implements ManagerPool {
     }
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
     this.#tokenSavingExcerpt = tokenSavingExcerpt ?? resolveTokenSavingExcerpt();
-    const quotaWindowMs = quotaStopWindowMs ?? QUOTA_STOP_WINDOW_MS;
-    this.#quotaWindows = new QuotaStopWindows({
-      records: this.#records,
-      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
-      journalExchange: this.#journalExchange.bind(this),
-      post: (event) => this.#post(event),
-      listJobsOrNote: (skipped) => this.#listJobsOrNote(skipped),
-      withheldCarriedToWindow: this.#withheld.carriedToWindow,
-      now: () => this.#now(),
-      nowIso: () => this.#nowIso(),
-      windowMs: quotaWindowMs,
-    });
-    this.#synthesized = new SynthesizedNoticeWindows({
+    const w = createWindows({
       records: this.#records,
       tokenIdentities: this.#tokenIdentities,
       supersedePending: this.#supersedePending,
-      quotaWindows: this.#quotaWindows,
-      takeWithheldForDelivery: (managerId, text, withheldSuffixDetail) =>
-        this.#withheld.takeForDelivery(managerId, text, withheldSuffixDetail),
-      post: (event) => this.#post(event),
-      statusAtDelivery: (managerId) => this.#statusAtDelivery(managerId),
-      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
-      journalExchange: this.#journalExchange.bind(this),
+      withheld: this.#withheld,
+      quotaStopWindowMs,
+      synthesizedNoticeWindowMs,
+      resumeConfirmTimeoutMs,
+      notifyExcerptLines,
+      trackedGenerationSilent,
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
-      windowMs: synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs(),
-    });
-    this.#restored = new RestoredWindows({
-      records: this.#records,
-      // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
-      journalExchange: this.#journalExchange.bind(this),
       post: (event) => this.#post(event),
+      journalExchange: this.#journalExchange.bind(this),
+      listJobsOrNote: (skipped) => this.#listJobsOrNote(skipped),
       postReport: (managerId, text, extra) => this.#postReport(managerId, text, extra),
       queueNotice: (managerId, label, text) => this.#queueSynthesizedNotice(managerId, label, text),
-      notifyExcerptLines,
-      listJobsOrNote: (skipped) => this.#listJobsOrNote(skipped),
-      trackFlush: (flush) => this.#quotaWindows.trackFlush(flush),
-      now: () => this.#now(),
-      nowIso: () => this.#nowIso(),
+      statusAtDelivery: (managerId) => this.#statusAtDelivery(managerId),
       stopped: () => this.#stopped,
-      windowMs: quotaWindowMs,
-      confirmTimeoutMs: resumeConfirmTimeoutMs ?? RESUME_CONFIRM_TIMEOUT_MS,
-    });
-    this.#resumeWindows = new ResumeEventWindows({
-      records: this.#records,
       judgeSessionGeneration: (record, event) => this.#judgeSessionGeneration(record, event),
-      trackedGenerationSilent,
       onEvent: (event, fromRunnerId) => this.#onEvent(event, fromRunnerId),
       droppedReportFiles: (event, fromRunnerId) => this.#droppedReportFiles(event, fromRunnerId),
       journal: (entry) => this.#journal(entry),
     });
+    this.#quotaWindows = w.quotaWindows;
+    this.#synthesized = w.synthesized;
+    this.#restored = w.restored;
+    this.#resumeWindows = w.resumeWindows;
     this.#generateManagerId = generateManagerId ?? (() => `mgr-${randomUUID()}`);
     this.#workspace = workspace ?? resolveWorkspacePolicy();
     this.#tokenIdentity = tokenIdentity;
