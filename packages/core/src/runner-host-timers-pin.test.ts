@@ -1019,9 +1019,13 @@ describe('Host.constructor のタイマーと起動順の固定', () => {
       void host.shutdown().then(() => {
         done = true;
       });
-      await until(() => done);
-      expect(h.sweepCalls[0]?.signal.aborted).toBe(true);
-      held.resolve(null);
+      try {
+        // 掃きの完了を待つ作りに変わると、ここが上限で落ちる（`finally` で解いて後片づけの shutdown を止めない）
+        await until(() => done, 200);
+        expect(h.sweepCalls[0]?.signal.aborted).toBe(true);
+      } finally {
+        held.resolve(null);
+      }
     });
 
     it('畳み始めの名乗り（shutting_down）はタイマーを止める前に出す', async () => {
