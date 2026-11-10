@@ -219,6 +219,7 @@ import { createCloneMcpServer, type ToolContext } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
+import { quotaNoticeOfError } from './clone-distill-quota-notice.js';
 import { describeReopenArchive } from './clone-reopen.js';
 import {
   describeFailureJournalLine,
@@ -3362,14 +3363,7 @@ class Clone implements CloneHost {
   // `result` 経由で既に立てている間は何もしない: 同じ枠を二重に日誌・回し手へ渡さないため
   async #noteThrownUsageFailure(error: unknown, conversationId: string | null): Promise<void> {
     if (this.#usageBlocked !== null) return;
-    const raw = String(error);
-    const classified = classifyUsageNotice(raw);
-    const notice: UsageLimitNotice | undefined =
-      classified?.kind === 'reached'
-        ? classified
-        : isRateLimitReason(raw)
-          ? { kind: 'reached', text: reasonOf(error) }
-          : undefined;
+    const notice = quotaNoticeOfError(error);
     await this.#noteUsageNotice(notice, conversationId, 'text');
   }
 
