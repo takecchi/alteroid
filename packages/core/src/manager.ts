@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { assertNever } from './assert-never.js';
-import { ArchiveReceiver } from './archive-receiver.js';
+import type { ArchiveReceiver } from './archive-receiver.js';
 import type { AutoFold } from './auto-fold.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import type { DenialRenotifier } from './denial-renotify.js';
@@ -140,7 +140,7 @@ import { isManagerInFlight } from './job-status-running.js';
 import { type ManagerClosedApply, pidsSaturationSignsOf } from './manager-closed-apply.js';
 import type { ManagerClosedFrontReceiver } from './manager-closed-front.js';
 import type { ManagerClosedNotice } from './manager-closed-notice.js';
-import { ManagerDenialReceiver } from './manager-denial.js';
+import type { ManagerDenialReceiver } from './manager-denial.js';
 import {
   carriesFilesOf,
   foldedReportDecisionOf,
@@ -159,8 +159,9 @@ import {
   rotationFoldDueAtOf,
   staleTokenFoldOptionsOf,
 } from './manager-fold-stale-token.js';
-import { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
+import type { ManagerParkedPeersReceiver } from './manager-parked-peers.js';
 import type { ManagerNoteReceiver } from './manager-note.js';
+import { createArchiveAndEventReceivers } from './manager-pool-archive-receivers.js';
 import { createFoldHeld } from './manager-pool-fold-held.js';
 import { createReceiversTail } from './manager-pool-receivers-tail.js';
 import { createUsageCollaborators } from './manager-pool-usage.js';
@@ -172,9 +173,10 @@ import {
   buildRunnerOverview,
 } from './manager-runner-overview.js';
 import type { ManagerSelfFencedReceiver } from './manager-self-fenced.js';
-import { ManagerSessionReceiver } from './manager-session.js';
-import { ManagerToolUseReceiver } from './manager-tool-use.js';
-import { askDeliveryOf, ManagerWaitingReceiver } from './manager-waiting.js';
+import type { ManagerSessionReceiver } from './manager-session.js';
+import type { ManagerToolUseReceiver } from './manager-tool-use.js';
+import { askDeliveryOf } from './manager-waiting.js';
+import type { ManagerWaitingReceiver } from './manager-waiting.js';
 import { ManagerTaskLink } from './manager-task-link.js';
 import {
   carryKnownBranches,
@@ -2090,48 +2092,27 @@ class Pool implements ManagerPool {
     this.#usageWake = u.usageWake;
     this.#staleTokenFold = u.staleTokenFold;
     this.#usageReceiver = u.usageReceiver;
-    this.#archiveReceiver = new ArchiveReceiver({
+    const r = createArchiveAndEventReceivers({
       stores: this.#stores,
-      fetchArchiveRetrying: (managerId, archiveId, fromRunnerId) =>
-        this.#sessionLoaders.fetchArchiveRetrying(managerId, archiveId, fromRunnerId),
-      appendMirrorRetrying: (store, event) =>
-        this.#sessionLoaders.appendMirrorRetrying(store, event),
-      persist: (record) => this.#persist(record),
-      journalExchange: this.#journalExchange.bind(this),
-    });
-    this.#denial = new ManagerDenialReceiver({
+      sessionLoaders: this.#sessionLoaders,
       nowIso: () => this.#nowIso(),
-      journalExchange: this.#journalExchange.bind(this),
-      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
-    });
-    this.#session = new ManagerSessionReceiver({
-      nowIso: () => this.#nowIso(),
-      journalExchange: this.#journalExchange.bind(this),
+      emit: (...args) => this.#emit(...args),
       persist: (record) => this.#persist(record),
+      journal: (entry) => this.#journal(entry),
+      journalExchange: this.#journalExchange.bind(this),
       noteRunnerSessionSince: (record) => this.#noteRunnerSessionSince(record),
+      observeUnpushedWorkOnce: (managerId, source) =>
+        this.#observeUnpushedWorkOnce(managerId, source),
       rememberPluginLoad: (runnerId, observation) => {
         this.#pluginLoad.set(runnerId, observation);
       },
     });
-    this.#toolUse = new ManagerToolUseReceiver({
-      nowIso: () => this.#nowIso(),
-      journal: (entry) => this.#journal(entry),
-      observeUnpushedWorkOnce: (managerId, source) =>
-        this.#observeUnpushedWorkOnce(managerId, source),
-    });
-    this.#parkedPeers = new ManagerParkedPeersReceiver({
-      nowIso: () => this.#nowIso(),
-      emit: (managerId, kind, text) => this.#emit(managerId, kind, text),
-      persist: (record) => this.#persist(record),
-    });
-    this.#waiting = new ManagerWaitingReceiver({
-      persist: (record) => this.#persist(record),
-      journal: (entry) => this.#journal(entry),
-      journalExchange: this.#journalExchange.bind(this),
-      emit: (managerId, kind, text, requestId, markup) =>
-        this.#emit(managerId, kind, text, requestId, markup),
-      nowIso: () => this.#nowIso(),
-    });
+    this.#archiveReceiver = r.archiveReceiver;
+    this.#denial = r.denial;
+    this.#session = r.session;
+    this.#toolUse = r.toolUse;
+    this.#parkedPeers = r.parkedPeers;
+    this.#waiting = r.waiting;
     const tail = createReceiversTail({
       now: () => this.#now(),
       nowIso: () => this.#nowIso(),
