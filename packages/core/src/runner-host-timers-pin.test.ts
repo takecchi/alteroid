@@ -222,6 +222,10 @@ describe('Host.constructor のタイマーと起動順の固定', () => {
   let timers: TimerRecord[] = [];
   let cleared: number[] = [];
   let restoreTimerSpy: () => void = () => undefined;
+  let unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
 
   function installTimerSpy(): void {
     const realSet = globalThis.setInterval;
@@ -266,6 +270,8 @@ describe('Host.constructor のタイマーと起動順の固定', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(T0);
     installTimerSpy();
+    unhandled = [];
+    process.on('unhandledRejection', onUnhandled);
   });
 
   afterEach(async () => {
@@ -274,6 +280,10 @@ describe('Host.constructor のタイマーと起動順の固定', () => {
     restoreTimerSpy();
     vi.useRealTimers();
     await rm(tmp, { recursive: true, force: true });
+    await settleTurns();
+    process.off('unhandledRejection', onUnhandled);
+    // 偽物の失敗を握る `.catch` が外れると、拒否が誰にも受けられずここへ来る
+    expect(unhandled).toEqual([]);
   });
 
   /** 既定の口（間隔は互いに違う値。実 I/O の根は tmp）を足さない素の組み立て。 */
