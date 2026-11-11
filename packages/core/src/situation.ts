@@ -408,7 +408,7 @@ export function describeSituation(input: {
     latestStart === undefined ? '' : `（最後の起動は ${formatMinutesAgo(at - latestStart)}）`;
   const showTokens = !(input.tokens === undefined && input.active === undefined);
   // lost は「その他」の直前に置く: lost はそこから切り出したもので、隣に並べば「その他が減って lost が増えた」と読めるため
-  // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わるので、「変化なし」の比較（`materials`）には入れず、出す行にだけ入れるため
+  // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わる部分で、本数の部分と分けて読めるようにするため
   const delegationLineWith = (startClause: string): string =>
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
     `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
@@ -454,7 +454,7 @@ export function describeSituation(input: {
   ]);
 }
 
-// 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。同じ会話で繰り返すときだけ畳む（#4476）
+// 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。2ターン目以降も畳まず毎回全文で出す（#4476）
 const READINGS_NOTICE =
   '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
   '置けるかどうかはここでは答えていない。' +
