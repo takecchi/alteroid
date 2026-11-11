@@ -6,7 +6,7 @@ import { migrate } from './migrate.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 // 実行環境のプロファイル（`env_profile_entries`）の、移行と片付けに関わる振る舞いを固定する。
-// 旧表 `env_profile` を落とす前後で変わらないことを縛る: 移行は起動のたびに打たれるので、何度打っても新表の行を動かさないこと。
+// 移行は起動のたびに打たれるので、何度打っても新表の行を動かさないこと（旧表 `env_profile` を落とす文は外した）。
 // `clear()` は、新表を消す文が落ちたら投げて、新表の行を残すこと。
 
 let client: TestDbHandle;

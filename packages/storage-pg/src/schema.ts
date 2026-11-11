@@ -149,7 +149,6 @@ export const daemonState = pgTable('daemon_state', {
   value: text('value'),
 });
 
-// 旧表 `env_profile`（1本の本文だけを持つ旧形）は廃止した。移行（`migrate.ts`）が在れば落とす。
 // 行を持たせる: 本文の中のシェル分岐では効かせ分けられない（app と runner の違いが本文から見えず、同じ本文が両方へ降りる）。
 // `scope` は確認・許可の話ではなくプロセストポロジーの表現（`packages/core/src/store.ts` の `EnvProfileEntry`）。
 // runner から読ませない: runner へはデーモンが制御面で降ろす。
@@ -244,7 +243,6 @@ export const authAccounts = pgTable(
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
     grantedAt: timestamp('granted_at', { withTimezone: true, mode: 'date' }),
     grantedBy: text('granted_by'),
-    // 持ち主の宣言の列 `owner_declared_at` は廃止した（#2948 で仕組みを畳み、移行で列を落とす）。
   },
   (table) => [
     // `migrate` が無条件には作らない: 既存の重複行（大小文字だけが違う2行）が在ると作成が落ち、

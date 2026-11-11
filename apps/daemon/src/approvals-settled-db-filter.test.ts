@@ -6,7 +6,7 @@ import {
   listApprovalSettledAtsFromApprovals,
 } from '@alteroid/core';
 import type { CloneHost, JobStore, PendingApproval, Stores } from '@alteroid/core';
-import { createPgStoresFromDb, migrate, tables } from '@alteroid/storage-pg';
+import { createPgStoresFromDb } from '@alteroid/storage-pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
@@ -71,7 +71,7 @@ function approval(id: string, over: Partial<PendingApproval> = {}): PendingAppro
 }
 
 describe('承認の日付絞りを DB の側で絞る（pg。#5089）', () => {
-  it('⭐ answeredOn・answered-dates の応答は、全件を読んで絞ったときと同じ（日の境目・取り下げ・会話の絞り・列の空いた古い行を含む）', async () => {
+  it('⭐ answeredOn・answered-dates の応答は、全件を読んで絞ったときと同じ（日の境目・取り下げ・会話の絞りを含む）', async () => {
     const { db } = await createMigratedPglite();
     const stores = createPgStoresFromDb(db);
     const rows: PendingApproval[] = [
@@ -97,19 +97,6 @@ describe('承認の日付絞りを DB の側で絞る（pg。#5089）', () => {
       approval('ap-open'),
     ];
     for (const row of rows) await stores.jobs.putApproval(row);
-    // 決着の列（`withdrawn_at`）が無かった頃の行: 列は空で、本体にだけ取り下げの時刻がある
-    await db.insert(tables.approvals).values({
-      id: 'ap-legacy',
-      createdAt: new Date('2026-09-01T00:00:00.000Z'),
-      answeredAt: null,
-      withdrawnAt: null,
-      approval: approval('ap-legacy', {
-        withdrawnAt: '2026-09-30T06:00:00.000Z',
-        withdrawnReason: '古い',
-      }),
-    });
-    // 起動のたびに回る移行が、本体の時刻で列を埋め戻す
-    await migrate(db);
 
     const plain = withoutSettledMethods(stores);
     for (const path of [
@@ -124,11 +111,11 @@ describe('承認の日付絞りを DB の側で絞る（pg。#5089）', () => {
     ]) {
       expect(await getJson(stores, path), path).toEqual(await getJson(plain, path));
     }
-    // 中身の確かめ: 古い行も、その日に数えられる
+    // 中身の確かめ: 取り下げた行も、その日に数えられる
     const onDay = (await getJson(stores, '/approvals?answeredOn=2026-09-30')) as {
       approvals: { id: string }[];
     };
-    expect(onDay.approvals.map((entry) => entry.id)).toContain('ap-legacy');
+    expect(onDay.approvals.map((entry) => entry.id)).toContain('ap-d');
   });
 
   it('answered-dates は承認の本文を読まない（選ぶのは決着の2つの欄だけ）', async () => {
