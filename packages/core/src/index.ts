@@ -727,6 +727,7 @@ export { createPushChannel } from './push-channel.js';
 
 /** 例外の文は `redactSecretsInText` ではなく `redactErrorText` を通す: `params:` 以降も落とさないと秘密が漏れる。 */
 export { redactErrorText, redactSecretsInBody } from './denial-input-head.js';
+export { redactedExcerpt } from './redact.js';
 
 /** テスト専用（本番の配線には出てこない）。帳面（`recentDroppedTraces()`）はプロセスの生存中ずっと共有されるので、前のテストの行と混ざらないよう断言の前に呼ぶ。 */
 export { clearRecentTracesForTesting } from './dropped-record.js';

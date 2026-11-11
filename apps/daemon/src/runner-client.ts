@@ -51,7 +51,7 @@ import {
   buildRevisionSchema,
   codePointBoundary,
   reasonOf,
-  redactErrorText,
+  redactedExcerpt,
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerMcpServersFingerprintSchema,
@@ -1417,15 +1417,9 @@ class HttpRunner implements RunnerClient {
 
 const RUNNER_ERROR_BODY_LIMIT = 512;
 
-// 巨大な本文で走査が伸びないように、伏せ字を通す前に読む量を切る
-const RUNNER_ERROR_BODY_READ_LIMIT = 8192;
-
-// 伏せ字（`redactErrorText`）を通してから切る: 順序が逆だと、切り口で割れたトークンの断片がどの伏せ字にも合わずに残るため
+// 伏せ字を通してから切る（巨大な本文で走査が伸びないよう、読む量も切る）: 順序は `redactedExcerpt` が持つ
 function runnerErrorBodyOf(body: string): string {
-  const redacted = redactErrorText(body.slice(0, RUNNER_ERROR_BODY_READ_LIMIT), process.env);
-  return redacted.length > RUNNER_ERROR_BODY_LIMIT || body.length > RUNNER_ERROR_BODY_READ_LIMIT
-    ? `${redacted.slice(0, codePointBoundary(redacted, RUNNER_ERROR_BODY_LIMIT))}…`
-    : redacted;
+  return redactedExcerpt(body, RUNNER_ERROR_BODY_LIMIT, process.env);
 }
 
 function requestOverSocket(
