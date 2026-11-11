@@ -77,7 +77,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "this.#usageBlockFoldedInternalFailures = 0;",
   "const counts = (suppressedRearms > 0 ? \` 回復予定時刻より前だったので再武装を抑止: \${String(suppressedRearms)} 回。\` : '') + (foldedInternalFailures > 0 ? \` 人間が待っていない内部の失敗記録を畳んだ: \${String(foldedInternalFailures)} 件。\` : '');",
   "const suffix = counts === '' ? '' : \`\${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）\`;",
-  "await this.#journalSelf('outbound', \`\${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた \${held.length} 件を配り直す。\${suffix}\`);",
+  "await this.#journalSelf('outbound', \`\${EXCHANGE_KIND_THINNING_PREFIX}\${line}\`);",
   "continue;}} if (this.#usageBlocked !== null) {const notice = this.#usageBlocked;",
   "this.#emit(this.#conversationOf(event), {type: 'usage_limited', message: describeUsageNotice(notice)});",
   "if (this.#conversationOf(event) === null) {this.#usageBlockFoldedInternalFailures += 1;} else {await this.#reportFailure(this.#conversationOf(event), '枠が閉じているので、いまは投げていない。合図は保持してある。次に別の合図が' + \`届いたとき、保持した分から順に試し直す（\${describeUsageNotice(notice)}）\`);} await this.#settleInboxEvent(event, true);",
