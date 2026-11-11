@@ -429,8 +429,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#handleResumeFailed': 'failure',
     '#ignoreIfMovedAway': 'decision',
     '#ignoreOrDeferClosed': 'decision',
-    '#noteAmbiguousResolved': 'recovery',
-    '#noteAmbiguousSighting': 'failure',
     '#noteClosedFailure': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
     '#notifyResumeFallback': 'recovery',
@@ -460,6 +458,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // 担当の `note` の日誌への書き込みを持つ協力者（旧 `Pool#journalNote`）。同じ検査をここへ移した。公開メソッド `journalNote` は `#` の付かない名前の行
   'manager-note.ts': {
     journalNote: 'reply',
+  },
+  // resume の核（旧 `Pool#noteAmbiguousSighting` / `#noteAmbiguousResolved`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
+  'manager-resume.ts': {
+    noteAmbiguousResolved: 'recovery',
+    noteAmbiguousSighting: 'failure',
   },
   // 自己失効の `closed` を受けて、貸し出しを返して引き取りの挑み直しを日誌へ書く協力者（旧 `Pool#closeSelfFenced`）。同じ検査をここへ移した。公開メソッド `closeSelfFenced` は `#` の付かない名前の行
   'manager-self-fenced.ts': {
@@ -637,6 +640,7 @@ const EXCHANGE_SOURCES = [
   'manager-closed-notice.ts',
   'manager-denial.ts',
   'manager-note.ts',
+  'manager-resume.ts',
   'manager-self-fenced.ts',
   'manager-session.ts',
   'manager-waiting.ts',
