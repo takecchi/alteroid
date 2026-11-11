@@ -4865,33 +4865,42 @@ class Clone implements CloneHost {
         this.#sdkSession.clearQuery();
         // 空にしておかない: 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステムプロンプトを組むことになる。
         this.#distillMemory.forgetMemory();
-        // `clearQuery` より後に退避する: `#read` は `#ensureQuery` から待たれずに走っており、先に待つと次のターンが畳んだはずのセッションへ入る。
-        // 印を先に下ろす: 下ろさずに `await` すると、その間に届いた失敗がもう一度畳もうとする。
-        // 両方の印が立っていれば文脈窓の挙動（蒸留する・文言も文脈窓）を優先する。
-        const foldedForContextWindow = this.#sdkSession.takeContextWindowRecycle();
-        const reopenRequest = this.#sdkSession.takeReopen();
-        if (foldedForContextWindow) {
-          await this.#graves.salvageTranscript();
-        } else if (reopenRequest !== null) {
-          // 退避の間に次のセッションが init しうるので、古い id は退避の前に控える。
-          const previousSessionId = this.#sdkSession.sdkSessionId;
-          const archived = await this.#graves.salvageTranscript({
-            why: 'reopen',
-            distill: reopenRequest.distill,
-          });
-          this.#distillMemory.recordReopenArchive(archived);
-          // ここでも日誌へ残す: 退避中に次のセッションが init すると、init の行は「まだ終わっていない」としか書けず archive id が残らない。
-          await this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
-              `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
-          );
-        }
-        if (foldedForContextWindow && reopenRequest !== null) {
-          // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
-          this.#distillMemory.recordReopenArchive({ kind: 'none' });
-        }
+        await this.#salvageAfterSessionEnd();
       }
+    }
+  }
+
+  /**
+   * セッションが終わった後の退避（`#read` の `finally` の最後の塊を出した）。`clearQuery`・`forgetMemory` の後に、印を 2 つ読んで下ろし、文脈窓の畳み・開き直しの退避をする。
+   * 呼び出し側は `#read` の最後の文で `await` する。切り出す前に比べて、`#read` の完了だけが 1 周遅れる（途中の各点の周回数は変わらない）。
+   * `#read` の完了を待つのは `Clone#stop`（`reader?.catch`）だけで、`#ensureQuery` は待たず `whenQueryCleared()` を待つ（`clone-read-salvage-pin.test.ts`）。
+   */
+  async #salvageAfterSessionEnd(): Promise<void> {
+    // `clearQuery` より後に退避する: `#read` は `#ensureQuery` から待たれずに走っており、先に待つと次のターンが畳んだはずのセッションへ入る。
+    // 印を先に下ろす: 下ろさずに `await` すると、その間に届いた失敗がもう一度畳もうとする。
+    // 両方の印が立っていれば文脈窓の挙動（蒸留する・文言も文脈窓）を優先する。
+    const foldedForContextWindow = this.#sdkSession.takeContextWindowRecycle();
+    const reopenRequest = this.#sdkSession.takeReopen();
+    if (foldedForContextWindow) {
+      await this.#graves.salvageTranscript();
+    } else if (reopenRequest !== null) {
+      // 退避の間に次のセッションが init しうるので、古い id は退避の前に控える。
+      const previousSessionId = this.#sdkSession.sdkSessionId;
+      const archived = await this.#graves.salvageTranscript({
+        why: 'reopen',
+        distill: reopenRequest.distill,
+      });
+      this.#distillMemory.recordReopenArchive(archived);
+      // ここでも日誌へ残す: 退避中に次のセッションが init すると、init の行は「まだ終わっていない」としか書けず archive id が残らない。
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
+          `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
+      );
+    }
+    if (foldedForContextWindow && reopenRequest !== null) {
+      // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
+      this.#distillMemory.recordReopenArchive({ kind: 'none' });
     }
   }
 
