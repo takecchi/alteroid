@@ -251,10 +251,6 @@ export const STATEMENTS = [
   `create unique index if not exists usage_turns_key_idx
      on usage_turns (date, manager_id, layer, site, token_id)`,
 
-  // 台帳の表 `commitments` は廃止した（#5469 P7 の段4）: 在れば落とす（索引も一緒に消える）。連番は表に属していないので別に落とす。
-  `drop table if exists commitments`,
-  `drop sequence if exists commitments_seq_seq`,
-
   // 順序と状態を持つ待ち行列（#5469 P2）。台帳（commitments）とは別の表で、台帳から移した（#5908）。
   // rank は double precision（fractional rank）。隙間が尽きたときの振り直しは core の `placeTask` が決める。
   `create table if not exists tasks (
@@ -363,24 +359,8 @@ export const STATEMENTS = [
      updated_at timestamptz not null default now()
    )`,
 
-  // 旧表 `env_profile`（実行環境のプロファイルの旧形。1本の本文だけを持っていた）は廃止した: 在れば落とす。
-  // 中身は `env_profile_entries` へ写し済みで、その前の版のデーモンへ巻き戻すことはしない（身内だけで使っている）。
-  // 写したときの印（`daemon_state` の `env_profile_entries_migrated`）は、既存の DB に残っていても読む所が無いので消さない。
-  `drop table if exists env_profile`,
-
   // 専用の列にする: jsonb の `->>'withdrawnAt'` より `answered_at` と揃った形で `isNull` で絞れる（`jobs.ts` の `where` 節）。
   `alter table approvals add column if not exists withdrawn_at timestamptz`,
-  // 列が空で本体にだけ決着の時刻がある行（`withdrawn_at` を足す前の行）を、本体の時刻で埋め戻す: 読む側が本体を見に行かず、列だけで絞れるようにするため。
-  // 書き込みは毎回、列を本体と同じ値で書くので、埋め終えた後は当たる行が無い。日時の形をした値だけを写す: 型が合わない値で移行ごと落ちないため。
-  `update approvals set answered_at = (approval->>'answeredAt')::timestamptz
-     where answered_at is null
-       and approval->>'answeredAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'`,
-  `update approvals set withdrawn_at = (approval->>'withdrawnAt')::timestamptz
-     where withdrawn_at is null
-       and approval->>'withdrawnAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'`,
-
-  // 持ち主の宣言は #2948 で畳んだ: 列 `owner_declared_at` は読む所も書く所も無いので、在れば落とす。
-  `alter table auth_accounts drop column if exists owner_declared_at`,
 
   // 既にあるどの表にも列を足さない: やり方は独立した器で、記憶（`memory`）にも委譲（`jobs`）にも生やさない。
   `create table if not exists practices (
@@ -403,9 +383,6 @@ export const STATEMENTS = [
      toast.autovacuum_vacuum_threshold = 10000,
      toast.autovacuum_vacuum_scale_factor = 0.0
    )`,
-
-  // 以前の版は `practices` を `bytes` 列付きで作っていた: 既存の DB に在れば落とす。
-  `alter table practices drop column if exists bytes`,
 
   // `serial` にしない: 版番号は slug ごとに独立した1始まりの連番で、`PgPracticeStore.write` が `max(version) + 1` を入れる。
   `create table if not exists practice_versions (
@@ -570,8 +547,6 @@ export const STATEMENTS = [
   `create table if not exists manager_credential_removals (
      name text primary key
    )`,
-  // 畳みの控え（クローンの固定文を畳むために預けていた）は外した: 読む所も書く所も無いので、残っている行を消す。
-  `delete from daemon_state where key = 'clone_fold_state'`,
 ] as const;
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */
