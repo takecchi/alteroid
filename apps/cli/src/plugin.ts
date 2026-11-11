@@ -1,3 +1,5 @@
+import { clipWithEllipsis } from '@alteroid/core/cli-light';
+
 import { confirmProceed, type ConfirmIo } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
@@ -125,10 +127,7 @@ function renderPluginList(plugins: PluginRow[]): string {
 const MAX_DESCRIPTION_CHARS = 100;
 
 function shortDescription(text: string): string {
-  const chars = Array.from(text);
-  return chars.length <= MAX_DESCRIPTION_CHARS
-    ? text
-    : `${chars.slice(0, MAX_DESCRIPTION_CHARS).join('')}…`;
+  return clipWithEllipsis(text, MAX_DESCRIPTION_CHARS);
 }
 
 function sourceWhere(source: SourceView): string {

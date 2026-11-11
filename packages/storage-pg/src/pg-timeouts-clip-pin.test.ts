@@ -6,12 +6,13 @@ import { createTimedPool, type PgTimeoutEvent } from './pg-timeouts.js';
 
 /**
  * `pg-timeouts.ts` の `sqlHeadOf`（期限切れの知らせに載せる SQL の頭）の切り詰めを、外から縛る。
- * 仕様を先に書いたものではなく、今の出力から変えないための歯。寄せる前の各か所の違い（数え方）を固定する。
+ * 前処理と上限を固定する歯。
  *
- * `sqlHeadOf`: 空白を畳んで trim → UTF-16 の `.length` で 120 を数え、`codePointBoundary` 無しで `slice(0, 120)` に「…」を足す。
+ * `sqlHeadOf`: 空白を畳んで trim → `clipWithEllipsis`（コードポイントで 120）。
+ * 寄せる前は UTF-16 の `.length` で数えて孤立サロゲートが残り、絵文字だけの SQL は上限が実質半分だった。寄せて直った。
  * export されていないので、答えを返さない偽のサーバーに問い合わせを打ち、期限切れの知らせ（`onTimeout` の `sql`）で見る。
  *
- * 期待の値は `vitest -u` でインライン snapshot に生成し、目で読んで確かめた。
+ * 期待の値は、寄せる前の出力（`vitest -u` で生成して目で確かめた）から、補助面の文字に関わる行だけを手で直した。
  * 長い文字列は、長さ（UTF-16 の u と コードポイントの cp）・頭・尻・孤立サロゲートの有無で表す。
  */
 
@@ -120,7 +121,7 @@ async function sqlHeads(inputs: Record<string, string>): Promise<Record<string, 
   return out;
 }
 
-describe('sqlHeadOf（pg-timeouts.ts）: 空白を畳んで trim・UTF-16 の .length で 120・codePointBoundary 無し', () => {
+describe('sqlHeadOf（pg-timeouts.ts）: 空白を畳んで trim・コードポイントで 120', () => {
   it('各入力の結果（期限切れの知らせの sql）', async () => {
     expect(await sqlHeads(inputsFor(SQL_HEAD_CHARS))).toMatchInlineSnapshot(`
       {
@@ -128,11 +129,11 @@ describe('sqlHeadOf（pg-timeouts.ts）: 空白を畳んで trim・UTF-16 の .l
         "1 超 あ×(L+1)": "121u/121cp head="ああああ" tail="あああ…"",
         "a×(L-1)+é(結合)+x": "121u/121cp head="aaaa" tail="aae…"",
         "a×(L-1)+改行+b×5": "121u/121cp head="aaaa" tail="aa …"",
-        "a×(L-1)+😀+b（切り口が対の真ん中）": "121u/121cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-1)+😀😀": "121u/121cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-1)+😀（L cp・L+1 u）": "121u/121cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-2)+😀+bb（対が切り口の手前に収まる）": "121u/120cp head="aaaa" tail="aa😀…"",
-        "a×(L-3)+家族(ZWJ)+z": "121u/120cp head="aaaa" tail="a👨‍…"",
+        "a×(L-1)+😀+b（切り口が対の真ん中）": "122u/121cp head="aaaa" tail="aa😀…"",
+        "a×(L-1)+😀😀": "122u/121cp head="aaaa" tail="aa😀…"",
+        "a×(L-1)+😀（L cp・L+1 u）": "121u/120cp head="aaaa" tail="aaa😀"",
+        "a×(L-2)+😀+bb（対が切り口の手前に収まる）": "122u/121cp head="aaaa" tail="a😀b…"",
+        "a×(L-3)+家族(ZWJ)+z": "123u/121cp head="aaaa" tail="👨‍👩…"",
         "ちょうど a×L": "120u/120cp head="aaaa" tail="aaaa"",
         "ちょうど あ×L": "120u/120cp head="ああああ" tail="ああああ"",
         "前後に空白と改行 + a×L": "120u/120cp head="aaaa" tail="aaaa"",
@@ -140,8 +141,8 @@ describe('sqlHeadOf（pg-timeouts.ts）: 空白を畳んで trim・UTF-16 の .l
         "改行を挟む a\\nb": "3u/3cp head="a b" tail="a b"",
         "空文字": "0u/0cp head="" tail=""",
         "空白だけ": "0u/0cp head="" tail=""",
-        "😀×(L+1)": "121u/61cp head="😀😀😀😀" tail="😀😀😀…"",
-        "😀×L": "121u/61cp head="😀😀😀😀" tail="😀😀😀…"",
+        "😀×(L+1)": "241u/121cp head="😀😀😀😀" tail="😀😀😀…"",
+        "😀×L": "240u/120cp head="😀😀😀😀" tail="😀😀😀😀"",
       }
     `);
   });
@@ -158,8 +159,6 @@ describe('sqlHeadOf（pg-timeouts.ts）: 空白を畳んで trim・UTF-16 の .l
     });
     cleanups.push(() => pool.end().catch(() => undefined));
     await pool.query({ text: `${'a'.repeat(SQL_HEAD_CHARS - 1)}😀b` }).catch(() => undefined);
-    expect(shape(events[0]?.sql)).toMatchInlineSnapshot(
-      `"121u/121cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE"`,
-    );
+    expect(shape(events[0]?.sql)).toMatchInlineSnapshot(`"122u/121cp head="aaaa" tail="aa😀…""`);
   });
 });

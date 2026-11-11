@@ -16,7 +16,8 @@ describe('brief() は補助面の文字の途中で切らない（issue #2449）
 
     const out = brief(input);
     expect(out).not.toMatch(LONE_SURROGATE);
-    expect(out).toBe(`${json.slice(0, 199)}…`);
+    // 200 はコードポイントで数える: 200 個目の 😀（UTF-16 では 199・200 番目）は残る
+    expect(out).toBe(`${json.slice(0, 201)}…`);
 
     const summary = `Bash の実行許可: ${out}`;
     expect(Buffer.from(summary, 'utf8').toString('utf8')).toBe(summary);
@@ -30,17 +31,17 @@ describe('brief() は補助面の文字の途中で切らない（issue #2449）
 
     const out = brief(input, 120);
     expect(out).not.toMatch(LONE_SURROGATE);
-    expect(out).toBe(`${json.slice(0, 119)}…`);
+    expect(out).toBe(`${json.slice(0, 121)}…`);
   });
 
   it('文字列の入力でも寄せる', () => {
     const text = `${'x'.repeat(199)}\u{1F600}y`;
     const out = brief(text);
     expect(out).not.toMatch(LONE_SURROGATE);
-    expect(out).toBe(`${'x'.repeat(199)}…`);
+    expect(out).toBe(`${'x'.repeat(199)}\u{1F600}…`);
   });
 
-  it('対照: 切り口が文字を割らないときは、これまでどおり limit コード単位で切る', () => {
+  it('対照: 切り口の前に補助面の文字が無ければ、limit 個目までで切る', () => {
     const input = { command: `echo ${'a'.repeat(183)}\u{1F600}` };
     const json = JSON.stringify(input);
     expect(isHigh(json.charCodeAt(199))).toBe(false);

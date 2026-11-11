@@ -1,3 +1,5 @@
+import { clipWithEllipsis } from '@alteroid/core/excerpt';
+
 const RAW_VALUE_MAX = 40;
 
 /**
@@ -5,6 +7,5 @@ const RAW_VALUE_MAX = 40;
  * 文字数はコードポイントで数える: サロゲートペアの途中で切らない。
  */
 export function clipRawValue(raw: string): string {
-  const chars = Array.from(raw);
-  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
+  return clipWithEllipsis(raw, RAW_VALUE_MAX);
 }

@@ -102,7 +102,8 @@ describe('#3415 承認の行の切り詰め', () => {
       question: `${'a'.repeat(79)}😀tail`,
     } as never);
     expect(line).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
-    expect(line).toContain(`${'a'.repeat(79)}…`);
+    // 上限の 80 はコードポイントで数える: 80 個目の 😀 は残り、その後ろ（tail）を切る
+    expect(line).toContain(`${'a'.repeat(79)}😀…`);
   });
 
   it('質問の ESC 列は端末へ出る文字列に残らない', () => {

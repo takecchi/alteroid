@@ -138,7 +138,8 @@ describe('ReportLanguageNotices', () => {
 
   it('切り口に絵文字がかかっても、例に孤立したサロゲートが残らない（#5973）', () => {
     const text = describeReportLanguageNotice(`${'x'.repeat(79)}😀${'x'.repeat(20)}`);
-    expect(text).toContain(`例: "${'x'.repeat(79)}…"`);
+    // 80 はコードポイントで数える: 80 個目の 😀 は残る
+    expect(text).toContain(`例: "${'x'.repeat(79)}😀…"`);
     expect(text).not.toMatch(/\p{Surrogate}/u);
   });
 

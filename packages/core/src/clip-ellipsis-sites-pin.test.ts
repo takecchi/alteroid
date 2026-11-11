@@ -5,14 +5,15 @@ import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import { describeWorkerLimit, WORKER_LIMIT_RAW_MAX_CHARS } from './runner-worker-limit-notice.js';
 
 /**
- * 「…」付きの切り詰めを自前で書いている core の 3 か所を、外から縛る。
- * 仕様を先に書いたものではなく、今の出力から変えないための歯。寄せる前の各か所の違い（数え方）を固定する。
+ * 「…」付きの切り詰めを `clipWithEllipsis` へ寄せた core の 3 か所を、外から縛る。
+ * 各か所の前処理と上限を固定する。数え方は 3 か所ともコードポイント（`clipWithEllipsis`）。
  *
- * - reasonHead（classifier-denial-streak.ts）: 空白を畳んで trim → コードポイントで 120 を数える
- * - truncateRaw（runner-worker-limit-notice.ts）: trim だけ（空白は畳まない）→ UTF-16 の .length で 300 を数え、`codePointBoundary` 無し
- * - cleanForJournal（plugin-removed-summary.ts）: 制御文字などを落とす → コードポイントで 120 を数える
+ * - reasonHead（classifier-denial-streak.ts）: 空白を畳んで trim → コードポイントで 120
+ * - truncateRaw（runner-worker-limit-notice.ts）: trim だけ（空白は畳まない）→ コードポイントで 300。
+ *   寄せる前は UTF-16 の .length で数えて孤立サロゲートが残り、絵文字だけの本文は上限が実質半分だった。寄せて直った
+ * - cleanForJournal（plugin-removed-summary.ts）: 制御文字などを落とす → コードポイントで 120
  *
- * 期待の値は `vitest -u` でインライン snapshot に生成し、目で読んで確かめた。
+ * 期待の値は、寄せる前の出力（`vitest -u` で生成して目で確かめた）から、補助面の文字に関わる行だけを手で直した。
  * 長い文字列は、長さ（UTF-16 の u と コードポイントの cp）・頭・尻・孤立サロゲートの有無で表す。
  */
 
@@ -104,7 +105,7 @@ describe('reasonHead（classifier-denial-streak.ts）: 空白を畳んで trim�
   });
 });
 
-describe('truncateRaw（runner-worker-limit-notice.ts）: trim だけ・UTF-16 の .length で 300・codePointBoundary 無し', () => {
+describe('truncateRaw（runner-worker-limit-notice.ts）: trim だけ・コードポイントで 300', () => {
   function raw(text: string): string {
     const described = describeWorkerLimit([{ label: 'L', raw: text }]);
     const start = described.indexOf('（原文: ');
@@ -123,11 +124,11 @@ describe('truncateRaw（runner-worker-limit-notice.ts）: trim だけ・UTF-16 �
         "1 超 あ×(L+1)": "301u/301cp head="ああああ" tail="あああ…"",
         "a×(L-1)+é(結合)+x": "301u/301cp head="aaaa" tail="aae…"",
         "a×(L-1)+改行+b×5": "301u/301cp head="aaaa" tail="aa\\n…"",
-        "a×(L-1)+😀+b（切り口が対の真ん中）": "301u/301cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-1)+😀😀": "301u/301cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-1)+😀（L cp・L+1 u）": "301u/301cp head="aaaa" tail="aa\\ud83d…" LONE-SURROGATE",
-        "a×(L-2)+😀+bb（対が切り口の手前に収まる）": "301u/300cp head="aaaa" tail="aa😀…"",
-        "a×(L-3)+家族(ZWJ)+z": "301u/300cp head="aaaa" tail="a👨‍…"",
+        "a×(L-1)+😀+b（切り口が対の真ん中）": "302u/301cp head="aaaa" tail="aa😀…"",
+        "a×(L-1)+😀😀": "302u/301cp head="aaaa" tail="aa😀…"",
+        "a×(L-1)+😀（L cp・L+1 u）": "301u/300cp head="aaaa" tail="aaa😀"",
+        "a×(L-2)+😀+bb（対が切り口の手前に収まる）": "302u/301cp head="aaaa" tail="a😀b…"",
+        "a×(L-3)+家族(ZWJ)+z": "303u/301cp head="aaaa" tail="👨‍👩…"",
         "ちょうど a×L": "300u/300cp head="aaaa" tail="aaaa"",
         "ちょうど あ×L": "300u/300cp head="ああああ" tail="ああああ"",
         "前後に空白と改行 + a×L": "300u/300cp head="aaaa" tail="aaaa"",
@@ -135,8 +136,8 @@ describe('truncateRaw（runner-worker-limit-notice.ts）: trim だけ・UTF-16 �
         "改行を挟む a\\nb": "3u/3cp head="a\\nb" tail="a\\nb"",
         "空文字": "0u/0cp head="" tail=""",
         "空白だけ": "0u/0cp head="" tail=""",
-        "😀×(L+1)": "301u/151cp head="😀😀😀😀" tail="😀😀😀…"",
-        "😀×L": "301u/151cp head="😀😀😀😀" tail="😀😀😀…"",
+        "😀×(L+1)": "601u/301cp head="😀😀😀😀" tail="😀😀😀…"",
+        "😀×L": "600u/300cp head="😀😀😀😀" tail="😀😀😀😀"",
       }
     `);
   });

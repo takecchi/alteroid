@@ -91,7 +91,8 @@ describe('describeWorkerLimitKeyMatch', () => {
       activeTokenId: emojiKey.id,
       windows,
     });
-    expect(line).toContain(`鍵「${'x'.repeat(39)}…」（order 3・id bbbbbbbb）`);
+    // 上限の 40 はコードポイントで数える: 40 個目の 😀 は残り、その後ろを切る
+    expect(line).toContain(`鍵「${'x'.repeat(39)}😀…」（order 3・id bbbbbbbb）`);
     expect(line).not.toMatch(/\p{Surrogate}/u);
   });
 

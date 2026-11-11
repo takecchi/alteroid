@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { currentRequestTiming, notePhase, type RequestTiming } from '@alteroid/core';
+import {
+  clipWithEllipsis,
+  currentRequestTiming,
+  notePhase,
+  type RequestTiming,
+} from '@alteroid/core';
 import { Client, Pool, type ClientConfig } from 'pg';
 
 /**
@@ -76,7 +81,7 @@ function sqlHeadOf(config: unknown): string | undefined {
   const text = typeof config === 'string' ? config : (config as QueryConfigLike).text;
   if (typeof text !== 'string') return undefined;
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > SQL_HEAD_CHARS ? `${flat.slice(0, SQL_HEAD_CHARS)}…` : flat;
+  return clipWithEllipsis(flat, SQL_HEAD_CHARS);
 }
 
 // 印に載せる SQL の頭の長さ。止まった知らせ1行に印が数十本並ぶので、`sqlHeadOf`（120字）より短くする
