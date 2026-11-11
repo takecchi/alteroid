@@ -29,6 +29,11 @@ const USAGE_WAKE_RETRY_MAX_MS = 30 * 60 * 1000;
 const WORKER_LIMIT_WAKE_RETRY_BASE_MS = 60 * 1000;
 const WORKER_LIMIT_WAKE_RETRY_MAX_MS = 5 * 60 * 1000;
 
+/** 挑み直しの間隔（2 つの挑み直しで共通）: `failures` 回目（1 から）は `baseMs` から倍々に、上限 `maxMs`。 */
+function retryDelayMs(failures: number, baseMs: number, maxMs: number): number {
+  return Math.min(baseMs * 2 ** (failures - 1), maxMs);
+}
+
 /** 起こし直しが `Pool#send` へ渡す届け方（`SendDelivery` の `mode === 'usage-rotation'` の形）。 */
 interface UsageRotationDelivery {
   mode: 'usage-rotation';
@@ -204,10 +209,7 @@ export class UsageWake {
     d.rotationFoldDueAt.delete(managerId);
     if (outcome === 'skipped') {
       const failures = (d.usageWakeRetry.get(managerId)?.failures ?? 0) + 1;
-      const interval = Math.min(
-        USAGE_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
-        USAGE_WAKE_RETRY_MAX_MS,
-      );
+      const interval = retryDelayMs(failures, USAGE_WAKE_RETRY_BASE_MS, USAGE_WAKE_RETRY_MAX_MS);
       const backoffAt = d.now() + interval;
       // 背景処理を待たせている回は、待ちの上限の時刻より後へ延ばさない（#5044）。最短でも1分は空ける
       const nextAt =
@@ -354,8 +356,9 @@ export class UsageWake {
         continue;
       }
       const failures = (retry?.failures ?? 0) + 1;
-      const delayMs = Math.min(
-        WORKER_LIMIT_WAKE_RETRY_BASE_MS * 2 ** (failures - 1),
+      const delayMs = retryDelayMs(
+        failures,
+        WORKER_LIMIT_WAKE_RETRY_BASE_MS,
         WORKER_LIMIT_WAKE_RETRY_MAX_MS,
       );
       d.workerLimitWakeRetry.set(managerId, { failures, nextAt: d.now() + delayMs });
