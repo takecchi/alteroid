@@ -62,6 +62,8 @@ describe('未追跡のファイルの預かり（runner 側。#4863）', () => {
     const file = second.files[0]!;
     expect(file.path).toBe('art.png');
     expect(file.size).toBe(6);
+    // sha256（hex 全長）は中身の値で固定する
+    expect(file.sha256).toBe('6ec9c2b0eb14010746c8bce8939303b382344b296206612eb8a907a37b2b2f37');
     const copy = path.join(staged, managerId, file.fileId);
     expect(await readFile(copy, 'utf8')).toBe('pixels');
     expect((await stat(copy)).mode & 0o777).toBe(0o400);
