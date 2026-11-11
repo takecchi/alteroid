@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-
+import { sha256Hex } from './auth.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { fingerprintOf } from './credentials.js';
 import { redactErrorText } from './denial-input-head.js';
@@ -152,9 +151,7 @@ export class ProfileRollbackFailedError extends Error {
  * 本文と撒く先から作る: 撒く先だけを変えるのも更新である（外れる側が出る）。`updatedAt` は含めない（巻き戻しで戻せる監査情報のため）。
  */
 export function profileEntryVersionOf(entry: Pick<EnvProfileEntry, 'script' | 'scope'>): string {
-  return createHash('sha256')
-    .update(JSON.stringify([entry.script, entry.scope]), 'utf8')
-    .digest('hex');
+  return sha256Hex(JSON.stringify([entry.script, entry.scope]));
 }
 
 /**

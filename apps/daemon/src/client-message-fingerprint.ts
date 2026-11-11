@@ -1,6 +1,4 @@
-import { createHash } from 'node:crypto';
-
-import { stripNulWellFormed } from '@alteroid/core';
+import { sha256Hex, stripNulWellFormed } from '@alteroid/core';
 
 interface ClientMessageContent {
   readonly text: string;
@@ -16,5 +14,5 @@ export function clientMessageFingerprint(content: ClientMessageContent): string 
     content.supersedes === undefined ? null : stripNulWellFormed(content.supersedes);
   // JSON の配列で畳む: 区切り文字の取り違えで別の中身が同じ指紋になるのを避けるため。
   const canonical = JSON.stringify([stripNulWellFormed(content.text), ids, supersedes]);
-  return createHash('sha256').update(canonical).digest('hex');
+  return sha256Hex(canonical);
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { sha256Hex } from './auth.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { assertNoNul, stripNul, stripNulDeep } from './nul-guard.js';
 import {
@@ -112,9 +113,7 @@ export function mcpServersFingerprintOf(servers: McpServers): string {
 
 // `updatedAt` は fs では mtime で器ごとに粒度が違うので版に使わない。null と空の `{}` は同じ版。
 export function mcpServersVersionOf(stored: Pick<StoredMcpServers, 'mcpServers'> | null): string {
-  return createHash('sha256')
-    .update(canonicalJson(stored === null ? {} : stored.mcpServers), 'utf8')
-    .digest('hex');
+  return sha256Hex(canonicalJson(stored === null ? {} : stored.mcpServers));
 }
 
 export interface WriteMcpServersOptions {
