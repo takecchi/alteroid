@@ -23,14 +23,12 @@ export function quotaNoticeOfEnded(
 
 /**
  * 同じ判断の、例外で届いた側（`catch` の中）。切り出し前の `#distillFromTranscript` から切り出した。振る舞いは変えていない。同期。
- * 分類は生の文（`String(error)`）に掛け、通知に載せる文だけ `reasonOf` を通す。
+ * 分類は生の文（`String(error)`）に掛け、通知に載せる文は `reached` でも 429 でも必ず `reasonOf` を通す
+ * （日誌・`usage_limited`・観測に載る文が、例外の2行目以降の値を運ばないため。#6698）。
  */
 export function quotaNoticeOfError(error: unknown): UsageLimitNotice | undefined {
   const raw = String(error);
-  const classified = classifyUsageNotice(raw);
-  if (classified?.kind === 'reached') {
-    return classified;
-  } else if (isRateLimitReason(raw)) {
+  if (classifyUsageNotice(raw)?.kind === 'reached' || isRateLimitReason(raw)) {
     return { kind: 'reached', text: reasonOf(error) };
   }
   return undefined;

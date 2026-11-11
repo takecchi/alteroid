@@ -129,7 +129,7 @@ describe('quotaNoticeOfEnded', () => {
 });
 
 describe('quotaNoticeOfError', () => {
-  it('reached の文言は String(error) の分類結果（text は String(error)）', () => {
+  it('reached の文言は String(error) で分類し、text は reasonOf(error)（1行の Error では String(error) と同じ）', () => {
     const notice = quotaNoticeOfError(new Error(REACHED_1));
     expect(notice?.kind).toBe('reached');
     expect(notice?.text).toBe(`Error: ${REACHED_1}`);
@@ -154,9 +154,26 @@ describe('quotaNoticeOfError', () => {
     });
   });
 
-  it('cause 付きの Error: reached の文言なら分類の枝（String(error) のまま）、429 なら reasonOf の枝（cause を畳んだ文）', () => {
+  it('reached の文言の例外も 2行目以降の値は text に載らない（reasonOf は1行目だけ。#6698）', () => {
+    const notice = quotaNoticeOfError(new Error(`${REACHED_1}\nparams: sk-live-SECRET-VALUE`));
+    expect(notice).toEqual({ kind: 'reached', text: `Error: ${REACHED_1}` });
+    expect(quotaNoticeOfError(`${REACHED_1}\nparams: sk-live-SECRET-VALUE`)?.text).not.toContain(
+      'SECRET-VALUE',
+    );
+  });
+
+  // 値を運ばないことの代償として固定する（#6698）: 枠の文言が2行目以降にある例外は reached のままだが、text には載らない。
+  // 枠の名前・リセットの時刻が1行目にある通常の文言（上の試験）は、そのまま残る。
+  it('枠の文言が2行目にある例外: 分類は reached のまま、text は1行目だけ（2行目の文言は残らない）', () => {
+    expect(quotaNoticeOfError(new Error(`API request failed\n${REACHED_1}`))).toEqual({
+      kind: 'reached',
+      text: 'Error: API request failed',
+    });
+  });
+
+  it('cause 付きの Error: reached の文言でも 429 でも、reasonOf の枝（cause を <- で畳んだ文）', () => {
     const reached = quotaNoticeOfError(new Error(REACHED_2, { cause: new Error('下の理由') }));
-    expect(reached?.text).toBe(`Error: ${REACHED_2}`);
+    expect(reached?.text).toBe(`Error: ${REACHED_2} <- Error: 下の理由`);
     expect(quotaNoticeOfError(new Error(RATE_429, { cause: new Error('下の理由') }))).toEqual({
       kind: 'reached',
       text: `Error: ${RATE_429} <- Error: 下の理由`,
