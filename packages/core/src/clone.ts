@@ -60,7 +60,11 @@ import { distillSucceededEntry } from './distill-gap.js';
 import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
-import { WorkerLimitNotices, workerLimitLabel } from './runner-worker-limit-notice.js';
+import {
+  WorkerLimitNotices,
+  workerLimitIdentity,
+  workerLimitLabel,
+} from './runner-worker-limit-notice.js';
 import { excerpt } from './excerpt.js';
 import {
   EXTERNAL_JOURNAL_LIMIT,
@@ -5007,11 +5011,7 @@ class Clone implements CloneHost {
     ) {
       // 身元は作業者を呼んだ tool_use の id にそろえる（#4996。担当の層 `runner.ts` と同じ）
       await this.#recordWorkerLimit(
-        event.toolUseId !== undefined
-          ? `tool_use:${event.toolUseId}`
-          : event.taskId === undefined
-            ? 'background-worker'
-            : `task:${event.taskId}`,
+        workerLimitIdentity(event.toolUseId, event.taskId),
         workerLimitLabel(event.toolUseId, event.taskId),
         event.summary,
       );
@@ -5119,7 +5119,7 @@ class Clone implements CloneHost {
         turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
       ) {
         await this.#recordWorkerLimit(
-          `tool_use:${event.parentToolUseId}`,
+          workerLimitIdentity(event.parentToolUseId, undefined),
           workerLimitLabel(event.parentToolUseId, undefined),
           said.length > 0 ? said : workerRejected.code,
         );
