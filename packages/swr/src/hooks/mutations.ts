@@ -3,6 +3,8 @@
 import { useCallback } from 'react';
 import { type Arguments, useSWRConfig } from 'swr';
 
+import { clipWithEllipsis } from '@alteroid/core/excerpt';
+
 import { ApiError, expectOk, unwrap, uploadAttachment, useApi } from '../api';
 import type {
   AgentTokenView,
@@ -110,7 +112,7 @@ export function useRecordOwnMessage() {
 // サーバの `preview()`（`packages/core/src/conversation.ts`）の写し: 切り方がずれると、反映された瞬間に抜粋の見た目が飛ぶ
 function roughPreview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
+  return clipWithEllipsis(flat, 80);
 }
 
 export class MemoryConflictError extends ApiError {
