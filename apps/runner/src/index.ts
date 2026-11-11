@@ -2,7 +2,6 @@
 // 最初の import に置く（枠の大きさは最初に枠を使う処理で決まる。理由は packages/core/src/threadpool-size.ts）
 import '@alteroid/core/threadpool-size';
 
-import { createHash } from 'node:crypto';
 import {
   accessSync,
   chmodSync,
@@ -33,6 +32,7 @@ import {
   placedManagerModels,
   reasonOf,
   readExecutionResources,
+  sha256Hex,
   applyAttachmentRequestTimeout,
   applyRunnerKeepAlive,
   resolveManagerModel,
@@ -223,7 +223,7 @@ export function tokenSha256Of(env: NodeJS.ProcessEnv): string | undefined {
   const raw = placedEnvValue(env, 'ALTEROID_RUNNER_TOKEN');
   if (raw === null) return given ?? undefined;
 
-  const folded = createHash('sha256').update(raw, 'utf8').digest('hex');
+  const folded = sha256Hex(raw);
   if (given !== null && given !== folded) {
     throw new Error(
       'ALTEROID_RUNNER_TOKEN と ALTEROID_RUNNER_TOKEN_SHA256 が食い違っている' +

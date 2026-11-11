@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open, readdir, realpath, rm, stat, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
+import { sha256Hex } from './auth.js';
 import { clipWithEllipsis } from './excerpt.js';
 import { credentialSourceRefusal, resolveCredentialSources } from './file-put.js';
 import { secretPatternsInBody } from './redact.js';
@@ -296,7 +297,7 @@ export async function stashUntrackedFiles(
       } finally {
         await handle.close();
       }
-      const sha256 = createHash('sha256').update(buffer).digest('hex');
+      const sha256 = sha256Hex(buffer);
       // NUL を含むものはバイナリ: 固有の接頭辞の規則と環境変数の鍵の値だけ見る（形だけの規則に PNG などが当たるため）
       const binary = buffer.includes(0);
       const patterns = secretPatternsInBody(buffer.toString('utf8'), options.secretEnv, { binary });
