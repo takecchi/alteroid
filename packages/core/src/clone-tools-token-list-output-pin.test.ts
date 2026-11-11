@@ -491,7 +491,7 @@ const SCENARIOS: Scenario[] = [
     name: 'state-reason-excerpt',
     group: '状態',
     covers:
-      '止まった理由・失効の理由の抜粋（200 字）: 199 / 200 字はそのまま、201 字は 200 字で切って「…（1 文字省略。全 201 文字）」。空白・改行は1つの空白にたたむ（たたんだ後が収まれば切らない）。切り口が補助面の文字なら割らず手前で切る（3 文字省略。全 202 文字）',
+      '止まった理由・失効の理由の抜粋（200 字）: 199 / 200 字はそのまま、201 字は 200 字で切って「…（1 文字省略。全 201 文字）」。空白・改行は1つの空白にたたむ（たたんだ後が収まれば切らない）。補助面の文字は 1 字と数える（200 字目が補助面の文字ならそこまで残す。1 文字省略。全 201 文字）',
     seed: [
       tok('x-199', 0, { lastRejectedReason: spaced(199), invalidatedReason: spaced(199) }),
       tok('x-200', 1, { lastRejectedReason: spaced(200), invalidatedReason: spaced(200) }),
@@ -1151,7 +1151,7 @@ describe('token_list の出力の固定（場面ごとの全文と字数・読�
     expect(count(text('state-recovery'), '回復の見込み（分類）: unknown')).toBe(3);
     expect(count(text('state-reason-excerpt'), '文字省略。全 ')).toBe(4);
     expect(text('state-reason-excerpt')).toContain('…（1 文字省略。全 201 文字）');
-    expect(text('state-reason-excerpt')).toContain('…（3 文字省略。全 202 文字）');
+    expect(text('state-reason-excerpt')).toContain('😀…（1 文字省略。全 201 文字）');
     expect(text('state-fields')).toContain('作成: （記録が無い） / 更新: ' + T_UPDATED);
     expect(text('state-fields')).toContain('作成: ' + T_CREATED + ' / 更新: （記録が無い）');
     expect(before('state-fields', '- f-neg ', '- f-created-only ')).toBe(true);

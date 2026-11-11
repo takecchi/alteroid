@@ -31,9 +31,9 @@ describe('excerptRow — 一覧の行の注記は全体の字数だけにする'
     expect(excerptRow('あ'.repeat(1_500), 120)).toBe(`${'あ'.repeat(120)}…（全 1,500 字）`);
   });
 
-  it('サロゲートペアを割らない', () => {
+  it('上限・注記の N はコードポイントで数える（補助面の文字は 1 字。サロゲートペアを割らない）', () => {
     const text = `${'A'.repeat(9)}😀${'B'.repeat(10)}`;
-    expect(excerptRow(text, 10)).toBe(`${'A'.repeat(9)}…（全 21 字）`);
+    expect(excerptRow(text, 10)).toBe(`${'A'.repeat(9)}😀…（全 20 字）`);
   });
 });
 

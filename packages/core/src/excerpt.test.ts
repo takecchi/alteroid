@@ -7,6 +7,8 @@ import {
   describePage,
   excerpt,
   excerptLine,
+  excerptRow,
+  fillListingBudget,
   page,
   renderListing,
   renderListingEntry,
@@ -249,18 +251,18 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
     return last >= 0xd800 && last <= 0xdbff;
   };
 
-  it('🔴 excerpt: 切り口が絵文字の途中なら1つ手前で切り、省いた量はその位置で数える', () => {
+  it('🔴 excerpt: 上限はコードポイントで数える（絵文字は 1 字。落とさず残し、割らない）', () => {
     const text = 'A'.repeat(9) + '😀' + 'BBBB';
     const result = excerpt(text, 10);
     const body = result.slice(0, result.indexOf('…'));
-    expect(body).toBe('A'.repeat(9));
+    expect(body).toBe('A'.repeat(9) + '😀');
     expect(isLoneHighSurrogateAtEnd(body)).toBe(false);
-    expect(result).toContain('…（6 文字省略。全 15 文字）');
+    expect(result).toContain('…（4 文字省略。全 14 文字）');
   });
 
-  it('excerpt: 切り口が絵文字の後ろなら従来どおり（1文字も変えない）', () => {
+  it('excerpt: 切り口が絵文字の後ろ（補助面の文字を挟んだ先）でも、コードポイントで数える', () => {
     const text = 'A'.repeat(8) + '😀' + 'BBBB';
-    expect(excerpt(text, 10)).toBe(`${'A'.repeat(8)}😀…（4 文字省略。全 14 文字）`);
+    expect(excerpt(text, 10)).toBe(`${'A'.repeat(8)}😀B…（3 文字省略。全 13 文字）`);
   });
 
   it('🔴 page: 境目が絵文字の途中なら次のページへ回し、続けて読むと元の文字列に戻る', () => {
@@ -309,6 +311,67 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
       offset = part.to;
     }
     expect(seen).toEqual([1, 2, 3]);
+  });
+});
+
+describe('excerpt・excerptLine・excerptRow はコードポイントで数える', () => {
+  const noLoneSurrogate = (text: string): boolean =>
+    !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(text);
+
+  it('空・短い・ちょうど: 何も足さない（補助面を含んでも）', () => {
+    expect(excerpt('', 10)).toBe('');
+    expect(excerpt('', 0)).toBe('');
+    expect(excerpt('abc', 3)).toBe('abc');
+    // UTF-16 の長さ 20 > 10 でも、コードポイントは 10 でちょうど: 切らない
+    expect(excerpt('😀'.repeat(10), 10)).toBe('😀'.repeat(10));
+    expect(excerptRow('😀'.repeat(10), 10)).toBe('😀'.repeat(10));
+    expect(excerptLine('😀 '.repeat(5).trim(), 10)).toBe('😀 😀 😀 😀 😀');
+  });
+
+  it('1 超: 先頭 limit コードポイント + 注記（N はコードポイント数）', () => {
+    expect(excerpt('abcd', 3)).toBe('abc…（1 文字省略。全 4 文字）');
+    expect(excerpt('😀'.repeat(11), 10)).toBe(`${'😀'.repeat(10)}…（1 文字省略。全 11 文字）`);
+    expect(excerptRow('abcd', 3)).toBe('abc…（全 4 字）');
+    expect(excerptRow('😀'.repeat(11), 10)).toBe(`${'😀'.repeat(10)}…（全 11 字）`);
+    expect(excerptLine('😀😀\n\n😀😀', 3)).toBe('😀😀 …（2 文字省略。全 5 文字）');
+  });
+
+  it('絵文字 300 個: 旧は UTF-16 で「360 文字省略。全 600 文字」、新は「60 文字省略。全 300 文字」', () => {
+    expect(excerpt('😀'.repeat(300), 240)).toBe(`${'😀'.repeat(240)}…（60 文字省略。全 300 文字）`);
+  });
+
+  it('limit が 0: 本文を出さず注記だけ。負も 0 と同じ（空文字は空のまま）', () => {
+    expect(excerpt('abc', 0)).toBe('…（3 文字省略。全 3 文字）');
+    expect(excerpt('😀😀', 0)).toBe('…（2 文字省略。全 2 文字）');
+    expect(excerpt('abc', -5)).toBe('…（3 文字省略。全 3 文字）');
+    expect(excerpt('', -1)).toBe('');
+    expect(excerptRow('abc', 0)).toBe('…（全 3 字）');
+    expect(excerptRow('abc', -5)).toBe('…（全 3 字）');
+    expect(excerptRow('', -1)).toBe('');
+  });
+
+  it('ZWJ・結合文字はコードポイントで切る（書記素までは見ない）', () => {
+    // 👨‍👩‍👧 = 👨 ZWJ 👩 ZWJ 👧（5 コードポイント）
+    const family = '👨‍👩‍👧';
+    expect(countCodePoints(family)).toBe(5);
+    expect(excerpt(`${family}X`, 3)).toBe('👨‍👩…（3 文字省略。全 6 文字）');
+    // e + 結合アクセント（2 コードポイント）
+    expect(excerptRow('ééé', 3)).toBe('ée…（全 6 字）');
+  });
+
+  it('切り口で孤立サロゲートを出さない（どの位置で切っても）', () => {
+    const text = 'A😀B😀C😀D';
+    for (let limit = 0; limit <= 8; limit += 1) {
+      expect(noLoneSurrogate(excerpt(text, limit))).toBe(true);
+      expect(noLoneSurrogate(excerptRow(text, limit))).toBe(true);
+      expect(noLoneSurrogate(excerptLine(text, limit))).toBe(true);
+    }
+  });
+
+  it('fillListingBudget の予算は UTF-16 の出力量のまま（1 件目だけで超えるときは excerpt で切る）', () => {
+    // 絵文字 10 個 = UTF-16 で 20 > 予算 10 → excerpt(…, 10) = 先頭 10 コードポイント（= 全部）。注記なし
+    const { lines } = fillListingBudget(['😀'.repeat(10)], 10);
+    expect(lines).toEqual(['😀'.repeat(10)]);
   });
 });
 

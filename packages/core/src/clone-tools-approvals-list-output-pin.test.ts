@@ -749,7 +749,7 @@ const SCENARIOS: Scenario[] = [
     name: 'list-title-limit',
     group: '件名・抜粋',
     covers:
-      '件名（60 字）の境目: 問いが 59 / 60 / 61 字: 60 字までは抜粋しない・61 字は 60 字で切って「…（1 文字省略。全 61 文字）」。概要は 200 字の抜粋で別。補助面の文字が 60 字目をまたぐなら 59 字で切る',
+      '件名（60 字）の境目: 問いが 59 / 60 / 61 字: 60 字までは抜粋しない・61 字は 60 字で切って「…（1 文字省略。全 61 文字）」。概要は 200 字の抜粋で別。補助面の文字は 1 字と数える（60 字目にかかっても割らず残す）',
     seed: [
       ap('l-59', 1, { question: spaced(59) }),
       ap('l-60', 2, { question: spaced(60) }),
@@ -762,7 +762,7 @@ const SCENARIOS: Scenario[] = [
     name: 'list-summary-limit',
     group: '件名・抜粋',
     covers:
-      '概要（問いの抜粋 200 字）の境目: 問いが 199 / 200 / 201 字: 200 字までは抜粋しない（注記なし）・201 字は「…（1 文字省略。全 201 文字）」。空白・改行は潰してから測る（潰す前が 200 字超でも潰した後が収まれば切らない）。補助面の文字が 200 字目をまたぐなら 199 字で切る。長い問いは省略した字数と全体の字数が出る',
+      '概要（問いの抜粋 200 字）の境目: 問いが 199 / 200 / 201 字: 200 字までは抜粋しない（注記なし）・201 字は「…（1 文字省略。全 201 文字）」。空白・改行は潰してから測る（潰す前が 200 字超でも潰した後が収まれば切らない）。補助面の文字は 1 字と数える（200 字目にかかっても割らず残す）。長い問いは省略した字数と全体の字数が出る',
     seed: [
       ap('s-199', 1, { question: spaced(199) }),
       ap('s-200', 2, { question: spaced(200) }),
@@ -1342,10 +1342,10 @@ describe('approvals_list の出力の固定（場面ごとの全文と字数・�
     expect(text('list-title-limit')).toContain('…（1 文字省略。全 61 文字）');
     expect(text('list-title-limit')).not.toContain('全 59 文字');
     expect(text('list-title-limit')).not.toContain('全 60 文字');
-    expect(text('list-title-limit')).toContain('…（6 文字省略。全 65 文字）');
+    expect(text('list-title-limit')).toContain('😀…（4 文字省略。全 64 文字）');
     expect(text('list-summary-limit')).toContain('…（1 文字省略。全 201 文字）');
     expect(text('list-summary-limit')).toContain('全 1,000 文字）');
-    expect(text('list-summary-limit')).toContain('…（3 文字省略。全 202 文字）');
+    expect(text('list-summary-limit')).toContain('😀…（1 文字省略。全 201 文字）');
     expect(text('list-summary-limit')).toContain('abcdefghix\n- s-201 ');
     expect(text('list-summary-limit')).toContain('全 249 文字）\n');
     expect(text('list-summary-limit')).toContain('- s-ws-short abcdefghi\n');
