@@ -69,18 +69,7 @@ const PRE_COMPACT_HOOK_TIMEOUT_SECONDS = 120;
 export const CLAUDE_PROVIDER: AgentProvider = {
   id: 'claude',
   displayName: 'Claude',
-  capabilities: {
-    permissions: true,
-    toolAudit: true,
-    compactionHook: true,
-    resume: true,
-    sessionLog: true,
-    subagents: true,
-    mcpServers: true,
-    childUser: true,
-    usage: true,
-    partialMessages: true,
-  },
+  capabilities: { usage: true },
 };
 
 function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
