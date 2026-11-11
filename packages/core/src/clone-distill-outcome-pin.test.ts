@@ -550,8 +550,12 @@ describe('catch（蒸留の for await が投げる例外）', () => {
     { name: 'reached の文言の Error', error: new Error(REACHED_1) },
     { name: '429（rate_limit_error）の Error', error: new Error(RATE_429) },
     {
-      name: 'reached の文言 + cause: classify の枝が先（text は String(error)）',
+      name: 'reached の文言 + cause: classify の枝が先（text は reasonOf(error)。cause を <- で連ねる）',
       error: new Error(REACHED_2, { cause: new Error('下の理由') }),
+    },
+    {
+      name: 'reached の文言 + 2行目に値: text は reasonOf(error) の1行目だけ（#6698）',
+      error: new Error(`${REACHED_1}\nparams: sk-live-SECRET-VALUE`),
     },
     {
       name: '429 + cause: isRateLimitReason の枝（text は reasonOf(error)）',
@@ -627,12 +631,20 @@ describe('catch（蒸留の for await が投げる例外）', () => {
           "hook": [],
           "observed": [],
         },
-        "reached の文言 + cause: classify の枝が先（text は String(error)）": {
+        "reached の文言 + 2行目に値: text は reasonOf(error) の1行目だけ（#6698）": {
           "hook": [
             "onQuotaFailure(key-A#1)",
           ],
           "observed": [
-            "reached: Error: You're out of usage credits",
+            "reached: Error: You've hit your limit · resets 3pm",
+          ],
+        },
+        "reached の文言 + cause: classify の枝が先（text は reasonOf(error)。cause を <- で連ねる）": {
+          "hook": [
+            "onQuotaFailure(key-A#1)",
+          ],
+          "observed": [
+            "reached: Error: You're out of usage credits <- Error: 下の理由",
           ],
         },
         "reached の文言の Error": {
