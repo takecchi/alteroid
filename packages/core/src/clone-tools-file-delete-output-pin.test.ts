@@ -1029,7 +1029,8 @@ describe('file_delete の出力と呼んだあとの状態の固定（場面ご�
     expect(text('meta-forms#2')).toContain('、1023 B）');
     expect(text('meta-forms#3')).toContain('、1.0 KiB）');
     expect(text('meta-forms#4')).toContain('、1.0 MiB）');
-    expect(text('meta-forms#5')).toContain('、1024.0 KiB）');
+    // 1_048_575 バイト: 小数 1 桁へ丸めると 1024.0 KiB になるので MiB に上げる（旧は「1024.0 KiB」）
+    expect(text('meta-forms#5')).toContain('、1.0 MiB）');
     expect(groundsOf('meta-forms#3')[0]).toContain('出所=マネージャー 保存中だった（');
     expect(groundsOf('meta-forms#4')[0]).toContain('type= ');
     expect(groundsOf('meta-forms#4')[0]).toContain('出所=連携');

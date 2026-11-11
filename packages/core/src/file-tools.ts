@@ -11,6 +11,7 @@ import {
   type AttachmentUsage,
 } from './attachment.js';
 import { removeAttachmentCopy } from './attachment-fetch.js';
+import { humanOneDecimal } from './attachment-wording.js';
 import { reasonOf } from './dropped-record.js';
 import { integrationKeyUsageView } from './attachment-usage-keys.js';
 import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
@@ -38,12 +39,6 @@ const FROM_LABELS: Readonly<Record<AttachmentFromClass, string>> = {
   unknown: '不明',
 };
 
-function formatAttachmentSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
 /** 保存中か、いつ消えるか。 */
 function describeAttachmentRetention(meta: AttachmentMeta): string {
   if (meta.keptAt !== undefined) return '保存中（期限なし）';
@@ -64,7 +59,7 @@ function describeFileEntry(meta: AttachmentMeta): string {
     title: excerptLine(meta.name, FILE_LIST_NAME_EXCERPT),
     summary: [
       excerptLine(meta.mediaType, FILE_LIST_TYPE_EXCERPT),
-      formatAttachmentSize(meta.size),
+      humanOneDecimal(meta.size),
       `出所:${FROM_LABELS[classifyAttachmentFrom(meta.uploadedBy)]}`,
       describeAttachmentRetention(meta),
     ].join(' | '),
@@ -75,19 +70,19 @@ function describeFileEntry(meta: AttachmentMeta): string {
 
 /** 使用量の1〜3行（合計と、0 でない出所ごと、連携の鍵ごと）。 */
 export function renderFileUsage(usage: AttachmentUsage): string {
-  const total = `置き場の使用量: ${usage.count} 件 ${formatAttachmentSize(usage.totalBytes)}`;
+  const total = `置き場の使用量: ${usage.count} 件 ${humanOneDecimal(usage.totalBytes)}`;
   const parts = (Object.keys(FROM_LABELS) as AttachmentFromClass[])
     .filter((from) => usage.byFrom[from].count > 0)
     .map(
       (from) =>
-        `${FROM_LABELS[from]} ${usage.byFrom[from].count} 件 ${formatAttachmentSize(usage.byFrom[from].totalBytes)}`,
+        `${FROM_LABELS[from]} ${usage.byFrom[from].count} 件 ${humanOneDecimal(usage.byFrom[from].totalBytes)}`,
     );
   const lines = [total];
   if (parts.length > 0) lines.push(`出所別: ${parts.join(' / ')}`);
   const keys = integrationKeyUsageView(usage.byIntegrationKey);
   if (keys.rows.length > 0) {
     const cells = keys.rows.map(
-      (row) => `${row.id} ${row.count} 件 ${formatAttachmentSize(row.totalBytes)}`,
+      (row) => `${row.id} ${row.count} 件 ${humanOneDecimal(row.totalBytes)}`,
     );
     if (keys.omitted > 0) cells.push(`ほか ${keys.omitted} 本`);
     lines.push(`連携の鍵別: ${cells.join(' / ')}`);
@@ -261,9 +256,7 @@ export async function deleteFile(
   }
   const journaled = meta !== undefined && beforeRemove !== undefined;
   const what =
-    meta === undefined
-      ? `id=${id}`
-      : `${meta.name}（id=${id}、${formatAttachmentSize(meta.size)}）`;
+    meta === undefined ? `id=${id}` : `${meta.name}（id=${id}、${humanOneDecimal(meta.size)}）`;
   return (
     `${what} の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。` +
     (journaled ? '消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。' : '')
