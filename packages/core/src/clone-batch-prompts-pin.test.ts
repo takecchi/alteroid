@@ -381,6 +381,34 @@ describe('managerReportBatchPrompt', () => {
     `);
   });
 
+  it('1件の本文の上限は、日本語・改行・空白をそのまま残して数える（畳まない）', () => {
+    const at = '2026-11-01T11:00:00.000Z';
+    const body = `あ\n\n い  う${'え'.repeat(10)}`;
+    const text = managerReportBatchPrompt([report('r1', body, at)], origin, NOW, new Map(), 8);
+    expect(text).toContain('\nあ\n\n い  う…\n');
+    expect(text).toContain('頭の 8 字だけを出した（全体 18 字）');
+  });
+
+  it('1件の本文の上限は、補助面の文字をコードポイントで数え、切り口で孤立サロゲートを出さない', () => {
+    const at = '2026-11-01T11:00:00.000Z';
+    // 10 コードポイント（UTF-16 では 20）。上限 10 ちょうどなら切らない
+    const exact = '😀'.repeat(10);
+    expect(
+      managerReportBatchPrompt([report('r1', exact, at)], origin, NOW, new Map(), 10),
+    ).toContain(`\n${exact}\n`);
+    expect(
+      managerReportBatchPrompt([report('r1', exact, at)], origin, NOW, new Map(), 10),
+    ).not.toContain('本文が長いので');
+    // 1 超: 先頭 10 コードポイント + …（絵文字を割らない）
+    const over = '😀'.repeat(11);
+    const cut = managerReportBatchPrompt([report('r2', over, at)], origin, NOW, new Map(), 10);
+    expect(cut).toContain(`\n${exact}…\n`);
+    expect(cut).toContain('頭の 10 字だけを出した（全体 11 字）');
+    expect(cut).not.toMatch(
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
+    );
+  });
+
   it('既定の上限（8,000 字）と、束の本文の予算（47,500 字）を超えた古い側の省略', () => {
     const at = '2026-11-01T11:00:00.000Z';
     const events = [

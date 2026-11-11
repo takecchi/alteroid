@@ -43,6 +43,15 @@ export function countCodePoints(text: string): number {
   return count;
 }
 
+// 先頭 `limit` コードポイントぶんの切り口（UTF-16 の位置）。`limit` が 0 以下なら 0
+function codePointEnd(text: string, limit: number): number {
+  let end = 0;
+  for (let taken = 0; taken < limit && end < text.length; taken += 1) {
+    end += (text.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return end;
+}
+
 // 注記を付けず「…」だけ: 1行の告知や名前の中に埋まる短い抜粋で、省いた分量までは言わない所のため（言うなら `excerpt`）。
 // `limit` はコードポイントで数える（旧実装は UTF-16 の長さで数え、切り口にかかった補助面の文字を落としていた）。
 // 結合文字・ZWJ の途中でも切る（コードポイントの境界で切るだけ）
@@ -50,19 +59,19 @@ export function clipWithEllipsis(text: string, limit: number): string {
   // コードポイント数 <= UTF-16 の長さ: 長さが収まっていれば数えるまでもない
   if (text.length <= limit) return text;
   if (limit <= 0) return text === '' ? text : '…';
-  let end = 0;
-  for (let taken = 0; taken < limit && end < text.length; taken += 1) {
-    end += (text.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
-  }
+  const end = codePointEnd(text, limit);
   return end >= text.length ? text : `${text.slice(0, end)}…`;
 }
 
-// 短ければ何も足さない: 毎回注記が付くと、本当に切れているときの目印が効かなくなるため
+// 短ければ何も足さない: 毎回注記が付くと、本当に切れているときの目印が効かなくなるため。
+// `limit`・「N 文字省略」・「全 N 文字」はコードポイントで数える（`clipWithEllipsis` と同じ。`page` の offset/limit は UTF-16 の位置のまま）
 export function excerpt(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  const end = codePointBoundary(text, limit);
-  const omitted = text.length - end;
-  return `${text.slice(0, end)}…（${count(omitted)} 文字省略。全 ${count(text.length)} 文字）`;
+  const end = codePointEnd(text, limit);
+  if (end >= text.length) return text;
+  const total = countCodePoints(text);
+  const omitted = total - countCodePoints(text.slice(0, end));
+  return `${text.slice(0, end)}…（${count(omitted)} 文字省略。全 ${count(total)} 文字）`;
 }
 
 export function excerptLine(text: string, limit: number): string {
@@ -74,8 +83,9 @@ export function excerptLine(text: string, limit: number): string {
 export function excerptRow(text: string, limit: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   if (flat.length <= limit) return flat;
-  const end = codePointBoundary(flat, limit);
-  return `${flat.slice(0, end)}…（全 ${count(flat.length)} 字）`;
+  const end = codePointEnd(flat, limit);
+  if (end >= flat.length) return flat;
+  return `${flat.slice(0, end)}…（全 ${count(countCodePoints(flat))} 字）`;
 }
 
 export interface Page {

@@ -1,4 +1,4 @@
-import { excerpt, renderListingFromEnd } from './excerpt.js';
+import { clipWithEllipsis, countCodePoints, excerpt, renderListingFromEnd } from './excerpt.js';
 import { EXCHANGE_KIND_REPLY_PREFIX } from './exchange-kind.js';
 import {
   externalAttachmentSection,
@@ -387,11 +387,13 @@ function boundedReportBody(
   const tailAt = marks.length === 0 ? -1 : Math.min(...marks);
   const main = tailAt === -1 ? event.text : event.text.slice(0, tailAt);
   const tail = tailAt === -1 ? '' : event.text.slice(tailAt);
-  if (main.length <= bodyLimit) return [event.text];
+  // 字数はコードポイントで数える（`excerpt` と同じ。UTF-16 だと補助面の文字が 2 字に数えられ、切り口で孤立サロゲートも出うる）
+  const mainChars = countCodePoints(main);
+  if (mainChars <= bodyLimit) return [event.text];
   return [
-    `${main.slice(0, bodyLimit)}…${tail}`,
+    `${clipWithEllipsis(main, bodyLimit)}${tail}`,
     '',
-    `⚠ 本文が長いので、頭の ${bodyLimit.toLocaleString('en-US')} 字だけを出した（全体 ${main.length.toLocaleString('en-US')} 字）。` +
+    `⚠ 本文が長いので、頭の ${bodyLimit.toLocaleString('en-US')} 字だけを出した（全体 ${mainChars.toLocaleString('en-US')} 字）。` +
       `全文は、この担当の直近の報告なら \`manager_report\`（managerId: "${event.managerId}"）、それ以前の報告なら \`journal_read\` で引ける。 ${managerReportRetrievalHint(event)}`,
   ];
 }
