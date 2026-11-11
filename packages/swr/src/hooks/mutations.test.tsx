@@ -220,6 +220,72 @@ describe('自分の送信を会話一覧へ即時反映する', () => {
     });
   });
 
+  // 抜粋の数え方の正本は `packages/core/src/conversation.ts` の `preview()`（空白を畳んで trim → 80 コードポイントで切って `…`）。
+  // 補助面の文字（絵文字）は 1 文字と数え、切り口で割らない
+  const PREVIEW_CASES: { name: string; text: string; expected: string }[] = [
+    { name: 'ASCII 80 文字ちょうどは切らない', text: 'a'.repeat(80), expected: 'a'.repeat(80) },
+    { name: 'ASCII 81 文字は 80 で切る', text: 'a'.repeat(81), expected: `${'a'.repeat(80)}…` },
+    { name: 'ASCII 79 文字は切らない', text: 'a'.repeat(79), expected: 'a'.repeat(79) },
+    { name: '日本語 80 文字ちょうどは切らない', text: 'あ'.repeat(80), expected: 'あ'.repeat(80) },
+    { name: '日本語 81 文字は 80 で切る', text: 'あ'.repeat(81), expected: `${'あ'.repeat(80)}…` },
+    {
+      name: '改行・タブ・連続空白は 1 つの空白にして trim',
+      text: '\n a\n\n b\t\t c  ',
+      expected: 'a b c',
+    },
+    {
+      name: '空白を畳んだ後の長さで切る',
+      text: `${'a'.repeat(40)}\n\n\n${'b'.repeat(40)}`,
+      expected: `${'a'.repeat(40)} ${'b'.repeat(39)}…`,
+    },
+    {
+      name: '切り口にかかる絵文字を割らない（79 文字 + 絵文字 + 1 文字）',
+      text: `${'a'.repeat(79)}😀b`,
+      expected: `${'a'.repeat(79)}😀…`,
+    },
+    {
+      name: '絵文字 50 個（80 コードポイント以下）は切らない',
+      text: '😀'.repeat(50),
+      expected: '😀'.repeat(50),
+    },
+    { name: '絵文字 80 個ちょうどは切らない', text: '😀'.repeat(80), expected: '😀'.repeat(80) },
+    { name: '絵文字 81 個は 80 個で切る', text: '😀'.repeat(81), expected: `${'😀'.repeat(80)}…` },
+  ];
+
+  it.each(PREVIEW_CASES)('抜粋: $name', async ({ text, expected }) => {
+    stubFetch((url) => {
+      if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
+      return undefined;
+    });
+
+    function Probe() {
+      const { data } = useConversations(30);
+      const record = useRecordOwnMessage();
+      return (
+        <div>
+          <button onClick={() => record('conv-preview', text)}>送る</button>
+          <div data-testid="state">{data === undefined ? 'loading' : 'loaded'}</div>
+          <div data-testid="preview">{data?.conversations[0]?.preview ?? ''}</div>
+        </div>
+      );
+    }
+
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state').textContent).toBe('loaded');
+    });
+    fireEvent.click(screen.getByRole('button', { name: '送る' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview').textContent).toBe(expected);
+    });
+  });
+
   it('既存の会話への送信で、往復数・抜粋・順序がまとめて動く', async () => {
     stubFetch((url) => {
       if (url.includes('/conversations'))
