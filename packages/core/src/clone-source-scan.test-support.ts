@@ -173,6 +173,13 @@ export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>>
       trailing: ' return timer;',
     },
     { name: '#settleTurn', call: 'await this.#settleTurn(batch, timer);', trailing: '' },
+    // 枠の解除（`#usageBlocked` を降ろして保持分を戻す同期の部分）。日誌の本文を返す末尾の `return` は、呼び出しの直後の `await #journalSelf` が受け取るので差し戻すときに外す
+    {
+      name: '#releaseUsageBlock',
+      call: 'const line = this.#releaseUsageBlock(event);',
+      trailing:
+        ' return `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`;',
+    },
   ],
   // 起動時の未読の拾い直し: 畳み込みの代表の作り直しと、live の見出しの1行
   '#restoreUnreadPass': [

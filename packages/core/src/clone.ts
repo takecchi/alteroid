@@ -1793,6 +1793,38 @@ class Clone implements CloneHost {
     });
   }
 
+  // `#pump` の枠の解除ブロックの、最初の `await` より前の同期の部分（`#pump` から切り出した。動きは変えていない）。戻り値は日誌の本文で、書く `await #journalSelf` と `continue` は `#pump` に残す
+  // `async` にしない・中で `await` しない: 呼び出し側の周回数（`clone-pump-quota-pin.test.ts` が数える）が変わるため
+  #releaseUsageBlock(event: InboxEvent): string {
+    this.#usageBlocked = null;
+    // 枠が解けた契機でも墓標を拾い直す（#4884）: 枠で落ちた蒸留は、枠が開いたときにしか通らない
+    this.#graves.retryFor('枠の保持を解いた');
+    const held = this.#delivery.drainDeferred();
+    // `held` → `event` の順で先頭へ戻す: `event` は `held` より後に届いており、末尾へ push すると到着順が崩れるため
+    // `#remember` / `#record` / `#commit` はやり直さない: 器には `held` が未読で残っており、やり直すと記帳・日誌追記が二重になるため
+    // 「`held` が空なら戻さない」を足さない: 分岐が増えるだけで、通る条件が構造上ほぼ起きずテストの当たらない道になるため
+    this.#delivery.inbox.unshift([...held, event]);
+    this.#inFlight = null;
+    // 抑止した再武装と畳んだ内部の失敗記録は、1回ごとに書かずこの1行へ畳む: 書けば二乗の書き込みをこちらへ移すだけになるため。0件のときは文言を足さない。
+    const suppressedRearms = this.#usageBlockSuppressedRearms;
+    const foldedInternalFailures = this.#usageBlockFoldedInternalFailures;
+    this.#usageBlockSuppressedRearms = 0;
+    this.#usageBlockFoldedInternalFailures = 0;
+    const counts =
+      (suppressedRearms > 0
+        ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。`
+        : '') +
+      (foldedInternalFailures > 0
+        ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
+        : '');
+    // 件数の射程を行そのものに名乗らせる: カウンタはメモリ上にしか無く、件数は下限のため。件数が0の行には付けない
+    const suffix =
+      counts === ''
+        ? ''
+        : `${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）`;
+    return `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`;
+  }
+
   async #pump(): Promise<void> {
     // 拾い直しは待たない: 器が詰まっていると `claimPending` が返らず受信箱のループが始まらず、`for await` の最初の `next()` が遅れて起動直後の合図の畳み込み方が変わるため。待たない以上、失敗は自分で受ける（漏らすと unhandled rejection でデーモンごと落ちる）
     void this.#restoreUnread().catch((error: unknown) => {
@@ -1816,36 +1848,8 @@ class Clone implements CloneHost {
       if (this.#releaseRequested && !this.#delivery.inbox.closed) {
         this.#releaseRequested = false;
         if (this.#usageBlocked !== null) {
-          this.#usageBlocked = null;
-          // 枠が解けた契機でも墓標を拾い直す（#4884）: 枠で落ちた蒸留は、枠が開いたときにしか通らない
-          this.#graves.retryFor('枠の保持を解いた');
-          const held = this.#delivery.drainDeferred();
-          // `held` → `event` の順で先頭へ戻す: `event` は `held` より後に届いており、末尾へ push すると到着順が崩れるため
-          // `#remember` / `#record` / `#commit` はやり直さない: 器には `held` が未読で残っており、やり直すと記帳・日誌追記が二重になるため
-          // 「`held` が空なら戻さない」を足さない: 分岐が増えるだけで、通る条件が構造上ほぼ起きずテストの当たらない道になるため
-          this.#delivery.inbox.unshift([...held, event]);
-          this.#inFlight = null;
-          // 抑止した再武装と畳んだ内部の失敗記録は、1回ごとに書かずこの1行へ畳む: 書けば二乗の書き込みをこちらへ移すだけになるため。0件のときは文言を足さない。
-          const suppressedRearms = this.#usageBlockSuppressedRearms;
-          const foldedInternalFailures = this.#usageBlockFoldedInternalFailures;
-          this.#usageBlockSuppressedRearms = 0;
-          this.#usageBlockFoldedInternalFailures = 0;
-          const counts =
-            (suppressedRearms > 0
-              ? ` 回復予定時刻より前だったので再武装を抑止: ${String(suppressedRearms)} 回。`
-              : '') +
-            (foldedInternalFailures > 0
-              ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
-              : '');
-          // 件数の射程を行そのものに名乗らせる: カウンタはメモリ上にしか無く、件数は下限のため。件数が0の行には付けない
-          const suffix =
-            counts === ''
-              ? ''
-              : `${counts}（件数・回数は、この枠の区間でこのプロセスが数えた分だけ。器の入れ替えを跨いだ分と、ターンの成功で枠が降りた回の分は数えずに0へ戻るので、実際より少ない＝下限。）`;
-          await this.#journalSelf(
-            'outbound',
-            `${EXCHANGE_KIND_THINNING_PREFIX}枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`,
-          );
+          const line = this.#releaseUsageBlock(event);
+          await this.#journalSelf('outbound', `${EXCHANGE_KIND_THINNING_PREFIX}${line}`);
           continue;
         }
       }
