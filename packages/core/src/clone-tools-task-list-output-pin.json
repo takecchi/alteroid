@@ -108,7 +108,7 @@
     "list-statuses#2": 788,
     "list-closed-order": 645,
     "list-excerpt-limit": 1490,
-    "list-excerpt-astral": 1137,
+    "list-excerpt-astral": 1141,
     "list-excerpt-whitespace": 1208,
     "budget-exact-fit": 8076,
     "budget-under-by-one": 8075,
@@ -1239,8 +1239,8 @@
     },
     "list-excerpt-astral": {
       "output": {
-        "length": 1137,
-        "text": "（以下はすべて開いている件。上が先）\n- y-239 仕事 y-239\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi…（2 文字省略。全 241 文字）\n  1番目 / 状態: queued（待ち行列）\n- y-238 仕事 y-238\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh😀…（1 文字省略。全 241 文字）\n  2番目 / 状態: queued（待ち行列）\n- y-end 仕事 y-end\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh😀\n  3番目 / 状態: queued（待ち行列）\n（本文は240字の抜粋。1件の全文は task_list id=<id> で取れる）",
+        "length": 1141,
+        "text": "（以下はすべて開いている件。上が先）\n- y-239 仕事 y-239\n  作成: 2026-10-01T00:01:00.000Z / 更新: 2026-10-01T00:01:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi😀…（1 文字省略。全 241 文字）\n  1番目 / 状態: queued（待ち行列）\n- y-238 仕事 y-238\n  作成: 2026-10-01T00:02:00.000Z / 更新: 2026-10-01T00:02:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefgh😀z…（1 文字省略。全 241 文字）\n  2番目 / 状態: queued（待ち行列）\n- y-end 仕事 y-end\n  作成: 2026-10-01T00:03:00.000Z / 更新: 2026-10-01T00:03:00.000Z\n  abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi abcdefghi😀\n  3番目 / 状態: queued（待ち行列）\n（本文は240字の抜粋。1件の全文は task_list id=<id> で取れる）",
         "isError": false,
         "thrown": false
       },

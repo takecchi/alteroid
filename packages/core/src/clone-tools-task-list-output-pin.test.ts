@@ -650,11 +650,11 @@ const SCENARIOS: Scenario[] = [
     name: 'list-excerpt-astral',
     group: '本文の抜粋（TASK_BODY_LIMIT）',
     covers:
-      '切り口が補助面の文字の途中: 239 字 + 😀（全 241 字）は 239 字で切る（文字を割らない・省略 2 文字）。238 字 + 😀 + 1 字（全 241 字）は 240 字まで（絵文字を含む・省略 1 文字）。240 字ちょうどが絵文字で終わるなら切らない',
+      '補助面の文字は 1 字と数える（コードポイント）: 239 字 + 😀 + x（全 241 字）は 240 字目の 😀 まで残す（割らない・省略 1 文字）。238 字 + 😀 + zz（全 241 字）は 😀 + z まで残す（省略 1 文字）。240 字ちょうどが絵文字で終わるなら切らない',
     seed: [
-      t('y-239', 'external', 1, { body: `${spaced(239)}😀` }),
-      t('y-238', 'external', 2, { body: `${spaced(238)}😀z` }),
-      t('y-end', 'external', 3, { body: `${spaced(238)}😀` }),
+      t('y-239', 'external', 1, { body: `${spaced(239)}😀x` }),
+      t('y-238', 'external', 2, { body: `${spaced(238)}😀zz` }),
+      t('y-end', 'external', 3, { body: `${spaced(239)}😀` }),
     ],
     steps: [{ args: {} }],
   },
@@ -1271,8 +1271,8 @@ describe('task_list の出力の固定（場面ごとの全文と字数・読む
     expect(text('list-excerpt-limit')).toContain('全 1,000 文字）');
     expect(text('list-excerpt-limit')).not.toContain('全 240 文字');
     expect(count(text('list-excerpt-astral'), '文字省略。全 ')).toBe(2);
-    expect(text('list-excerpt-astral')).toContain('…（2 文字省略。全 241 文字）');
-    expect(text('list-excerpt-astral')).toContain('…（1 文字省略。全 241 文字）');
+    expect(text('list-excerpt-astral')).toContain('😀…（1 文字省略。全 241 文字）');
+    expect(text('list-excerpt-astral')).toContain('😀z…（1 文字省略。全 241 文字）');
     expect(count(text('list-excerpt-whitespace'), '文字省略。全 ')).toBe(1);
     expect(text('list-excerpt-whitespace')).toContain('全 249 文字）');
     expect(text('list-excerpt-whitespace')).toContain('- w-title 題の1行目\n題の2行目\n');
