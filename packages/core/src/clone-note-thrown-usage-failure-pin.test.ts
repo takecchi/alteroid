@@ -12,8 +12,9 @@ import type { UsageLimitNotice } from './usage-limits.js';
 
 // `Clone#noteThrownUsageFailure`（例外で届いた失敗を、枠切れの通知として `#noteUsageNotice` へ渡す入口）を、外から固定する。
 // 期待の値・文面は仕様を先に書いたものではなく、今の作りの出力を `vitest run <path> -u` で生成して目で読んで確かめた値である。
-// 「今の出力から変えない」ための歯であって、文面の正しさの保証ではない。本番コードは変えない。
-// 呼び出しを1か所へ寄せる切り出し（`quotaNoticeOfError`）の前に置いた。
+// 「今の出力から変えない」ための歯であって、文面の正しさの保証ではない。
+// 呼び出しを1か所へ寄せる切り出し（`quotaNoticeOfError`）の前に置いた。#6698 で reached の枝も `reasonOf` を通すようにして、
+// 該当の期待（reached の枝の文）だけ更新した。値が載らないことは、末尾近くの 'SECRET-VALUE' の試験が縛る。
 // 既存の試験は枠の印が立つか・立たないか（`clone-thrown-usage-limit` の 429 と 500）しか見ない。
 // ここが足すのは、縛っていない枝: 分類の3分岐（classify が reached・reached でなく 429・どちらでもない）と、
 // 後ろ2つの文が `String(error)` と `reasonOf(error)` のどちらか、`#usageBlocked` が立っている間の素通し、
@@ -180,15 +181,15 @@ const secretParams = 'params: sk-live-SECRET-VALUE';
 describe('例外で届いた失敗の分類（#noteThrownUsageFailure）', () => {
   const thrownCases: { name: string; thrown: Thrown }[] = [
     {
-      name: 'reached の文言の Error（classify の枝。text は String(error)）',
+      name: 'reached の文言の Error: text は reasonOf(error)',
       thrown: new Error(REACHED),
     },
     {
-      name: 'reached の文言 + cause（classify の枝が先。cause は text に載らない）',
+      name: 'reached の文言 + cause: reasonOf は cause を <- で連ねる',
       thrown: new Error(REACHED, { cause: new Error('下の理由') }),
     },
     {
-      name: 'reached の文言 + 2行目に値（classify の枝: text は String(error) のまま全文）',
+      name: 'reached の文言 + 2行目に値: reasonOf は1行目だけ（値を載せない）',
       thrown: new Error(`${REACHED}\n${secretParams}`),
     },
     {
@@ -349,29 +350,9 @@ describe('例外で届いた失敗の分類（#noteThrownUsageFailure）', () =>
           "usageBlocked": false,
           "usageLimited": [],
         },
-        "reached の文言 + 2行目に値（classify の枝: text は String(error) のまま全文）": {
+        "reached の文言 + 2行目に値: reasonOf は1行目だけ（値を載せない）": {
           "errors": [
             "conv-1: Error: You've hit your limit · resets 3pm",
-          ],
-          "folded": 0,
-          "gauges": [
-            "利用上限に当たった。この文言で仕事が止まっている: Error: You've hit your limit · resets 3pm
-      params: sk-live-SECRET-VALUE",
-          ],
-          "observed": [
-            "reached: Error: You've hit your limit · resets 3pm
-      params: sk-live-SECRET-VALUE (identity=true)",
-          ],
-          "resumeKept": true,
-          "usageBlocked": true,
-          "usageLimited": [
-            "conv-1: 利用上限に当たった。この文言で仕事が止まっている: Error: You've hit your limit · resets 3pm
-      params: sk-live-SECRET-VALUE",
-          ],
-        },
-        "reached の文言 + cause（classify の枝が先。cause は text に載らない）": {
-          "errors": [
-            "conv-1: Error: You've hit your limit · resets 3pm <- Error: 下の理由",
           ],
           "folded": 0,
           "gauges": [
@@ -386,7 +367,24 @@ describe('例外で届いた失敗の分類（#noteThrownUsageFailure）', () =>
             "conv-1: 利用上限に当たった。この文言で仕事が止まっている: Error: You've hit your limit · resets 3pm",
           ],
         },
-        "reached の文言の Error（classify の枝。text は String(error)）": {
+        "reached の文言 + cause: reasonOf は cause を <- で連ねる": {
+          "errors": [
+            "conv-1: Error: You've hit your limit · resets 3pm <- Error: 下の理由",
+          ],
+          "folded": 0,
+          "gauges": [
+            "利用上限に当たった。この文言で仕事が止まっている: Error: You've hit your limit · resets 3pm <- Error: 下の理由",
+          ],
+          "observed": [
+            "reached: Error: You've hit your limit · resets 3pm <- Error: 下の理由 (identity=true)",
+          ],
+          "resumeKept": true,
+          "usageBlocked": true,
+          "usageLimited": [
+            "conv-1: 利用上限に当たった。この文言で仕事が止まっている: Error: You've hit your limit · resets 3pm <- Error: 下の理由",
+          ],
+        },
+        "reached の文言の Error: text は reasonOf(error)": {
           "errors": [
             "conv-1: Error: You've hit your limit · resets 3pm",
           ],
@@ -457,15 +455,17 @@ describe('例外で届いた失敗の分類（#noteThrownUsageFailure）', () =>
     `);
   });
 
-  // 注意: classify が reached の枝は `String(error)` の全文を載せるので、2行目の値が日誌・usage_limited・観測へ載る（`true`）。
-  // 今の出力をそのまま固定したもので、望ましい姿とは限らない（`reasonOf` を通すのは 429 の枝だけ）
-  it('日誌・usage_limited・観測に値を運ぶ 2行目が載るのは、classify の枝（全文）だけ。429 の枝（reasonOf）では載らない', async () => {
+  // #6698: reached の枝も 429 の枝も `reasonOf` を通すので、例外の2行目以降の値は日誌・usage_limited・観測のどこにも載らない。
+  // 全ての例外で `false` であること。値を載せる例外の例（reached + 2行目、429 + 2行目、文字列の2行目）が含まれているので、
+  // どれか1つでも全文を載せる形に戻れば `true` になって赤くなる。
+  it('2行目以降の値は、reached の枝でも 429 の枝でも、日誌・usage_limited・観測のどこにも載らない', async () => {
     const leaks: Record<string, boolean> = {};
     for (const { name, thrown } of thrownCases) {
       const { result } = await drive({ thrown });
       const carried = [...result.usageLimited, ...result.gauges, ...result.observed].join('\n');
       leaks[name] = carried.includes('SECRET-VALUE');
     }
+    expect(Object.values(leaks).some(Boolean)).toBe(false);
     expect(leaks).toMatchInlineSnapshot(`
       {
         "429 + 2行目に値: reasonOf は1行目だけ（値を日誌・usage_limited に載せない）": false,
@@ -476,9 +476,9 @@ describe('例外で届いた失敗の分類（#noteThrownUsageFailure）', () =>
         "Error でない文字列（reached の文言）": false,
         "Error でない文字列（関係なし）: 何も立てない": false,
         "org_policy だけ: 何も立てない": false,
-        "reached の文言 + 2行目に値（classify の枝: text は String(error) のまま全文）": true,
-        "reached の文言 + cause（classify の枝が先。cause は text に載らない）": false,
-        "reached の文言の Error（classify の枝。text は String(error)）": false,
+        "reached の文言 + 2行目に値: reasonOf は1行目だけ（値を載せない）": false,
+        "reached の文言 + cause: reasonOf は cause を <- で連ねる": false,
+        "reached の文言の Error: text は reasonOf(error)": false,
         "transition だけ: 何も立てない": false,
         "transition の文言 + 429: classify は reached でないので 429 の枝": false,
         "warning だけ: 何も立てない": false,
