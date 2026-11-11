@@ -20,7 +20,6 @@ import {
   codexApprovalPolicyFor,
 } from './codex-manager-driver.js';
 import { toCodexMcpServersConfig } from './codex-mcp-config.js';
-import { CODEX_PROVIDER } from './codex-provider.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { PERMISSION_MODES } from './permission-mode.js';
 import { composeAttachmentInput, type PlacedAttachment } from './runner-attachments.js';
@@ -1278,11 +1277,6 @@ describe('CodexManagerDriver: ツール監査', () => {
     expect(h.events.map((e) => e.type)).toContain('turn_ended');
     expect(h.notes.join('\n')).toContain('フックが失敗');
     expect(h.notes.join('\n')).not.toContain(FAKE_KEY);
-  });
-
-  it('toolAudit を名乗る（スキーマの全道具の種類を覆う番人は codex-protocol.test.ts）', () => {
-    expect(CODEX_PROVIDER.capabilities.toolAudit).toBe(true);
-    expect(CODEX_PROVIDER.capabilities.compactionHook).toBe(false);
   });
 });
 

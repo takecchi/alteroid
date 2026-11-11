@@ -23,7 +23,6 @@ import type {
   AgentSessionStartRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
-import { NO_CAPABILITIES, missingRequirementCapabilities } from './agent-ports.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
@@ -49,14 +48,8 @@ function only(message: SDKMessage): AgentEvent {
 }
 
 describe('CLAUDE_PROVIDER（能力の申告）', () => {
-  it('CLAUDE_PROVIDER.capabilities のキーは AgentCapabilities の全キーと一致する（番人）', () => {
-    expect(Object.keys(CLAUDE_PROVIDER.capabilities).sort()).toEqual(
-      Object.keys(NO_CAPABILITIES).sort(),
-    );
-  });
-
-  it('Claude は要件を担う能力を欠かない', () => {
-    expect(missingRequirementCapabilities(CLAUDE_PROVIDER.capabilities)).toEqual([]);
+  it('読まれる旗（使用量の報告）だけを持ち、使用量を報告できると申告する', () => {
+    expect(CLAUDE_PROVIDER.capabilities).toEqual({ usage: true });
   });
 });
 

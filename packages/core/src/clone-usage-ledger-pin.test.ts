@@ -12,7 +12,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import type { AgentProvider } from './agent-ports.js';
-import { NO_CAPABILITIES } from './agent-ports.js';
 import { fakeSdk, wireEvents, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import { createClone } from './clone.js';
@@ -594,7 +593,7 @@ describe('無報告のターン（capabilities.usage === false）', () => {
   const UNMETERED: AgentProvider = {
     id: 'claude',
     displayName: 'Unmetered fake',
-    capabilities: { ...NO_CAPABILITIES },
+    capabilities: { usage: false },
   };
 
   it('recordUnmetered へ渡る引数の全部。tokenId は無ければ欄ごと渡さない。record は呼ばない', async () => {
@@ -953,7 +952,7 @@ describe('畳む直前の累積の読み（#flushSessionUsage）', () => {
       stores,
       queryFn: fake.fn,
       env: {},
-      provider: { id: 'claude', capabilities: { ...NO_CAPABILITIES } },
+      provider: { id: 'claude', capabilities: { usage: false } },
       runners: createRunnerRegistry([
         createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
       ]),

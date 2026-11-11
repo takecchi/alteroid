@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { missingRequirementCapabilities } from './agent-ports.js';
 import { CODEX_PROVIDER } from './codex-provider.js';
 
 describe('CODEX_PROVIDER（正直な申告）', () => {
@@ -11,28 +10,8 @@ describe('CODEX_PROVIDER（正直な申告）', () => {
     expect(CODEX_PROVIDER.displayName).toBe('Codex');
   });
 
-  it('満たしているものだけ true。満たせないものは false と申告する', () => {
-    expect(CODEX_PROVIDER.capabilities).toEqual({
-      permissions: true,
-      toolAudit: true,
-      compactionHook: false,
-      resume: true,
-      sessionLog: false,
-      subagents: false,
-      mcpServers: false,
-      childUser: true,
-      usage: true,
-      partialMessages: true,
-    });
-  });
-
-  it('欠けた要件は missingRequirementCapabilities で数えられる（持たないふりをしない）', () => {
-    expect(missingRequirementCapabilities(CODEX_PROVIDER.capabilities)).toEqual([
-      'compactionHook',
-      'sessionLog',
-      'subagents',
-      'mcpServers',
-    ]);
+  it('読まれる旗（使用量の報告）だけを持ち、使用量を報告できると申告する', () => {
+    expect(CODEX_PROVIDER.capabilities).toEqual({ usage: true });
   });
 
   it('このファイルは Claude Agent SDK を import しない', () => {

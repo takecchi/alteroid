@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentProvider } from './agent-ports.js';
-import { NO_CAPABILITIES } from './agent-ports.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { createClone } from './clone.js';
 import { fakeSdk, wireEvents, waitForDone, waitForTerminal } from './clone-test-harness.js';
@@ -13,7 +12,7 @@ import { CLONE_ACTOR_ID } from './usage.js';
 const UNMETERED_PROVIDER: AgentProvider = {
   id: 'claude',
   displayName: 'Unmetered fake',
-  capabilities: { ...NO_CAPABILITIES },
+  capabilities: { usage: false },
 };
 
 function build(
