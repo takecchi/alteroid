@@ -431,13 +431,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#ignoreOrDeferClosed': 'decision',
     '#noteClosedFailure': 'failure',
     '#noteVanishedRunnerGauge': 'gauge',
-    '#notifyResumeFallback': 'recovery',
-    '#notifyUnresumable': 'failure',
     '#recordDelivery': 'reply',
     '#recordStoppedReport': 'decision',
     '#reportedOf': 'thinning',
     '#settleResumedAfterRestart': 'recovery',
-    '#settleResumedReattach': 'recovery',
     '#startAfterSupersedeCheck': 'reply',
     abort: 'reply',
   },
@@ -458,6 +455,12 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   // 担当の `note` の日誌への書き込みを持つ協力者（旧 `Pool#journalNote`）。同じ検査をここへ移した。公開メソッド `journalNote` は `#` の付かない名前の行
   'manager-note.ts': {
     journalNote: 'reply',
+  },
+  // reattach の梯子・移送（旧 `Pool#notifyResumeFallback` / `#notifyUnresumable` / `#settleResumedReattach`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
+  'manager-reattach.ts': {
+    '#settleResumedReattach': 'recovery',
+    notifyResumeFallback: 'recovery',
+    notifyUnresumable: 'failure',
   },
   // resume の核（旧 `Pool#noteAmbiguousSighting` / `#noteAmbiguousResolved`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
   'manager-resume.ts': {
@@ -640,6 +643,7 @@ const EXCHANGE_SOURCES = [
   'manager-closed-notice.ts',
   'manager-denial.ts',
   'manager-note.ts',
+  'manager-reattach.ts',
   'manager-resume.ts',
   'manager-self-fenced.ts',
   'manager-session.ts',
