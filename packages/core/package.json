@@ -64,6 +64,10 @@
       "types": "./dist/attachment-usage-keys.d.ts",
       "import": "./dist/attachment-usage-keys.js"
     },
+    "./excerpt": {
+      "types": "./dist/excerpt.d.ts",
+      "import": "./dist/excerpt.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"

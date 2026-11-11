@@ -29,9 +29,9 @@ describe('brief() の値（切り出し前の出力から生成）', () => {
     expect(brief('x'.repeat(20), 10)).toBe(`${'x'.repeat(10)}…`);
   });
 
-  it('絵文字が切り口をまたぐときは手前で切り、またがないときは絵文字ごと残す', () => {
-    expect(brief(`${'x'.repeat(9)}\u{1F600}yy`, 10)).toBe(`${'x'.repeat(9)}…`);
-    expect(brief(`${'x'.repeat(8)}\u{1F600}yy`, 10)).toBe(`${'x'.repeat(8)}\u{1F600}…`);
+  it('limit はコードポイントで数える: 絵文字は 1 つと数え、切り口にかかっても残す（孤立サロゲートは出ない）', () => {
+    expect(brief(`${'x'.repeat(9)}\u{1F600}yy`, 10)).toBe(`${'x'.repeat(9)}\u{1F600}…`);
+    expect(brief(`${'x'.repeat(8)}\u{1F600}yy`, 10)).toBe(`${'x'.repeat(8)}\u{1F600}y…`);
   });
 });
 

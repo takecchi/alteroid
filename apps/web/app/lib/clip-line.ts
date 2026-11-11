@@ -1,3 +1,4 @@
+import { clipWithEllipsis } from '@alteroid/core/excerpt';
 import { redactBody } from '@alteroid/logic';
 
 /**
@@ -7,7 +8,5 @@ import { redactBody } from '@alteroid/logic';
  * 空のときの文言は呼び元が決める（ここは空文字を返す）。
  */
 export function clipLine(text: string, max: number): string {
-  const flat = redactBody(text).replace(/\s+/g, ' ').trim();
-  const chars = Array.from(flat);
-  return chars.length > max ? `${chars.slice(0, max).join('')}…` : flat;
+  return clipWithEllipsis(redactBody(text).replace(/\s+/g, ' ').trim(), max);
 }

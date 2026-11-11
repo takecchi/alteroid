@@ -1,3 +1,5 @@
+import { clipWithEllipsis } from '@alteroid/core/cli-light';
+
 import { stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
@@ -34,8 +36,7 @@ const EXCERPT = 80;
 // 本文は先頭の一行だけを抜粋する: 全文は HTTP の応答に在り、端末の一覧に全文を積むと数件で画面が埋まるため
 function excerptOf(text: string): string {
   const first = text.split('\n').find((line) => line.trim().length > 0) ?? '';
-  const chars = [...first.trim()];
-  return chars.length <= EXCERPT ? chars.join('') : `${chars.slice(0, EXCERPT).join('')}…`;
+  return clipWithEllipsis(first.trim(), EXCERPT);
 }
 
 export function renderTasks(view: TasksView, now: number = Date.now()): string {

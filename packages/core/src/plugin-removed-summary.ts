@@ -1,5 +1,6 @@
 import type { RemovedItem } from './plugin-extract.js';
 import { compareCodeUnits } from './code-unit-order.js';
+import { clipWithEllipsis } from './excerpt.js';
 
 const REMOVED_JOURNAL_MAX_PATHS = 20;
 const REMOVED_JOURNAL_MAX_PATH_LENGTH = 120;
@@ -8,9 +9,7 @@ const REMOVED_JOURNAL_MAX_PATH_LENGTH = 120;
 function cleanForJournal(raw: string): string {
   // eslint-disable-next-line no-control-regex -- 制御文字を落とすための検査
   const cleaned = raw.replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/gu, '');
-  const points = [...cleaned];
-  if (points.length <= REMOVED_JOURNAL_MAX_PATH_LENGTH) return cleaned;
-  return `${points.slice(0, REMOVED_JOURNAL_MAX_PATH_LENGTH).join('')}…`;
+  return clipWithEllipsis(cleaned, REMOVED_JOURNAL_MAX_PATH_LENGTH);
 }
 
 export function summarizeRemovedForJournal(removed: readonly RemovedItem[]): string | null {

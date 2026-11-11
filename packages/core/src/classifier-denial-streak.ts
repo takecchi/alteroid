@@ -8,6 +8,8 @@
  * **分類器の判定には触れない。** 確認を通りやすくすることも、分類器へ同意を伝えることもしない。事情を知らせるだけである。
  */
 
+import { clipWithEllipsis } from './excerpt.js';
+
 /** CLI の上限（SDK 0.3.296 の `{maxConsecutive:3,maxTotal:20}`）。SDK を上げたら確かめ直す。 */
 const CLI_CLASSIFIER_DENIAL_LIMITS = { consecutive: 3, total: 20 } as const;
 
@@ -93,9 +95,8 @@ export function describeDenialStreakForList(
 
 function reasonHead(reason: string | undefined): string | undefined {
   if (reason === undefined) return undefined;
-  const chars = Array.from(reason.replace(/\s+/g, ' ').trim());
-  if (chars.length === 0) return undefined;
-  return chars.length > REASON_HEAD ? `${chars.slice(0, REASON_HEAD).join('')}…` : chars.join('');
+  const flat = reason.replace(/\s+/g, ' ').trim();
+  return flat === '' ? undefined : clipWithEllipsis(flat, REASON_HEAD);
 }
 
 function overDenialLimit(view: DenialStreakView): boolean {

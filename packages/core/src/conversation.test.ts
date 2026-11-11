@@ -156,7 +156,8 @@ describe('collectConversations', () => {
       .map((c) => c.preview)
       .join('');
 
-    expect(preview).toBe(`${'あ'.repeat(79)}…`);
+    // 80 は UTF-16 の長さではなくコードポイントの数: 79 字目の次の 😀 が 80 個目として残る
+    expect(preview).toBe(`${'あ'.repeat(79)}😀…`);
     expect(LONE_SURROGATE.test(preview)).toBe(false);
   });
 });

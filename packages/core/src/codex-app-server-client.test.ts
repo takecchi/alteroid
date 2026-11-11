@@ -472,7 +472,8 @@ describe('CodexAppServerClient', () => {
       await tick();
       const first = errors[0];
       const line = first && 'line' in first ? first.line : '';
-      expect(line).toBe(`${'x'.repeat(199)}…`);
+      // 上限の 200 はコードポイントで数える: 200 個目の 😀 は残り、その後ろを切る
+      expect(line).toBe(`${'x'.repeat(199)}😀…`);
       expect(line).not.toMatch(/\p{Surrogate}/u);
     });
 

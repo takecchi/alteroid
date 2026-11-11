@@ -12,7 +12,8 @@ describe('RequestTiming: SQL の頭', () => {
   it('切り口に絵文字がかかっても、孤立したサロゲートが残らない（#5973）', () => {
     const timing = new RequestTiming(() => 0);
     timing.queryStarted(`${'x'.repeat(119)}😀${'x'.repeat(50)}`)();
-    expect(timing.db.slowestSql).toBe(`${'x'.repeat(119)}…`);
+    // 120 はコードポイントで数える: 120 個目の 😀 は残る
+    expect(timing.db.slowestSql).toBe(`${'x'.repeat(119)}😀…`);
     expect(timing.db.slowestSql).not.toMatch(/\p{Surrogate}/u);
   });
 });

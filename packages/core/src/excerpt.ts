@@ -43,9 +43,18 @@ export function countCodePoints(text: string): number {
   return count;
 }
 
-// 注記を付けず「…」だけ: 1行の告知や名前の中に埋まる短い抜粋で、省いた分量までは言わない所のため（言うなら `excerpt`）
+// 注記を付けず「…」だけ: 1行の告知や名前の中に埋まる短い抜粋で、省いた分量までは言わない所のため（言うなら `excerpt`）。
+// `limit` はコードポイントで数える（旧実装は UTF-16 の長さで数え、切り口にかかった補助面の文字を落としていた）。
+// 結合文字・ZWJ の途中でも切る（コードポイントの境界で切るだけ）
 export function clipWithEllipsis(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
+  // コードポイント数 <= UTF-16 の長さ: 長さが収まっていれば数えるまでもない
+  if (text.length <= limit) return text;
+  if (limit <= 0) return text === '' ? text : '…';
+  let end = 0;
+  for (let taken = 0; taken < limit && end < text.length; taken += 1) {
+    end += (text.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return end >= text.length ? text : `${text.slice(0, end)}…`;
 }
 
 // 短ければ何も足さない: 毎回注記が付くと、本当に切れているときの目印が効かなくなるため

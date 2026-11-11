@@ -24,8 +24,50 @@ describe('clipWithEllipsis（注記なしで「…」だけを付けて切る）
     expect(clipWithEllipsis('あいうえ', 3)).toBe('あいう…');
   });
 
-  it('切り口が補助面の文字の途中なら、その手前で切る（高サロゲートを残さない）', () => {
-    expect(clipWithEllipsis('ab😀c', 3)).toBe('ab…');
+  it('上限はコードポイントで数える: 切り口にかかった補助面の文字は落とさず残す', () => {
+    expect(clipWithEllipsis('ab😀c', 3)).toBe('ab😀…');
+    expect(clipWithEllipsis('ab😀c', 2)).toBe('ab…');
+    expect(clipWithEllipsis('😀😀😀', 2)).toBe('😀😀…');
+  });
+
+  it('補助面の文字だけで UTF-16 の長さが上限を超えても、コードポイントが上限以下なら切らない', () => {
+    expect(clipWithEllipsis('😀😀😀', 3)).toBe('😀😀😀');
+    expect(clipWithEllipsis('ab😀', 3)).toBe('ab😀');
+  });
+
+  it('どの上限でも、結果に孤立したサロゲートが残らない', () => {
+    const text = 'a😀b😀😀c𠮷d';
+    for (let limit = -1; limit <= 12; limit += 1) {
+      expect(clipWithEllipsis(text, limit)).not.toMatch(/\p{Surrogate}/u);
+    }
+  });
+
+  it('上限ちょうどは切らず、1 つ超えたら切る', () => {
+    expect(clipWithEllipsis('abc', 3)).toBe('abc');
+    expect(clipWithEllipsis('abcd', 3)).toBe('abc…');
+    expect(clipWithEllipsis('😀😀', 2)).toBe('😀😀');
+    expect(clipWithEllipsis('😀😀😀', 2)).toBe('😀😀…');
+  });
+
+  it('上限が 0 以下: 空文字は空文字のまま、それ以外は … だけ', () => {
+    expect(clipWithEllipsis('', 0)).toBe('');
+    expect(clipWithEllipsis('', -1)).toBe('');
+    expect(clipWithEllipsis('abc', 0)).toBe('…');
+    expect(clipWithEllipsis('abc', -1)).toBe('…');
+    expect(clipWithEllipsis('😀', 0)).toBe('…');
+  });
+
+  it('ZWJ・結合文字の途中でも、コードポイントの境界で切る（書記素までは見ない）', () => {
+    // 👨‍👩‍👧 = 👨 ZWJ 👩 ZWJ 👧（5 コードポイント）
+    expect(clipWithEllipsis('👨‍👩‍👧x', 2)).toBe('👨‍…');
+    expect(clipWithEllipsis('👨‍👩‍👧x', 5)).toBe('👨‍👩‍👧…');
+    // e + 結合アクセント
+    expect(clipWithEllipsis('éé', 1)).toBe('e…');
+    expect(clipWithEllipsis('éé', 2)).toBe('é…');
+  });
+
+  it('入力にもとから孤立サロゲートがあっても、1 つのコードポイントとして数えて落ちない', () => {
+    expect(clipWithEllipsis('a\ud83dbc', 2)).toBe('a\ud83d…');
   });
 });
 

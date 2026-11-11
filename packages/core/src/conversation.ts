@@ -7,7 +7,7 @@
 
 import type { ConversationReadView } from './conversation-read.js';
 import { reasonOf } from './dropped-record.js';
-import { clipWithEllipsis, codePointBoundary } from './excerpt.js';
+import { clipWithEllipsis, countCodePoints } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry, TurnFailureKind } from './schema.js';
 import {
@@ -290,8 +290,8 @@ export const CONVERSATION_PREVIEW_HEAD_CHARS = 400;
 export function previewFromHead(head: ExchangeTextHead): string | undefined {
   if (!head.truncated) return previewOf(head.head, head.attachments);
   const flat = head.head.replace(/\s+/g, ' ').trimStart();
-  if (flat.length < CONVERSATION_PREVIEW + 2) return undefined;
-  return `${flat.slice(0, codePointBoundary(flat, CONVERSATION_PREVIEW))}…`;
+  if (countCodePoints(flat) < CONVERSATION_PREVIEW + 2) return undefined;
+  return clipWithEllipsis(flat, CONVERSATION_PREVIEW);
 }
 
 // 欄の並びを変えない: 応答の JSON の欄の順に出るため

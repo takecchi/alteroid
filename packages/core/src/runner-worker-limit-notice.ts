@@ -6,6 +6,8 @@
  * **知らせるだけで、止めない・断らない**。進めるか・待つか・別の手を選ぶかは担当が決める。鍵の回転や枠の印の契機にもしない。
  */
 
+import { clipWithEllipsis } from './excerpt.js';
+
 /** 同じ相手へ知らせ直す間隔。落ちた作業者が続けて通知を出しても、道具を使うたびに同じ段落が積まれないため。 */
 export const WORKER_LIMIT_NOTICE_INTERVAL_MS = 10 * 60_000;
 
@@ -91,10 +93,7 @@ export function workerLimitLabel(
 }
 
 function truncateRaw(raw: string): string {
-  const flat = raw.trim();
-  return flat.length <= WORKER_LIMIT_RAW_MAX_CHARS
-    ? flat
-    : `${flat.slice(0, WORKER_LIMIT_RAW_MAX_CHARS)}…`;
+  return clipWithEllipsis(raw.trim(), WORKER_LIMIT_RAW_MAX_CHARS);
 }
 
 export class WorkerLimitNotices {

@@ -17,6 +17,7 @@ export default defineConfig({
     'src/permission-grant-consent.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
+    'src/excerpt.ts',
     'src/attachment-wording.ts',
     'src/attachment-usage-keys.ts',
     'src/redact.ts',
