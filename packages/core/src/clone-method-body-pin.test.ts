@@ -19,8 +19,16 @@ const MARKERS: Readonly<Record<ScannedSource, Readonly<Record<string, readonly s
     '#pump': [
       'const timer = new TurnTimer(',
       "timer.add('prepare', Date.now() - prepareStartedAt);",
-      'await this.#runHumanTurn(mergedHuman);',
+      'await run();',
       'await this.#writeTurnTiming(timer, this.#pumpTurnFailed);',
+    ],
+    // まとめ読みの選択と配り分け。`run` は選んだ束の変数を閉じ込めるアローなので、`#pump` へ差し戻せない。出した先を別のメソッドの中身として固定する
+    '#chooseBatch': [
+      "this.#notices.set('mergedBatchTruncation', '');",
+      'const mergedHuman = this.#batchMerge.mergedHumanBatch(event);',
+      'this.#batchMerge.extendReportBatchToMixed(sameManagerReports)',
+      'return this.#runHumanTurn(mergedHuman);',
+      'return {batch, run};',
     ],
     '#restoreUnreadPass': [
       'this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);',
