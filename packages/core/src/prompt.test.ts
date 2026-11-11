@@ -454,7 +454,8 @@ describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・�
     const prompt = buildDistillPrompt('conversation_end');
     expect(prompt).toContain('畳まないもの');
     expect(prompt).toContain('人間が一度でも書いた文書');
-    expect(prompt).toContain('格下げ');
+    // 「格下げ」の語は、削った経緯の文（かつての「費用のために fact へ格下げしない」）にしか無かった。区分の線の文で見る。
+    expect(prompt).toContain('判断の前提そのものを削るな');
   });
 
   it('conversation_end / pre_compact のどちらでも統合の指示が同じ内容で載る', () => {
@@ -576,9 +577,9 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
 
   it('⭐ 区分の線は「費用」ではなく「毎回の判断に要るか」になった', () => {
     const prompt = buildDistillPrompt('conversation_end');
-    // 本文に経緯として同じ語が残るので、語ではなく指示の形（箇条書きの先頭）が消えたことを見る。
+    // 語ではなく指示の形（箇条書きの先頭）が消えたことを見る。経緯の文は載せない（prompt-distill-history.test.ts）。
     expect(prompt).not.toContain('- **判断の前提（`premise`）を、費用のために');
-    expect(prompt).toContain('かつてここには');
+    expect(prompt).not.toContain('かつてここには');
     expect(prompt).toContain('毎回の判断に要るか');
     expect(prompt).toContain('判断の前提そのものを削るな');
   });
