@@ -181,6 +181,8 @@ export const INLINED_BY_METHOD: Readonly<Record<string, readonly InlinedStep[]>>
         ' return `枠の解除を試す。新しい合図が届いたので、保持していた ${held.length} 件を配り直す。${suffix}`;',
     },
   ],
+  // まとめ読みの選択と配り分け（`#pump` から出した）。`run` が束の変数を閉じ込めるアローで差し戻せないので、差し戻す段は無く、自分自身のメソッドとして固定する
+  '#chooseBatch': [],
   // 起動時の未読の拾い直し: 畳み込みの代表の作り直しと、live の見出しの1行
   '#restoreUnreadPass': [
     {

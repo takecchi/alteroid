@@ -35,6 +35,25 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
 ]
 `;
 
+exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #chooseBatch: 出した先を差し戻した中身が変わらない 1`] = `
+[
+  "this.#notices.set('mergedBatchTruncation', '');",
+  "const mergedHuman = this.#batchMerge.mergedHumanBatch(event);",
+  "const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);",
+  "const mergedExternal = this.#batchMerge.mergedExternalBatch(event);",
+  "const extendedSignals = sameManagerReports === null ? null : this.#batchMerge.extendReportBatchToMixed(sameManagerReports);",
+  "const mergedReports = extendedSignals === null ? sameManagerReports : null;",
+  "const mergedSignals = extendedSignals ?? (mergedHuman === null && sameManagerReports === null && mergedExternal === null ? this.#batchMerge.mixedSignalBatch(event) : null);",
+  "const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? mergedSignals ?? [event];",
+  "const run = (): Promise<void> => {if (mergedHuman !== null) return this.#runHumanTurn(mergedHuman);",
+  "if (mergedReports !== null) return this.#runManagerReportBatch(mergedReports);",
+  "if (mergedExternal !== null) return this.#runExternalBatch(mergedExternal);",
+  "if (mergedSignals !== null) return this.#runMixedSignalBatch(mergedSignals);",
+  "return this.#handle(event);};",
+  "return {batch, run};",
+]
+`;
+
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #handleTimer: 出した先を差し戻した中身が変わらない 1`] = `
 [
   "if (event.kind === DAILY_REPORT_KIND) {await this.#daily.run(event.target ?? localDate(new Date(event.at)), event.cause ?? 'schedule');",
@@ -87,14 +106,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "await this.#settleInboxEvent(event, false);",
   "this.#inFlight = null;",
   "continue pump;}} if (arrivedWhileIdle && !this.#delivery.inbox.closed && isSettleCandidate(event)) {const wait = settleWaitFor(event, this.#reportSettleMs, this.#inboxSettleMs);",
-  "if (wait.ms > 0) await this.#delivery.inbox.settle(wait.ms, wait.interruptWhen);} this.#notices.set('mergedBatchTruncation', '');",
-  "const mergedHuman = this.#batchMerge.mergedHumanBatch(event);",
-  "const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);",
-  "const mergedExternal = this.#batchMerge.mergedExternalBatch(event);",
-  "const extendedSignals = sameManagerReports === null ? null : this.#batchMerge.extendReportBatchToMixed(sameManagerReports);",
-  "const mergedReports = extendedSignals === null ? sameManagerReports : null;",
-  "const mergedSignals = extendedSignals ?? (mergedHuman === null && sameManagerReports === null && mergedExternal === null ? this.#batchMerge.mixedSignalBatch(event) : null);",
-  "const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? mergedSignals ?? [event];",
+  "if (wait.ms > 0) await this.#delivery.inbox.settle(wait.ms, wait.interruptWhen);} const {batch, run} = this.#chooseBatch(event);",
   "this.#inFlight = {events: batch, started: false};",
   "for (const taken of batch) this.#dropPendingCollapse(taken);",
   "const timer = new TurnTimer({now: Date.now, arrivedAt: Math.min(...batch.map((queued) => {const at = Date.parse(queued.at);",
@@ -111,11 +123,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "if (validityNotice !== '' && event.type === 'manager_message') {await this.#noteRedeliveryPredicateHitB(event.managerId);} timer.add('prepare', Date.now() - prepareStartedAt);",
   "this.#pumpTurnFailed = false;",
   "this.#droppedSignalsShown = new Set();",
-  "try {if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);",
-  "else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);",
-  "else if (mergedExternal !== null) await this.#runExternalBatch(mergedExternal);",
-  "else if (mergedSignals !== null) await this.#runMixedSignalBatch(mergedSignals);",
-  "else await this.#handle(event);} catch (error) {await this.#reportFailure(this.#conversationOf(event), {error});",
+  "try {await run();} catch (error) {await this.#reportFailure(this.#conversationOf(event), {error});",
   "this.#finishTurn();} finally {this.#notices.clearTurn();",
   "const defer = this.#usageBlocked !== null;",
   "const failedOutsideUsage = !defer && this.#pumpTurnFailed;",

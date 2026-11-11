@@ -665,6 +665,9 @@ export type TurnOutcome =
       heldForUsage: boolean;
     };
 
+// `Clone#chooseBatch` の戻り値。メソッドの宣言に `{` を書かない: 字面を見る pin（`methodBody`）が宣言の後ろの最初の `{` を本体の始まりと読むため
+type ChosenBatch = { batch: InboxEvent[]; run: () => Promise<void> };
+
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
@@ -1904,28 +1907,7 @@ class Clone implements CloneHost {
         if (wait.ms > 0) await this.#delivery.inbox.settle(wait.ms, wait.interruptWhen);
       }
 
-      // まとめ読みの判定を呼ぶ前に必ずリセットする: `CloneBatchMerge.drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
-      this.#notices.set('mergedBatchTruncation', '');
-      const mergedHuman = this.#batchMerge.mergedHumanBatch(event);
-      const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);
-      const mergedExternal = this.#batchMerge.mergedExternalBatch(event);
-      // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときに試す。
-      // 例外は同じ担当の報告の束の続きに混合の束に入る合図が連続しているとき: 1つの混合の束へ広げる（同じ担当の束の本文が予算に収まるときだけ。
-      // 同じ担当の塊の見出しと注意は混合の本文の中でも保つ）。広げられない束の振る舞い（本文の組み方・予算で省く形・配り直しの束）は1字も変えない
-      const extendedSignals =
-        sameManagerReports === null
-          ? null
-          : this.#batchMerge.extendReportBatchToMixed(sameManagerReports);
-      const mergedReports = extendedSignals === null ? sameManagerReports : null;
-      const mergedSignals =
-        extendedSignals ??
-        (mergedHuman === null && sameManagerReports === null && mergedExternal === null
-          ? this.#batchMerge.mixedSignalBatch(event)
-          : null);
-      const batch: InboxEvent[] = mergedHuman ??
-        mergedReports ??
-        mergedExternal ??
-        mergedSignals ?? [event];
+      const { batch, run } = this.#chooseBatch(event);
       this.#inFlight = { events: batch, started: false };
       // 取り出してターンに渡す束の畳み込みの索引は、ここで落とす: 残すと、読まれている最中の代表に同じ本文の後続が畳まれ、二度目の発生がクローンへ届かないため。
       // まだ受信箱にある代表への畳み込み（#954）は変えない（落とすのは取り出された束だけ）。この下の `await` より前に置く: 間に届いた同文を新しい代表として積むため
@@ -1934,11 +1916,7 @@ class Clone implements CloneHost {
       this.#pumpTurnFailed = false;
       this.#droppedSignalsShown = new Set();
       try {
-        if (mergedHuman !== null) await this.#runHumanTurn(mergedHuman);
-        else if (mergedReports !== null) await this.#runManagerReportBatch(mergedReports);
-        else if (mergedExternal !== null) await this.#runExternalBatch(mergedExternal);
-        else if (mergedSignals !== null) await this.#runMixedSignalBatch(mergedSignals);
-        else await this.#handle(event);
+        await run();
       } catch (error) {
         await this.#reportFailure(this.#conversationOf(event), { error });
         this.#finishTurn();
@@ -1947,6 +1925,45 @@ class Clone implements CloneHost {
       }
     }
     this.#delivery.settleAllCompletions();
+  }
+
+  /**
+   * まとめ読みの選択と配り分け（`#pump` から出した）。起点の合図から、まとめて読む束（人間の束・同じ担当の報告の束・external の束・混合の束・単独）を選び、
+   * その束を実行する関数 `run` と一緒に返す。選ぶ梯子と実行する梯子が同じ4択を指すため、1か所に置く。
+   * 同期にする・`run` を `async` にしない（中で `await` しない。Promise をそのまま返す）: `#pump` の `await` の位置と microtask の周回数を変えないため
+   * （`async` にすると周回数が1増える）。断り書きのリセットは判定の呼び出しより前に置いたまま動かさない
+   */
+  #chooseBatch(event: InboxEvent): ChosenBatch {
+    // まとめ読みの判定を呼ぶ前に必ずリセットする: `CloneBatchMerge.drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
+    this.#notices.set('mergedBatchTruncation', '');
+    const mergedHuman = this.#batchMerge.mergedHumanBatch(event);
+    const sameManagerReports = this.#batchMerge.mergedManagerReportBatch(event);
+    const mergedExternal = this.#batchMerge.mergedExternalBatch(event);
+    // 起点の違う合図の束は、前からの束（同じ担当の報告の連続・同じ中身の external の連続）に当たらなかったときに試す。
+    // 例外は同じ担当の報告の束の続きに混合の束に入る合図が連続しているとき: 1つの混合の束へ広げる（同じ担当の束の本文が予算に収まるときだけ。
+    // 同じ担当の塊の見出しと注意は混合の本文の中でも保つ）。広げられない束の振る舞い（本文の組み方・予算で省く形・配り直しの束）は1字も変えない
+    const extendedSignals =
+      sameManagerReports === null
+        ? null
+        : this.#batchMerge.extendReportBatchToMixed(sameManagerReports);
+    const mergedReports = extendedSignals === null ? sameManagerReports : null;
+    const mergedSignals =
+      extendedSignals ??
+      (mergedHuman === null && sameManagerReports === null && mergedExternal === null
+        ? this.#batchMerge.mixedSignalBatch(event)
+        : null);
+    const batch: InboxEvent[] = mergedHuman ??
+      mergedReports ??
+      mergedExternal ??
+      mergedSignals ?? [event];
+    const run = (): Promise<void> => {
+      if (mergedHuman !== null) return this.#runHumanTurn(mergedHuman);
+      if (mergedReports !== null) return this.#runManagerReportBatch(mergedReports);
+      if (mergedExternal !== null) return this.#runExternalBatch(mergedExternal);
+      if (mergedSignals !== null) return this.#runMixedSignalBatch(mergedSignals);
+      return this.#handle(event);
+    };
+    return { batch, run };
   }
 
   /**
