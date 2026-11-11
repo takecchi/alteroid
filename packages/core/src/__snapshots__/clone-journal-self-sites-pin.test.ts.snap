@@ -103,7 +103,7 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: \${reasonOf(error)}\`",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: \${reasonOf(error)}\` + (archiveId !== null ? '（compaction の前の生ログの退避を墓標に残した。鍵が回った・枠が解けた・起動の契機で拾い直す）' : '（⚠️ 退避も失敗しているので墓標を指せず、この区間は記憶へ移せていない）')",
-  "#read 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: \` + \`\${previousSessionId ?? '不明'}）: \${describeReopenArchive(archived)}\`",
+  "#salvageAfterSessionEnd 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: \` + \`\${previousSessionId ?? '不明'}）: \${describeReopenArchive(archived)}\`",
   "#applyRefusal 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: \${event.category ?? '不明'}、\` + \`元のモデル: \${event.originalModel ?? '不明'}）。\` [+...(turn?.conversationId == null ? {} : {conversationId: turn.conversationId})]",
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${described.text}\`",
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直した: \${reopened.previousSessionId ?? '（古い id は不明）'}\` + \` → \${event.sessionId}（\${describeReopenArchive(reopened.archive)}）\`",

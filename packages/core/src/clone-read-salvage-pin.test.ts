@@ -25,6 +25,8 @@ import { createMemoryStores, humanMessage } from './testing.js';
 //   - 入力を閉じて終わったセッション（`inputEndedForRecycle`）は失敗の報告も `finishTurn` もしないこと
 //   - 各 await の位置（microtask の周回数）と、`#read` 全体の完了の周回数
 // `#read` の Promise は `Clone#stop` だけが待つ（`reader?.catch`）。完了の周回数は `CloneSdkSession#open` に渡る reader を横から見て数える。
+// 退避の塊を `#salvageAfterSessionEnd` へ出したので、`read.done` の期待値だけ 1 周遅れの値に更新した（途中の各点の周回数は変わらない）。
+// `#read` の完了を待つのは `Clone#stop` だけなので、観測される遅れは `stop` の完了が 1 周のみ。
 // 駆動は本物の `Clone` に、例外を投げる・入力を閉じて終わる偽の `queryFn` を繋ぐ。
 // `CloneGraves#salvageTranscript` は偽に差し替える（実の退避・蒸留は既存の試験が縛る）: 呼び出しの時刻と引数を記録し、決まった周回数の後に返す。
 // microtask は `await Promise.resolve()` を数える歯（実時間は使わない）。周回数は「例外を投げる・入力が閉じる」瞬間から数える。
@@ -323,7 +325,7 @@ describe('Clone#read の finally — 印の4通り', () => {
           "forgetMemory @+20",
           "takeContextWindowRecycle -> false @+20",
           "takeReopen -> null @+20",
-          "read.done @+21",
+          "read.done @+22",
         ],
         "salvageCalls": [],
       }
@@ -348,7 +350,7 @@ describe('Clone#read の finally — 印の4通り', () => {
           "takeReopen -> null @+21",
           "salvageTranscript() enter @+21",
           "salvageTranscript() exit @+25",
-          "read.done @+27",
+          "read.done @+28",
         ],
         "salvageCalls": [
           "()",
@@ -381,7 +383,7 @@ describe('Clone#read の finally — 印の4通り', () => {
           "salvageTranscript({"why":"reopen","distill":false}) exit @+24",
           "recordReopenArchive({"kind":"saved","id":"arch-1"}) @+25",
           "journal(開く前の生ログの行) @+25",
-          "read.done @+30",
+          "read.done @+31",
         ],
         "salvageCalls": [
           "({"why":"reopen","distill":false})",
@@ -411,7 +413,7 @@ describe('Clone#read の finally — 印の4通り', () => {
           "salvageTranscript({"why":"reopen","distill":true}) exit @+24",
           "recordReopenArchive({"kind":"saved","id":"arch-1"}) @+25",
           "journal(開く前の生ログの行) @+25",
-          "read.done @+30",
+          "read.done @+31",
         ],
         "salvageCalls": [
           "({"why":"reopen","distill":true})",
@@ -465,7 +467,7 @@ describe('Clone#read の finally — 印の4通り', () => {
           "salvageTranscript() enter @+21",
           "salvageTranscript() exit @+25",
           "recordReopenArchive({"kind":"none"}) @+26",
-          "read.done @+27",
+          "read.done @+28",
         ],
         "salvageCalls": [
           "()",
@@ -496,7 +498,7 @@ describe('Clone#read の finally — 入力を閉じて終わったセッショ�
           "salvageTranscript({"why":"reopen","distill":false}) exit @+8",
           "recordReopenArchive({"kind":"saved","id":"arch-1"}) @+9",
           "journal(開く前の生ログの行) @+9",
-          "read.done @+14",
+          "read.done @+15",
         ],
         "salvageCalls": [
           "({"why":"reopen","distill":false})",

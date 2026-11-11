@@ -370,13 +370,14 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#onPreCompact': 'failure,recovery',
     '#plugins': 'decision,failure',
     '#pump': 'thinning',
-    '#read': 'decision',
     '#record': 'human',
     '#recordWorkerLimit': 'decision',
     '#reopenSession': 'decision',
     '#reportFailure': 'failure,human,thinning',
     '#restoreUnreadPass': 'thinning',
     '#resumeCandidateWithinBudget': 'decision',
+    // `#read` の `finally` の最後の塊（開き直す前の生ログの1行）を出した先
+    '#salvageAfterSessionEnd': 'decision',
     // `#handleTimer` のターンの後の完了の記録を出した先（失敗の再試行の1行）
     '#settleTimerRun': 'failure',
     '#stopRunningTurn': 'decision,failure',
