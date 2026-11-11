@@ -521,7 +521,7 @@ function decidedPrefix(head: string, complete: boolean): string | undefined {
   return prefix;
 }
 
-// `memory.ts` の `parseMemoryFrontmatter` と同じ区切り
+// `memory-frontmatter.ts` の `parseMemoryFrontmatter` と同じ区切り
 const FRONTMATTER_DELIMITER = '---';
 
 function metaOf(
