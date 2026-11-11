@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
-
 import { z } from 'zod';
 
+import { sha256Hex } from './auth.js';
 import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
 import { limitRecoveryOf, limitRecoverySchema } from './usage-limits.js';
@@ -209,7 +208,7 @@ export function tokenPoolVersionOf(tokens: readonly AgentToken[]): string {
       token.disabledAt !== undefined,
       token.value === undefined ? null : fingerprintOf(token.value),
     ]);
-  return createHash('sha256').update(JSON.stringify(rows), 'utf8').digest('hex');
+  return sha256Hex(JSON.stringify(rows));
 }
 
 // message をそのまま HTTP 応答へ返してよい（版と固定の文だけ。値・資格は含めない）

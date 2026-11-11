@@ -3372,6 +3372,33 @@ describe('RunnerHttpError の message は本文を伏せて切る（issue #2415�
     expect(error.message.length).toBeLessThan(700);
   });
 
+  it('上限（512 字）ちょうどは切らず、1 字超えたら切る。切り口の絵文字は割らない', async () => {
+    const tail = (error: unknown) =>
+      (error as RunnerHttpError).message.split(') ').slice(1).join(') ');
+    expect(tail(await failWith(400, 'z'.repeat(512)))).toBe('z'.repeat(512));
+    expect(tail(await failWith(400, 'z'.repeat(513)))).toBe(`${'z'.repeat(512)}…`);
+    expect(tail(await failWith(400, `${'a'.repeat(511)}😀b`))).toBe(`${'a'.repeat(511)}…`);
+    expect(tail(await failWith(400, `${'a'.repeat(510)}😀b`))).toBe(`${'a'.repeat(510)}😀…`);
+    expect(tail(await failWith(400, `${'a'.repeat(512)}😀`))).toBe(`${'a'.repeat(512)}…`);
+  });
+
+  it('デーモンの環境変数にある秘密らしい値も伏せる', async () => {
+    vi.stubEnv('GH_TOKEN', FAKE);
+    try {
+      const error = (await failWith(400, `boom ${FAKE} end`)) as RunnerHttpError;
+      expect(error.message).not.toContain(FAKE);
+      expect(error.message).toContain('boom');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('読む量の上限（8192 字）の切り口が絵文字の途中でも、孤立サロゲートを出さない', async () => {
+    const error = (await failWith(400, `${'z'.repeat(8191)}😀tail`)) as RunnerHttpError;
+    expect(error.message).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+    expect(error.message.endsWith(`${'z'.repeat(512)}…`)).toBe(true);
+  });
+
   it('切り口をまたぐトークンの断片は残らない（伏せてから切る）', async () => {
     const token = `ghp_${'1234567890abcdef1234567890abcdef1234'}`;
     const error = (await failWith(400, `${'a '.repeat(250)}${token} tail`)) as RunnerHttpError;

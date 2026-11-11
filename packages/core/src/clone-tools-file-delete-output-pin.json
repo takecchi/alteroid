@@ -34,7 +34,7 @@
     "meta-forms#2": 413,
     "meta-forms#3": 127,
     "meta-forms#4": 121,
-    "meta-forms#5": 129,
+    "meta-forms#5": 126,
     "meta-forms#6": 131
   },
   "scenarios": {
@@ -2185,8 +2185,8 @@
     },
     "meta-forms#5": {
       "output": {
-        "length": 129,
-        "text": "unknown-from（id=att-m5、1024.0 KiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
+        "length": 126,
+        "text": "unknown-from（id=att-m5、1.0 MiB） の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。",
         "isError": false,
         "thrown": false,
         "errorName": null

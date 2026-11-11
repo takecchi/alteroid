@@ -18,7 +18,7 @@ export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 
 // 小数1桁へ丸めた値で単位を上げるか決める: 生の値で切ると 1,048,524 バイト以上が「1024.0 KiB」になる。
-function humanOneDecimal(bytes: number): string {
+export function humanOneDecimal(bytes: number): string {
   if (bytes < KIB) return `${bytes} B`;
   const kib = (bytes / KIB).toFixed(1);
   if (Number(kib) < KIB) return `${kib} KiB`;

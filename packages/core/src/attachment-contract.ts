@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import {
   ATTACHMENT_FROM_CLASSES,
   ATTACHMENT_UPLOADED_BY_CLONE,
@@ -15,6 +13,7 @@ import {
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from './attachment.js';
+import { sha256Hex } from './auth.js';
 
 interface AttachmentStoreContractOptions {
   readonly createStore?: (
@@ -395,7 +394,7 @@ async function verifyStreaming(
     for await (const part of stream) parts.push(Buffer.from(part));
     return Buffer.concat(parts);
   };
-  const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+  const sha = sha256Hex;
 
   const src = bytesOf(150);
   const meta = await store.putStream({

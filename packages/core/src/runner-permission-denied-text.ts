@@ -2,6 +2,7 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
+import { clipWithEllipsis } from './excerpt.js';
 
 /** `ClassifierDenialStreaks.view` の戻り（その型は非公開なので、読む欄だけ同じ形で受ける）。 */
 export interface DenialStreakViewLike {
@@ -32,12 +33,11 @@ export function buildDenialEntryNote(
   toolUseId: string | undefined,
   reason: string | undefined,
 ): string {
-  const reasonHead = Array.from((reason ?? '').replace(/\s+/g, ' ').trim());
+  const flat = (reason ?? '').replace(/\s+/g, ' ').trim();
   return (
     `分類器の拒否のフックが届いた（${actor}・${toolName ?? '道具名なし'}・` +
     `tool_use_id=${toolUseId ?? '無し'}）。理由の先頭: ` +
-    `${reasonHead.length === 0 ? '(無し)' : reasonHead.slice(0, 80).join('')}` +
-    `${reasonHead.length > 80 ? '…' : ''}（issue #1766）`
+    `${flat === '' ? '(無し)' : clipWithEllipsis(flat, 80)}（issue #1766）`
   );
 }
 

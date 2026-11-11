@@ -194,6 +194,56 @@ describe('deleteFile: remove が置き場の断り以外の例外で落ちた回
   });
 });
 
+describe('大きさの表記（B / KiB / MiB の境目）', () => {
+  const sizeIn = (bytes: number): string => {
+    const usage = emptyAttachmentUsage();
+    usage.count = 1;
+    usage.totalBytes = bytes;
+    usage.byFrom.human = { count: 1, totalBytes: bytes };
+    return renderFileUsage(usage).split('\n')[0]!;
+  };
+
+  it.each([
+    [0, '0 B'],
+    [1, '1 B'],
+    [1_023, '1023 B'],
+    [1_024, '1.0 KiB'],
+    [1_536, '1.5 KiB'],
+    [1_048_524, '1023.9 KiB'],
+    [1_048_576, '1.0 MiB'],
+    [1_572_864, '1.5 MiB'],
+    [3 * 1_048_576, '3.0 MiB'],
+    [25 * 1_048_576, '25.0 MiB'],
+  ])('%i バイト → %s', (bytes, expected) => {
+    expect(sizeIn(bytes)).toBe(`置き場の使用量: 1 件 ${expected}`);
+  });
+
+  // 小数 1 桁へ丸めた値で単位を上げるか決める（1023.95 KiB 以上は「1024.0 KiB」ではなく MiB）。
+  // 旧（file-tools の自前の整形）はここが「1024.0 KiB」だった
+  it.each([
+    [1_048_525, '1.0 MiB'],
+    [1_048_550, '1.0 MiB'],
+    [1_048_575, '1.0 MiB'],
+  ])('丸めると 1024.0 KiB になる境目 %i バイト → %s', (bytes, expected) => {
+    expect(sizeIn(bytes)).toBe(`置き場の使用量: 1 件 ${expected}`);
+  });
+
+  it.each([
+    [3, '3 B'],
+    [1_536, '1.5 KiB'],
+    [1_048_525, '1.0 MiB'],
+  ])('file_delete の成功文の大きさも同じ表記（%i バイト → %s）', async (bytes, expected) => {
+    const attachments = new MemoryAttachmentStore();
+    const meta = await attachments.put({
+      name: 'edge.bin',
+      mediaType: 'application/octet-stream',
+      bytes: new Uint8Array(bytes),
+    });
+    const result = await deleteFile({ attachments }, COPIES_DIR, meta.id);
+    expect(result).toContain(`edge.bin（id=${meta.id}、${expected}）`);
+  });
+});
+
 function usageWithKeys(keys: Record<string, { count: number; totalBytes: number }>) {
   return { ...emptyAttachmentUsage(), byIntegrationKey: keys };
 }
