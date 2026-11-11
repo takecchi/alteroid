@@ -1,9 +1,8 @@
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
-import { createHash } from 'node:crypto';
 
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AttachmentStore } from './attachment.js';
-import type { AuthStore } from './auth.js';
+import { sha256Hex, type AuthStore } from './auth.js';
 import type { CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type { EventReceiptStore } from './event-receipt.js';
 import type { IntegrationKeyStore } from './integration-key.js';
@@ -87,7 +86,7 @@ export function ensureTrailingNewline(text: string): string {
  * `updatedAt` にしない: fs の mtime の精度では同じ時刻内の2回の書き込みを区別できず、3実装が同じ式で出せないため。
  */
 export function memoryVersion(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+  return sha256Hex(content);
 }
 
 /** 書くときの前提の版。書く瞬間の版と違えば書かず `*ConflictError`。`null` は「無いときだけ書ける」、省略は後勝ち。 */
@@ -1907,9 +1906,7 @@ export function describeUnreadableTokens(unreadable: readonly UnreadableToken[])
  * `updatedAt` を使わないのも `memoryVersion` と同じ理由。
  */
 export function practiceVersion(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
-  return createHash('sha256')
-    .update(JSON.stringify([practice.kind, practice.title, practice.content]))
-    .digest('hex');
+  return sha256Hex(JSON.stringify([practice.kind, practice.title, practice.content]));
 }
 
 export type WritePracticeOptions = IfMatchWriteOptions;

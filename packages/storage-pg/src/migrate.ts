@@ -1,6 +1,4 @@
-import { createHash } from 'node:crypto';
-
-import { collapseErrorCause, writeStderrLine } from '@alteroid/core';
+import { collapseErrorCause, sha256Hex, writeStderrLine } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 
 import { rowsOf, type Db } from './db.js';
@@ -761,7 +759,7 @@ export const SCHEMA_STATEMENTS_KEY = 'schema_statements_sha256';
 
 /** `STATEMENTS` の指紋。文を1文字でも変えれば変わる（区切りに NUL を挟み、文の境目をずらした別の並びと取り違えない）。 */
 export function statementsFingerprint(statements: readonly string[] = STATEMENTS): string {
-  return createHash('sha256').update(statements.join('\u0000')).digest('hex');
+  return sha256Hex(statements.join('\u0000'));
 }
 
 /**
