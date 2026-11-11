@@ -315,6 +315,7 @@ import {
   WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE,
   WORKER_LIMIT_REOPENED_NUDGE,
   WorkerLimitNotices,
+  workerLimitIdentity,
   workerLimitLabel,
 } from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
@@ -4360,7 +4361,7 @@ class RunnerSession {
         // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
         if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
           this.#recordWorkerLimit(
-            `tool_use:${event.parentToolUseId}`,
+            workerLimitIdentity(event.parentToolUseId, undefined),
             workerLimitLabel(event.parentToolUseId, undefined),
             workerText.length > 0 ? workerText : rejected.code,
           );
@@ -4550,11 +4551,7 @@ class RunnerSession {
           event.toolUseId ??
           (taskId === undefined ? undefined : this.#toolUseIdByTaskId.get(taskId));
         this.#recordWorkerLimit(
-          toolUseId !== undefined
-            ? `tool_use:${toolUseId}`
-            : taskId === undefined
-              ? 'background-worker'
-              : `task:${taskId}`,
+          workerLimitIdentity(toolUseId, taskId),
           workerLimitLabel(toolUseId, taskId),
           event.summary,
         );

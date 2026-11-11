@@ -64,6 +64,20 @@ export function describeWorkerLimit(
   return `⚠ alteroid からの知らせ: ${list}。${advice}`;
 }
 
+/**
+ * 身元。`WorkerLimitNotices.record` が重複を判定するキー（#4996）。作業者を呼んだ tool_use の id にそろえる: 作業者の発言の拒否の印と
+ * タスクの失敗通知は同じ作業者について別々に届き、名札も原文も違うので、身元を tool_use の id にそろえないと2回記録されるため。
+ * tool_use の id が分からなければ task の id、どちらも無ければ背景の作業者 1 つ。名札（`workerLimitLabel`）と対にして使う。
+ */
+export function workerLimitIdentity(
+  toolUseId: string | undefined,
+  taskId: string | undefined,
+): string {
+  if (toolUseId !== undefined) return `tool_use:${toolUseId}`;
+  if (taskId === undefined) return 'background-worker';
+  return `task:${taskId}`;
+}
+
 /** 名札。分かる id を全部書く（tool_use と task の両方が分かれば両方）。どちらも無ければ「背景の作業者」。 */
 export function workerLimitLabel(
   toolUseId: string | undefined,
