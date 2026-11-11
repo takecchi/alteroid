@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -56,6 +53,7 @@ import {
   type MemorySection,
   type MemoryTocIssue,
 } from './memory.js';
+import { scanMemoryBudgetConstants } from './memory-budget-scan.test-support.js';
 import type { JournalEntry, MemoryDescriptionFreshness } from './schema.js';
 import { fillListingBudget } from './excerpt.js';
 import { listPageByOverfetch } from './journal-page.js';
@@ -1593,11 +1591,7 @@ describe('renderMemoryDocuments — 区分ごとの載り方と、目次→詳�
 
   // 値そのもの（12_000）は固定しない: 実測に基づく調整まで禁じる歯になる。固定するのは値の帰属と関係だけ。
   it('⭐ 焼き込みの予算（MEMORY_TOC_CHAR_BUDGET）は、他のどの記憶の予算とも値を分け合わない', () => {
-    const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
-    const byName = new Map<string, number>();
-    for (const match of source.matchAll(/export const (MEMORY_\w*_BUDGET) = ([\d_]+);/g)) {
-      byName.set(match[1] as string, Number((match[2] as string).replace(/_/g, '')));
-    }
+    const byName = scanMemoryBudgetConstants();
 
     expect(byName.get('MEMORY_TOC_CHAR_BUDGET')).toBe(MEMORY_TOC_CHAR_BUDGET);
 
@@ -3617,12 +3611,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(tailOutline).toContain('次に memory_outline を呼んだときの応答にそれが載る');
       });
 
-      it('⭐ memory.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、断り書きが漏れなく名指しする', () => {
-        const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
-        const byName = new Map<string, number>();
-        for (const match of source.matchAll(/export const (MEMORY_\w*_BUDGET) = ([\d_]+);/g)) {
-          byName.set(match[1] as string, Number((match[2] as string).replace(/_/g, '')));
-        }
+      it('⭐ memory*.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、断り書きが漏れなく名指しする', () => {
+        const byName = scanMemoryBudgetConstants();
 
         expect(byName.get('MEMORY_OUTLINE_BUDGET')).toBe(8_000);
         const siblings = [...byName.entries()]
