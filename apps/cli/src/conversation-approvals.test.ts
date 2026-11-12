@@ -36,7 +36,9 @@ describe('approvalLine（承認1件の1行）', () => {
       approvalLine(approval({ ...settled, answeredVia: { kind: 'account', accountId: 'acc-1' } })),
     ).toContain(': A案で（回答経路: account（acc-1））');
     expect(approvalLine(approval(settled))).not.toContain('回答経路');
-    expect(approvalLine(approval({ ...settled, answeredVia: null }))).not.toContain('回答経路');
+    expect(approvalLine(approval({ ...settled, answeredVia: null as never }))).not.toContain(
+      '回答経路',
+    );
   });
 
   it('取り下げは理由を出し、回答済みと両方立っていたら取り下げを優先する', () => {

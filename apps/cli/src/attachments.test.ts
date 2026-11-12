@@ -254,7 +254,14 @@ describe('renderAttachmentUsage: 連携の鍵別', () => {
   const base = {
     count: 3,
     totalBytes: 3000,
-    byFrom: { human: { count: 3, totalBytes: 3000 } },
+    // デーモンの応答は 5 種を全部載せる（件数 0 の種は出さない）
+    byFrom: {
+      human: { count: 3, totalBytes: 3000 },
+      clone: { count: 0, totalBytes: 0 },
+      manager: { count: 0, totalBytes: 0 },
+      integration: { count: 0, totalBytes: 0 },
+      unknown: { count: 0, totalBytes: 0 },
+    },
   };
   const keys = (n: number) =>
     Object.fromEntries(
