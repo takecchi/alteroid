@@ -1,30 +1,15 @@
-import {
-  approvalStateOf,
-  describeAnsweredVia,
-  summarizeQuestions,
-  type AnsweredVia,
-} from '@alteroid/core';
+import { approvalStateOf, describeAnsweredVia, summarizeQuestions } from '@alteroid/core';
+import type { InferResponseType } from 'hono/client';
 
 import type { DaemonClient } from './client.js';
 import { oneLine, withErrorReason } from './format.js';
 import { redactBody, redactedErrorMessage } from './redact.js';
 
-export interface ConversationApproval {
-  id: string;
-  createdAt: string;
-  question: string;
-  questions?: Parameters<typeof summarizeQuestions>[0];
-  answeredAt?: string | null;
-  answer?: string | null;
-  answeredVia?: AnsweredVia | null;
-  withdrawnAt?: string | null;
-  withdrawnReason?: string | null;
-}
-
-interface ConversationApprovalUnreadable {
-  id?: string;
-  reason: string;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// `updatedAt` は CLI が読まないので除く
+type ApprovalsList = InferResponseType<DaemonClient['approvals']['$get'], 200>;
+export type ConversationApproval = Omit<ApprovalsList['approvals'][number], 'updatedAt'>;
+type ConversationApprovalUnreadable = NonNullable<ApprovalsList['unreadable']>[number];
 
 export interface ConversationApprovalsRead {
   approvals: ConversationApproval[];
@@ -63,8 +48,8 @@ export async function fetchConversationApprovals(
       return { approvals: [], unreadable: [], failure: '応答の形が想定と違う' };
     }
     return {
-      approvals: body.approvals as ConversationApproval[],
-      unreadable: (body.unreadable ?? []) as ConversationApprovalUnreadable[],
+      approvals: body.approvals,
+      unreadable: body.unreadable ?? [],
     };
   } catch (error) {
     return { approvals: [], unreadable: [], failure: redactedErrorMessage(error) };

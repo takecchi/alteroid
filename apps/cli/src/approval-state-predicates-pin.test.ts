@@ -42,9 +42,10 @@ describe('conversation-approvals.ts approvalText の状態（現状の挙動を�
     // 経緯: core・logic・web は空文字を「立っている」と読む多数派。cli だけ真偽で見ていたのをそろえた。null は web と cli がもともと「立っていない」で、型の上で null が来ない core・logic に影響しないので、答えが変わらない側（立っていない）を選んだ。
     expect({
       emptyAnswered: stateOf({ answeredAt: '' }),
-      nullAnswered: stateOf({ answeredAt: null }),
+      // null は daemon の型には無い（古い応答・手編集への備え）ので型を外して渡す
+      nullAnswered: stateOf({ answeredAt: null as never }),
       emptyWithdrawn: stateOf({ withdrawnAt: '' }),
-      nullWithdrawn: stateOf({ withdrawnAt: null }),
+      nullWithdrawn: stateOf({ withdrawnAt: null as never }),
       emptyWithdrawnWithAnswer: stateOf({ answeredAt: AT, withdrawnAt: '' }),
     }).toEqual({
       emptyAnswered: 'answered',

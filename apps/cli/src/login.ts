@@ -2,7 +2,9 @@ import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import { stdout } from './terminal-out.js';
 import { setTimeout as sleep } from 'node:timers/promises';
+import type { InferResponseType } from 'hono/client';
 
+import type { DaemonClient } from './client.js';
 import {
   clearCredential,
   CredentialsUnreadableError,
@@ -15,25 +17,18 @@ import { forbiddenKindOf, isRunnerContainer, resolveTarget, type Target } from '
 // 端末側にサーバを立てない: プロバイダに登録する戻り先が1本で済み、`redirect_uri` の不一致が起きないため
 // トークンをブラウザの URL に載せない: 履歴と Referer に鍵が残るため
 
-interface HealthResponse {
-  auth?: { enabled?: boolean; providers?: { id: string; label: string; kind: string }[] };
-}
-
-interface StartResponse {
-  requestId: string;
-  authorizationUrl: string;
-  claimSecret: string;
-  expiresAt: string;
-}
-
-type ClaimResponse =
-  | { status: 'pending' }
-  | {
-      status: 'ready';
-      token: string;
-      account: { id: string; email: string | null; displayName: string | null };
-      granted: boolean;
-    };
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり素の `fetch` で撃つ（`createClient` は呼ばない）
+// `HealthResponse` は全欄を任意にしたまま: 認証の欄が無い古いデーモンの応答も読むため
+type HealthResponse = {
+  auth?: Partial<InferResponseType<DaemonClient['health']['$get'], 200>['auth']>;
+};
+type StartResponse = InferResponseType<DaemonClient['auth']['login']['$post'], 200>;
+type ClaimResponse = InferResponseType<
+  DaemonClient['auth']['login'][':requestId']['claim']['$post'],
+  200
+>;
+type MeResponse = InferResponseType<DaemonClient['auth']['me']['$get'], 200>;
 
 const POLL_INTERVAL_MS = 1500;
 
@@ -297,13 +292,7 @@ export async function whoamiCommand(): Promise<void> {
     return;
   }
   if (!response.ok) throw new Error(`/auth/me が失敗しました: ${await errorText(response)}`);
-  const me = (await response.json()) as
-    | { kind: 'operator' }
-    | {
-        kind: 'account';
-        account: { id: string; email: string | null; displayName: string | null };
-        granted: boolean;
-      };
+  const me = (await response.json()) as MeResponse;
 
   stdout.write(`接続先: ${target.baseUrl}\n`);
   if (!target.remote && isRunnerContainer()) {
