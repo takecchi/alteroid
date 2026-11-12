@@ -15,7 +15,6 @@ import type {
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
-  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
@@ -28,7 +27,6 @@ import { WORKER_AGENT_NAME } from './runner.js';
 const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
 const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
 const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
-const noopUserPromptSubmitHook: (record: AgentUserPromptSubmitRecord) => void = () => undefined;
 const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
 const noopSubagentStopObservationHook: (record: AgentSubagentStopRecord) => void = () => undefined;
 const noopPreToolHook: AgentPreToolHook = () => ({ kind: 'continue' });
@@ -69,7 +67,6 @@ function managerOptions(): Options {
     onPostToolUse: noopContextHook,
     onPostToolUseFailure: noopAuditFailureHook,
     onPreCompact: noopPreCompactHook,
-    onUserPromptSubmit: noopUserPromptSubmitHook,
     onSubagentStop: noopContextHook,
     onStop: noopStopHook,
     onPreToolUse: noopPreToolHook,

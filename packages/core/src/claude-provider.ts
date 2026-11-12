@@ -15,7 +15,6 @@ import type {
   SpawnOptions,
   StopHookInput,
   SubagentStopHookInput,
-  UserPromptSubmitHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
@@ -43,7 +42,6 @@ import type {
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
-  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { splitInProcessMcpServers } from './clone-mcp-config-file.js';
 import { noteBackgroundFailure } from './dropped-record.js';
@@ -176,14 +174,6 @@ function toAgentPreCompactRecord(
     ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
     ...(typeof raw?.session_id === 'string' ? { sessionId: raw.session_id } : {}),
     ...(signal === undefined ? {} : { signal }),
-  };
-}
-
-function toAgentUserPromptSubmitRecord(input: unknown): AgentUserPromptSubmitRecord {
-  const raw = input as Partial<UserPromptSubmitHookInput> | null | undefined;
-  return {
-    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
-    ...(typeof raw?.source === 'string' ? { source: raw.source } : {}),
   };
 }
 
@@ -620,7 +610,6 @@ interface ManagerSessionOptionsRequest {
   // 観測フックを optional にしない: 省略できる形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせるため
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
   /** 省けば `SessionStart` を登録しない。担当の組み立てだけが渡す（#4995）。 */
   onSessionStart?: AgentSessionStartHook;
   // `AgentContextHook` に載せる: `runner.ts` の `#onSubagentStop` は作業者を起こし直す文脈を返す判断を含み、`AgentObservationHook` には載らないため
@@ -686,7 +675,6 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPostToolUse,
     onPostToolUseFailure,
     onPreCompact,
-    onUserPromptSubmit,
     onSessionStart,
     onSubagentStop,
     onStop,
@@ -758,9 +746,6 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 失敗・中断した道具呼び出しが日誌に1件も残らなくなるため
       PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
       PreCompact: [{ hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)] }],
-      UserPromptSubmit: [
-        { hooks: [wrapObservationHook(onUserPromptSubmit, toAgentUserPromptSubmitRecord)] },
-      ],
       ...(onSessionStart === undefined
         ? {}
         : { SessionStart: [{ hooks: [wrapSessionStartHook(onSessionStart)] }] }),

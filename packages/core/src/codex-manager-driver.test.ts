@@ -275,7 +275,6 @@ function setup(
     onPostToolUse: vi.fn(),
     onPostToolUseFailure: vi.fn(),
     onPreCompact: vi.fn(),
-    onUserPromptSubmit: vi.fn(),
     onSubagentStop: vi.fn(),
     onStop: vi.fn(),
   } as unknown as AgentManagerSessionSpec;

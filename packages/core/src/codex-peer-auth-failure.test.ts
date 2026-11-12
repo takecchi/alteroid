@@ -115,7 +115,6 @@ async function peerRunFailing(turnError: Json, account?: Json | null): Promise<P
         onPostToolUse: () => ({ kind: 'continue' }),
         onPostToolUseFailure: vi.fn(),
         onPreCompact: vi.fn(),
-        onUserPromptSubmit: vi.fn(),
         onSubagentStop: vi.fn(),
         onStop: vi.fn(),
       }) as unknown as AgentManagerSessionSpec,

@@ -21,7 +21,6 @@ import type {
   AgentToolAuditRecord,
   AgentSessionStartHook,
   AgentSessionStartRecord,
-  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
@@ -1167,7 +1166,6 @@ describe('ツール監査フックの包み直し（#486）', () => {
         captured = record;
       },
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -1284,7 +1282,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -1314,7 +1311,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => ({ kind: 'continue' as const }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' as const }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' as const }),
@@ -1363,7 +1359,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPreCompact: (record) => {
         captured = record;
       },
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -1384,87 +1379,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(captured?.transcriptPath).toBe('/tmp/manager.jsonl');
   });
 
-  it('buildManagerSessionOptions: UserPromptSubmit の生入力を同じ値のまま中立の記録として渡し、{ continue: true } を返す', async () => {
-    let captured: AgentUserPromptSubmitRecord | undefined;
-    const options = buildManagerSessionOptions({
-      model: 'opus',
-      permissionMode: DEFAULT_PERMISSION_MODE,
-      systemPromptAppend: '追記',
-      workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: '作業者のプロンプト',
-      workerModel: 'sonnet',
-      cwd: '/work',
-      env: {},
-      sessionStore,
-      canUseTool,
-      onPostToolUse: () => ({ kind: 'continue' }),
-      onPostToolUseFailure: () => {},
-      onPreCompact: () => {},
-      onUserPromptSubmit: (record) => {
-        captured = record;
-      },
-      onSubagentStop: () => ({ kind: 'continue' }),
-      onStop: () => {},
-      onPreToolUse: () => ({ kind: 'continue' }),
-      onPermissionDenied: async () => ({ kind: 'no-retry' }),
-      managerAutoMemoryEnabled: false,
-    });
-
-    const result = await invokeHook(options.hooks?.UserPromptSubmit?.[0]?.hooks[0], {
-      hook_event_name: 'UserPromptSubmit',
-      session_id: 's',
-      cwd: '/work',
-      prompt: 'こんにちは',
-      agent_id: 'agent-3',
-      source: 'system',
-    });
-
-    expect(result).toEqual({ continue: true });
-    expect(captured).toEqual({
-      agentId: 'agent-3',
-      source: 'system',
-    } satisfies AgentUserPromptSubmitRecord);
-  });
-
-  it('buildManagerSessionOptions: UserPromptSubmit の読めない・無い欄は作り物を出さずに省く', async () => {
-    let captured: AgentUserPromptSubmitRecord | undefined;
-    const options = buildManagerSessionOptions({
-      model: 'opus',
-      permissionMode: DEFAULT_PERMISSION_MODE,
-      systemPromptAppend: '追記',
-      workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: '作業者のプロンプト',
-      workerModel: 'sonnet',
-      cwd: '/work',
-      env: {},
-      sessionStore,
-      canUseTool,
-      onPostToolUse: () => ({ kind: 'continue' }),
-      onPostToolUseFailure: () => {},
-      onPreCompact: () => {},
-      onUserPromptSubmit: (record) => {
-        captured = record;
-      },
-      onSubagentStop: () => ({ kind: 'continue' }),
-      onStop: () => {},
-      onPreToolUse: () => ({ kind: 'continue' }),
-      onPermissionDenied: async () => ({ kind: 'no-retry' }),
-      managerAutoMemoryEnabled: false,
-    });
-
-    const result = await invokeHook(options.hooks?.UserPromptSubmit?.[0]?.hooks[0], {
-      hook_event_name: 'UserPromptSubmit',
-      session_id: 's',
-      cwd: '/work',
-      prompt: 'こんにちは',
-    });
-
-    expect(result).toEqual({ continue: true });
-    expect(captured).toEqual({});
-    expect(captured).not.toHaveProperty('agentId');
-    expect(captured).not.toHaveProperty('source');
-  });
-
   describe('SessionStart フックの包み直し（#4995）', () => {
     const optionsWith = (onSessionStart?: AgentSessionStartHook) =>
       buildManagerSessionOptions({
@@ -1481,7 +1395,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
         onPostToolUse: () => ({ kind: 'continue' }),
         onPostToolUseFailure: () => {},
         onPreCompact: () => {},
-        onUserPromptSubmit: () => {},
         ...(onSessionStart === undefined ? {} : { onSessionStart }),
         onSubagentStop: () => ({ kind: 'continue' }),
         onStop: () => {},
@@ -1543,7 +1456,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: (record) => {
         captured = record;
@@ -1586,7 +1498,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: (record) => {
         captured = record;
@@ -1738,7 +1649,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: (record) => {
@@ -1785,7 +1695,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({
@@ -1830,7 +1739,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({
@@ -1877,7 +1785,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         onPostToolUse: () => ({ kind: 'continue' }),
         onPostToolUseFailure: () => {},
         onPreCompact: () => {},
-        onUserPromptSubmit: () => {},
         onSubagentStop: () => ({ kind: 'continue' }),
         onStop: () => {},
         onPreToolUse: () => ({
@@ -1926,7 +1833,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -1971,7 +1877,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'bogus' }) as unknown as AgentPreToolDecision,
@@ -2015,7 +1920,6 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
       onPostToolUse: hooks.onPostToolUse ?? (() => ({ kind: 'continue' })),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: hooks.onSubagentStop ?? (() => ({ kind: 'continue' })),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -2262,7 +2166,6 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       onPostToolUse: () => ({ kind: 'continue' as const }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' as const }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' as const }),
@@ -2377,7 +2280,7 @@ describe('観測フックは呼ばれ、投げた例外は握らずに投げ返�
       onPreToolUse: () => ({ kind: 'continue' }),
       onSubagentStop: hooks.onSubagentStop ?? (() => {}),
     });
-  const managerWith = (hooks: { onUserPromptSubmit?: () => void; onStop?: () => void }): Options =>
+  const managerWith = (hooks: { onStop?: () => void }): Options =>
     buildManagerSessionOptions({
       model: 'opus',
       permissionMode: DEFAULT_PERMISSION_MODE,
@@ -2392,7 +2295,6 @@ describe('観測フックは呼ばれ、投げた例外は握らずに投げ返�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: hooks.onUserPromptSubmit ?? (() => {}),
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: hooks.onStop ?? (() => {}),
       onPreToolUse: () => ({ kind: 'continue' }),
@@ -2418,10 +2320,6 @@ describe('観測フックは呼ばれ、投げた例外は握らずに投げ返�
     [
       'SubagentStop（クローン）',
       () => sessionWith({ onSubagentStop: boom }).hooks?.SubagentStop?.[0]?.hooks[0],
-    ],
-    [
-      'UserPromptSubmit',
-      () => managerWith({ onUserPromptSubmit: boom }).hooks?.UserPromptSubmit?.[0]?.hooks[0],
     ],
     ['Stop', () => managerWith({ onStop: boom }).hooks?.Stop?.[0]?.hooks[0]],
     [
@@ -2456,20 +2354,16 @@ describe('観測フックは呼ばれ、投げた例外は握らずに投げ返�
     expect(calls).toBe(2);
   });
 
-  it('SubagentStop（クローン）・UserPromptSubmit: 例外が無ければ呼ばれて { continue: true } を返す', async () => {
+  it('SubagentStop（クローン）: 例外が無ければ呼ばれて { continue: true } を返す', async () => {
     let calls = 0;
     const count = () => {
       calls += 1;
     };
     const session = sessionWith({ onSubagentStop: count });
-    const manager = managerWith({ onUserPromptSubmit: count });
     expect(await invokeHook(session.hooks?.SubagentStop?.[0]?.hooks[0], {})).toEqual({
       continue: true,
     });
-    expect(await invokeHook(manager.hooks?.UserPromptSubmit?.[0]?.hooks[0], {})).toEqual({
-      continue: true,
-    });
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 });
 
@@ -2771,7 +2665,6 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
       onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
       onSessionStart: async () => null,
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
@@ -2848,13 +2741,6 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
             }
           ],
           "PreCompact": [
-            {
-              "hooks": [
-                "[fn]"
-              ]
-            }
-          ],
-          "UserPromptSubmit": [
             {
               "hooks": [
                 "[fn]"

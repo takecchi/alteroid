@@ -144,12 +144,11 @@ describe('Stop の配線（#861）', () => {
     expect(started.options.hooks?.Stop?.[0]?.hooks?.length).toBe(1);
   });
 
-  it('既存の4本（PostToolUse / PreCompact / UserPromptSubmit / SubagentStop）はそのまま載っている', async () => {
+  it('既存の3本（PostToolUse / PreCompact / SubagentStop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
     expect(hooks?.PostToolUse?.length).toBe(1);
     expect(hooks?.PreCompact?.length).toBe(1);
-    expect(hooks?.UserPromptSubmit?.length).toBe(1);
     expect(hooks?.SubagentStop?.length).toBe(1);
   });
 });

@@ -15,7 +15,6 @@ import type {
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentPreCompactRecord,
-  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import type { AgentProviderId } from './agent-ports.js';
 import type { McpServers } from './mcp-servers.js';
@@ -169,7 +168,6 @@ export interface AgentManagerSessionSpec {
   onPostToolUse: AgentContextHook<AgentToolAuditRecord>;
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
-  onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
   /** 省けば繋がない。担当だけが渡す（#4995）。Codex の駆動役は渡されても使わない。 */
   onSessionStart?: AgentSessionStartHook;
   onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
