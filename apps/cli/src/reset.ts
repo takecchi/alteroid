@@ -1,4 +1,6 @@
 import { stdout } from './terminal-out.js';
+import type { InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
 
 import { RESET_CONFIRM_GROUPS } from '@alteroid/core/cli-light';
 
@@ -6,33 +8,17 @@ import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 
-interface ResetSummary {
-  memory: number;
-  journal: number;
-  jobs: number;
-  approvals: number;
-  schedules: number;
-  schedulePhases: number;
-  inbox: number;
-  tasks: number;
-  practices: number;
-  archive: number;
-  sessions: number;
-  profile: number;
-  usageDaily: number;
-  usageBaseline: number;
-  usageLedger: number;
-  usageTurns: number;
-  attachments: number;
-  sessionLog?: number;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり素の `fetch` で撃つ（`createClient` は呼ばない）
+type ResetView = InferResponseType<DaemonClient['reset']['$post'], 200>;
+type ResetSummary = ResetView['cleared'];
 
 export async function resetCommand(options: { yes?: boolean } = {}, io?: ConfirmIo): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   await confirmIrreversible(buildConfirmMessage(target.baseUrl), options, io);
 
-  const view = (await post(target)) as { cleared: ResetSummary };
+  const view = (await post(target)) as ResetView;
   report(view.cleared);
 }
 

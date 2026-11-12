@@ -1,28 +1,16 @@
 import { stderr, stdout } from './terminal-out.js';
+import type { InferResponseType } from 'hono/client';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import {
-  describeUnreadableRowsList,
-  errorReason,
-  describeFailedResponse,
-  type RowsUnreadable,
-} from './format.js';
+import { describeUnreadableRowsList, errorReason, describeFailedResponse } from './format.js';
 import { redactError } from './redact.js';
 
-interface IntegrationKeyView {
-  id: string;
-  name: string;
-  source: string;
-  fingerprint: string;
-  createdAt: string;
-  createdBy: string;
-  expiresAt: string | null;
-  revokedAt: string | null;
-  lastUsedAt: string | null;
-  limits: { maxBodyBytes: number; ratePerMinute: number };
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type IntegrationKeysView = InferResponseType<DaemonClient['integration-keys']['$get'], 200>;
+type IntegrationKeyView = IntegrationKeysView['keys'][number];
+type RowsUnreadable = NonNullable<IntegrationKeysView['rowsUnreadable']>;
 
 type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';
 
@@ -92,11 +80,8 @@ export async function integrationListCommand(now: number = Date.now()): Promise<
   }
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$get();
-  if (!response.ok) await fail(response, target, '/integration-keys');
-  const { keys, rowsUnreadable } = (await response.json()) as {
-    keys: IntegrationKeyView[];
-    rowsUnreadable?: RowsUnreadable;
-  };
+  if (!response.ok) return fail(response, target, '/integration-keys');
+  const { keys, rowsUnreadable } = await response.json();
   stdout.write(renderIntegrationList(keys, now, rowsUnreadable));
 }
 
@@ -179,8 +164,8 @@ export async function integrationCreateCommand(
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$post({ json });
-  if (!response.ok) await fail(response, target, '/integration-keys');
-  const created = (await response.json()) as { key: IntegrationKeyView; value: string };
+  if (!response.ok) return fail(response, target, '/integration-keys');
+  const created = await response.json();
   if (options.json === true) {
     // 警告を標準出力へ出さない: `KEY=$(... --json | jq -r .value)` で受けても混ざらないように
     stdout.writeRaw(`${JSON.stringify(created, null, 2)}\n`);
@@ -231,11 +216,8 @@ export async function integrationRevokeCommand(
   if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const listed = await client['integration-keys'].$get();
-  if (!listed.ok) await fail(listed, target, '/integration-keys');
-  const { keys, rowsUnreadable } = (await listed.json()) as {
-    keys: IntegrationKeyView[];
-    rowsUnreadable?: RowsUnreadable;
-  };
+  if (!listed.ok) return fail(listed, target, '/integration-keys');
+  const { keys, rowsUnreadable } = await listed.json();
   const key = keys.find((row) => row.id === id);
   if (key === undefined) {
     if (rowsUnreadable?.rows.some((row) => row.id === id) === true) {
@@ -257,8 +239,8 @@ export async function integrationRevokeCommand(
     options.io,
   );
   const response = await client['integration-keys'][':id'].revoke.$post({ param: { id } });
-  if (!response.ok) await fail(response, target, `/integration-keys/${id}/revoke`);
-  const { key: revoked } = (await response.json()) as { key: IntegrationKeyView };
+  if (!response.ok) return fail(response, target, `/integration-keys/${id}/revoke`);
+  const { key: revoked } = await response.json();
   stdout.write(
     `連携の鍵を失効させました: ${revoked.name}（source=${revoked.source}、失効 ${revoked.revokedAt ?? '?'}）\n`,
   );
@@ -295,7 +277,7 @@ export async function integrationRemoveUnreadableCommand(
       ),
     );
   }
-  const result = (await response.json()) as { removedIds: string[] };
+  const result = await response.json();
   stdout.write(
     `読めない連携の鍵の行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
   );
