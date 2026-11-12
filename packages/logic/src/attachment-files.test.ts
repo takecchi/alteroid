@@ -1,8 +1,9 @@
-import { classifyAttachmentFrom } from '@alteroid/core';
+import { ATTACHMENT_FROM_CLASSES, classifyAttachmentFrom } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import {
   ATTACHMENT_FROM_LABELS,
+  ATTACHMENT_FROM_ORDER,
   attachmentFromOf,
   attachmentSetExpiryLabel,
   describeAttachmentLifetime,
@@ -25,6 +26,11 @@ describe('attachmentFromOf', () => {
     ]) {
       expect(attachmentFromOf(by), String(by)).toBe(classifyAttachmentFrom(by));
     }
+  });
+
+  it('ATTACHMENT_FROM_ORDER と ラベルの欄が、core の ATTACHMENT_FROM_CLASSES と順序までそろう', () => {
+    expect([...ATTACHMENT_FROM_ORDER]).toEqual([...ATTACHMENT_FROM_CLASSES]);
+    expect(Object.keys(ATTACHMENT_FROM_LABELS)).toEqual([...ATTACHMENT_FROM_CLASSES]);
   });
 
   it('ラベルは 人間 / クローン / マネージャー / 連携 / 不明', () => {
