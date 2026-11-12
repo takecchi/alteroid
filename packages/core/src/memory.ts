@@ -3,9 +3,6 @@
  * 器ごとに書くと食い違い、インメモリ実装だけ見出し無しの連結でテストが緑になっていた。
  */
 
-import { createHash } from 'node:crypto';
-
-import { assertNever } from './assert-never.js';
 import {
   excerpt,
   excerptLine,
@@ -15,14 +12,24 @@ import {
 } from './excerpt.js';
 import { encodeMemoryCursor } from './memory-cursor.js';
 import { memoryFreshnessMarker } from './memory-freshness-format.js';
+import {
+  formatMemoryCreatedAt,
+  parseMemoryFrontmatter,
+  resolveMemoryDocKind,
+} from './memory-frontmatter.js';
+import {
+  formatMemoryCharCount,
+  formatMemoryCharDelta,
+  formatMemoryPercentDelta,
+  MEMORY_PROMPT_OUTLINE_HEADING_WIDTH,
+  type MemorySection,
+  memorySectionLines,
+  OUTLINE_AMBIGUOUS_MARKER,
+  scanMemorySections,
+  truncateOutlineHeading,
+} from './memory-sections.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
-import type {
-  MemoryCreatedAt,
-  MemoryDescriptionDrift,
-  MemoryDescriptionFreshness,
-  MemoryDocKind,
-  MemoryFrontmatterState,
-} from './schema.js';
+import type { MemoryCreatedAt, MemoryDescriptionFreshness, MemoryDocKind } from './schema.js';
 
 /**
  * `content` から導出できるもの（区分・要旨・親）は渡さず、`renderMemoryDocuments` が毎回 `content`
@@ -73,284 +80,40 @@ export {
   memoryProtectionRebuildDecision,
 } from './memory-journal-derive.js';
 
-const FRONTMATTER_DELIMITER = '---';
-
-const KNOWN_FRONTMATTER_KEYS = new Set(['description', 'type', 'parent']);
-
-// YAML ライブラリを使わない: `description: no` が静かに `false` になる挙動を避け、読めなければ落ちるパーサが欲しいため
-export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState {
-  const lines = content.split('\n');
-  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return { kind: 'none' };
-
-  const closingIndex = lines.findIndex(
-    (line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER,
-  );
-  if (closingIndex === -1) return { kind: 'malformed' };
-
-  const fields: { description?: string; type?: string; parent?: string } = {};
-  for (const line of lines.slice(1, closingIndex)) {
-    const separator = line.indexOf(':');
-    if (separator === -1) return { kind: 'malformed' };
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (!KNOWN_FRONTMATTER_KEYS.has(key)) return { kind: 'malformed' };
-    if (key === 'description') fields.description = value;
-    else if (key === 'type') fields.type = value;
-    else if (key === 'parent') fields.parent = value;
-  }
-  return { kind: 'parsed', ...fields };
-}
-
-function frontmatterBody(content: string): string {
-  return content.slice(memoryBodyStart(content));
-}
-
-// frontmatterBody と実装を分けない: 本文と本文の始まる位置が食い違うと、memory_section_move が本文の一部を frontmatter として運ぶため
-// memory_section_move は frontmatter をこの添字で運ぶだけで書き直さない: `serializeMemoryFrontmatter` を通すとキーの順序まで正規化されてしまうため
-export function memoryBodyStart(content: string): number {
-  const lines = content.split('\n');
-  if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return 0;
-  const closingIndex = lines.findIndex(
-    (line, index) => index > 0 && line.trim() === FRONTMATTER_DELIMITER,
-  );
-  if (closingIndex === -1) return 0;
-  let offset = 0;
-  for (let index = 0; index <= closingIndex; index += 1) {
-    offset += (lines[index]?.length ?? 0) + 1;
-  }
-  // content.length へ詰める: 本文が無いのに本文が在るように見えるのを避けるため
-  return Math.min(offset, content.length);
-}
-
-interface MemoryFrontmatterPatch {
-  description?: string;
-  type?: string;
-  parent?: string;
-}
-
-// キーの並びは `description` → `type` → `parent` に正規化する: 既存の順序を保つ処理ではない
-function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
-  const lines = [FRONTMATTER_DELIMITER];
-  if (fields.description !== undefined) lines.push(`description: ${fields.description}`);
-  if (fields.type !== undefined) lines.push(`type: ${fields.type}`);
-  if (fields.parent !== undefined) lines.push(`parent: ${fields.parent}`);
-  lines.push(FRONTMATTER_DELIMITER);
-  return lines.join('\n');
-}
-
-interface MemoryFrontmatterLineBreak {
-  position: number;
-  char: '\n' | '\r';
-  excerpt: string;
-}
-
-const MEMORY_LINE_BREAK_EXCERPT_RADIUS = 20;
-
-function escapeMemoryLineBreaksForDisplay(value: string): string {
-  return value.replace(/\r\n/g, '\\r\\n').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-}
-
-// `\r` も検査する: 単独の `\r` は目次の1行にそのまま残り、読めない行を作るため
-export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatterLineBreak | null {
-  const match = /[\r\n]/.exec(value);
-  if (match === null) return null;
-  const index = match.index;
-  const char = match[0] as '\n' | '\r';
-  const start = Math.max(0, index - MEMORY_LINE_BREAK_EXCERPT_RADIUS);
-  const end = Math.min(value.length, index + 1 + MEMORY_LINE_BREAK_EXCERPT_RADIUS);
-  const before = escapeMemoryLineBreaksForDisplay(value.slice(start, index));
-  const breakMark = escapeMemoryLineBreaksForDisplay(char);
-  const after = escapeMemoryLineBreaksForDisplay(value.slice(index + 1, end));
-  const excerpt =
-    (start > 0 ? '…' : '') + before + breakMark + after + (end < value.length ? '…' : '');
-  return { position: index + 1, char, excerpt };
-}
-
-// 本文を引数に取らず `content` をそのまま運ぶ: 本文がモデルのツール呼び出しの引数に現れないので、本文が途中で切れて通る経路が構造的に無い
-export function applyMemoryFrontmatterPatch(
-  content: string,
-  patch: MemoryFrontmatterPatch,
-): string {
-  const state = parseMemoryFrontmatter(content);
-  if (state.kind === 'malformed') {
-    throw new Error(
-      'applyMemoryFrontmatterPatch: malformed な frontmatter にはパッチを当てられない' +
-        '（呼び手が先に断ること）',
-    );
-  }
-  const priorFields: MemoryFrontmatterPatch = state.kind === 'parsed' ? state : {};
-  const nextFields: MemoryFrontmatterPatch = {
-    description: patch.description ?? priorFields.description,
-    type: patch.type ?? priorFields.type,
-    parent: patch.parent ?? priorFields.parent,
-  };
-  const body = frontmatterBody(content);
-  const header = serializeMemoryFrontmatter(nextFields);
-  if (body.length > 0) return `${header}\n${body}`;
-  // 本文が空のとき `${header}\n` も `header` も無条件には返さない: `frontmatterBody` は閉じの `---` の後ろの改行の有無に関わらず空文字を返すので、元の文書の末尾で決める
-  return content.endsWith('\n') ? `${header}\n` : header;
-}
-
-const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact', 'indexed']);
-
-// 綴り間違いの値を黙って書かせない: resolveMemoryDocKind が premise へ倒すので区分は変わらないのに、書き手には変えたつもりが残るため
-export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
-  return KNOWN_DOC_KINDS.has(value as MemoryDocKind);
-}
-
-// 区分が無い・読めない・未知の値は fact / indexed にせず premise へ倒す: 誤りが「余分に全文を焼く」だけで self_status の総文字数から気づけるが、fact にすると文書が黙って目次の1行へ縮み、気づく手段が失われるため
-export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): MemoryDocKind {
-  if (frontmatter.kind !== 'parsed') return 'premise';
-  const { type } = frontmatter;
-  if (type !== undefined && KNOWN_DOC_KINDS.has(type as MemoryDocKind))
-    return type as MemoryDocKind;
-  return 'premise';
-}
-
-export function assertNeverMemoryDocKind(kind: never): never {
-  return assertNever('未知の記憶の区分', kind);
-}
-
-export function resolveMemoryDescriptionFreshness(input: {
-  description: string | undefined;
-  describedAt: string | undefined;
-  updatedAt: string;
-  describedBytes: number | undefined;
-  describedBytesAt: string | undefined;
-  currentBytes: number;
-}): MemoryDescriptionFreshness {
-  if (input.description === undefined) return { kind: 'absent' };
-  if (input.describedAt === undefined) return { kind: 'unknown' };
-  if (input.describedAt >= input.updatedAt) return { kind: 'fresh' };
-  // clamp はここ1か所に置く: 呼び出し側や表示側でも重ねると同じ異常を2箇所が別々に隠し、片方が「0（＝最新）」に化けても気づけないため
-  const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
-  const drift = resolveMemoryDescriptionDrift({
-    describedBytes: input.describedBytes,
-    describedBytesAt: input.describedBytesAt,
-    describedAt: input.describedAt,
-    currentBytes: input.currentBytes,
-  });
-  return { kind: 'stale', staleForMs, drift };
-}
-
-function resolveMemoryDescriptionDrift(input: {
-  describedBytes: number | undefined;
-  describedBytesAt: string | undefined;
-  describedAt: string;
-  currentBytes: number;
-}): MemoryDescriptionDrift {
-  // `describedBytes` が無いことを 0（変化なし）に見せない: 取れなかったことを変化なしに化けさせないため
-  if (input.describedBytes === undefined) return { kind: 'unrecorded' };
-  // `describedBytesAt` が無いときも measured: describedAt と describedBytes は必ず同時に立つので、無いのは `describedBytesAt` を持たない旧い行だけで、その describedBytes は describedAt と同時刻のものだから
-  if (input.describedBytesAt === undefined || input.describedBytesAt <= input.describedAt) {
-    return {
-      kind: 'measured',
-      describedBytes: input.describedBytes,
-      currentBytes: input.currentBytes,
-      deltaBytes: input.currentBytes - input.describedBytes,
-    };
-  }
-  return {
-    kind: 'at-least',
-    baselineBytes: input.describedBytes,
-    baselineAt: input.describedBytesAt,
-    currentBytes: input.currentBytes,
-    deltaBytes: input.currentBytes - input.describedBytes,
-  };
-}
+export {
+  applyMemoryFrontmatterPatch,
+  assertNeverMemoryCreatedAt,
+  assertNeverMemoryDocKind,
+  deriveMemoryFrontmatter,
+  findMemoryFrontmatterLineBreak,
+  formatMemoryCreatedAt,
+  isKnownMemoryDocKind,
+  memoryBodyStart,
+  nextDescribedState,
+  parseMemoryFrontmatter,
+  resolveMemoryDescriptionFreshness,
+  resolveMemoryDocKind,
+  toMemoryCreatedAt,
+} from './memory-frontmatter.js';
+export {
+  cutMemorySections,
+  describeMemorySectionMoveHierarchyJumpWarning,
+  findMemorySectionHierarchyJumps,
+  findOverlappingMemorySections,
+  lookupMemorySection,
+  MEMORY_PROMPT_OUTLINE_HEADING_WIDTH,
+  MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
+  MEMORY_SECTION_MOVE_LIST_BUDGET,
+  memorySectionId,
+  scanMemorySections,
+} from './memory-sections.js';
+export type { MemorySection, MemorySectionLookup } from './memory-sections.js';
 
 // 鮮度の印の一式は `memory-freshness-format.ts` に置く（CLI と同じ1本）。ここからも同じ名前で出す
 export {
   assertNeverMemoryDescriptionDrift,
   assertNeverMemoryDescriptionFreshness,
 } from './memory-freshness-format.js';
-
-// fs と pg で別々に書かない: 器ごとに frontmatter の解釈を書くと食い違うため
-export function deriveMemoryFrontmatter(input: {
-  content: string;
-  updatedAt: string;
-  describedAt: string | undefined;
-  describedBytes: number | undefined;
-  describedBytesAt: string | undefined;
-  currentBytes: number;
-}): {
-  frontmatter: MemoryFrontmatterState;
-  kind: MemoryDocKind;
-  description: string | undefined;
-  parent: string | undefined;
-  descriptionFreshness: MemoryDescriptionFreshness;
-} {
-  const frontmatter = parseMemoryFrontmatter(input.content);
-  const kind = resolveMemoryDocKind(frontmatter);
-  const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
-  const parent = frontmatter.kind === 'parsed' ? frontmatter.parent : undefined;
-  const descriptionFreshness = resolveMemoryDescriptionFreshness({
-    description,
-    describedAt: input.describedAt,
-    updatedAt: input.updatedAt,
-    describedBytes: input.describedBytes,
-    describedBytesAt: input.describedBytesAt,
-    currentBytes: input.currentBytes,
-  });
-  return { frontmatter, kind, description, parent, descriptionFreshness };
-}
-
-// 3つの値を1つのオブジェクトで返す: 片方だけ進む状態を型の上で作れなくするため
-export function nextDescribedState(input: {
-  priorContent: string | null;
-  nextContent: string;
-  priorDescribedAt: string | undefined;
-  priorDescribedBytes: number | undefined;
-  priorDescribedBytesAt: string | undefined;
-  priorBytes: number | undefined;
-  priorUpdatedAt: string | undefined;
-  writtenAt: string;
-  writtenBytes: number;
-}): {
-  describedAt: string | undefined;
-  describedBytes: number | undefined;
-  describedBytesAt: string | undefined;
-} {
-  const priorDescription =
-    input.priorContent === null
-      ? undefined
-      : ((state) => (state.kind === 'parsed' ? state.description : undefined))(
-          parseMemoryFrontmatter(input.priorContent),
-        );
-  const nextState = parseMemoryFrontmatter(input.nextContent);
-  const nextDescription = nextState.kind === 'parsed' ? nextState.description : undefined;
-
-  if (priorDescription !== nextDescription) {
-    return {
-      describedAt: input.writtenAt,
-      describedBytes: input.writtenBytes,
-      describedBytesAt: input.writtenAt,
-    };
-  }
-
-  // 基準点は書き込みのたびに進めない: 進めると常に直前の1回ぶんしか測れなくなるため
-  if (input.priorDescribedBytes !== undefined) {
-    return {
-      describedAt: input.priorDescribedAt,
-      describedBytes: input.priorDescribedBytes,
-      describedBytesAt: input.priorDescribedBytesAt,
-    };
-  }
-
-  if (input.priorBytes === undefined || input.priorUpdatedAt === undefined) {
-    return {
-      describedAt: input.priorDescribedAt,
-      describedBytes: undefined,
-      describedBytesAt: undefined,
-    };
-  }
-  // 書いた後の値（writtenBytes / writtenAt）を基準にしない: 直後の読み出しが deltaBytes: 0 になり、欠測が「変わっていない」に見えるため
-  return {
-    describedAt: input.priorDescribedAt,
-    describedBytes: input.priorBytes,
-    describedBytesAt: input.priorUpdatedAt,
-  };
-}
 
 // 記憶の全文（branded type — `renderMemoryDocuments` だけが作れる。4-14）
 // 生の文字列を `buildCloneSystemPrompt` に渡すと tsc が落ちる: 記憶が文字列になる経路を `renderMemoryDocuments` の1つに閉じるため
@@ -505,27 +268,6 @@ function flattenMemoryToc(roots: readonly ResolvedTocNode[]): ResolvedTocNode[] 
   }
   for (const root of roots) walk(root);
   return out;
-}
-
-export function assertNeverMemoryCreatedAt(createdAt: never): never {
-  return assertNever('未知の記憶作成時刻の状態', createdAt);
-}
-
-// 索引に作成時刻が無い記憶は `unknown` にする: 更新時刻などで補うと、作成された時刻を知っているように見えるため
-export function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
-  return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
-}
-
-// 根拠が無ければ「不明」と明言する: 値を持たないことを空文字で隠さないため
-export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
-  switch (createdAt.kind) {
-    case 'known':
-      return createdAt.at;
-    case 'unknown':
-      return '不明';
-    default:
-      return assertNeverMemoryCreatedAt(createdAt);
-  }
 }
 
 // 5つを畳まない: 読み手が次に疑う先が違う。parent-not-rendered で「見つからない」と書かない: クローンが記憶の階層が壊れたと読んで確かめに行くため
@@ -853,18 +595,6 @@ function renderIndexedCard(part: MemoryPart): string {
         'memory_outline → memory_section_read で開く）。';
 
   return [head, summaryLine, sectionsLine].join('\n');
-}
-
-// 焼き込みの行の見出しの幅: 長い見出しは逐語の引用を含み、目次の予算の大半を食うため。節id は切らない（節を開く口は変わらない）
-export const MEMORY_PROMPT_OUTLINE_HEADING_WIDTH = 80;
-
-// 幅を超えるときだけ切る（幅 − 1 字 + 「…」）。サロゲートペアの上位だけが残ると壊れた文字になるので、そのときは1字手前で切る
-function truncateOutlineHeading(heading: string): string {
-  if (heading.length <= MEMORY_PROMPT_OUTLINE_HEADING_WIDTH) return heading;
-  let cut = heading.slice(0, MEMORY_PROMPT_OUTLINE_HEADING_WIDTH - 1);
-  const last = cut.charCodeAt(cut.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-  return `${cut}…`;
 }
 
 // 行から見出しの候補を返す（先に試すものから）: 焼き込みの行（文字数なし）と道具の行（`— N 文字` 付き）の両方を読める。
@@ -1391,14 +1121,6 @@ export function renderMemoryListing(
 // 本文そのものは載せない: 載せるのは見出しの文字列と数だけ（AGENTS.md「秘密の扱い」）
 const MEMORY_MISSING_HEADINGS_BUDGET = 600;
 
-function formatMemoryCharCount(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
-function formatMemoryCharDelta(delta: number): string {
-  return delta >= 0 ? `+${formatMemoryCharCount(delta)}` : formatMemoryCharCount(delta);
-}
-
 // 拾いすぎる側へ倒す: 拾い漏れは本物の見出しが消えたのに「なし」と返ってその場で気づく手段が無いが、拾いすぎは呼び手が余分に1つ確かめて済むため。コードフェンスの中を除外しない: 途中で切れた本文ではフェンスの内外を見誤り、以降の本物の見出しを丸ごと落とすため
 // setext 見出しは数えない: `---` が frontmatter の閉じと同じ形で、区別に本文全体の文脈が要るため
 function extractMemoryHeadings(content: string): string[] {
@@ -1610,12 +1332,6 @@ export function describeMemoryReinjectionEstimate(
   return lines.join('\n');
 }
 
-function formatMemoryPercentDelta(percent: number): string {
-  const rounded = Math.round(percent * 10) / 10;
-  if (rounded === 0) return '0%';
-  return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
-}
-
 // 閾値を置かない: 「畳め」「危ない」に相当する語は使わず、判断はクローンが下すため
 // 引けないときも黙って0や現在値へ倒さない: どちらの数かで意味が変わるので、現在値であることを文言に明記する
 // delta === 0 のとき増えたと読める文言を出さない: 0 に `+` を付けた数を「増える」に埋め込むと変化が無いのに増加の文に読めるため
@@ -1735,273 +1451,12 @@ export function describeMemoryTidyTargets(documents: readonly MemoryPart[]): str
   );
 }
 
-export interface MemorySection {
-  id: string;
-  heading: string;
-  depth: number;
-  start: number;
-  end: number;
-  chars: number;
-}
-
-interface MemorySectionScan {
-  bodyStart: number;
-  sections: MemorySection[];
-}
-
-// 見出しの文字列で指す形にしない: 書き換えを検出する材料が引数の中から消え、id が中身で変わることがこの道具の唯一の並行制御になっているため。前半8桁（見出し）を足す: 「そんな id は無い」と「その id は古い」の断りを分けるため
-export function memorySectionId(heading: string, body: string): string {
-  const digest = (value: string): string =>
-    createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 8);
-  return `${digest(heading)}-${digest(`${heading}\n${body}`)}`;
-}
-
-const SECTION_HEADING_PATTERN = /^(#{1,6})\s+(.+?)\s*$/;
-
-const SECTION_FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-
-// `extractMemoryHeadings` と1本にまとめない: あちらは拾いすぎる側、こちらは拾わない側へ倒す向きが逆で、こちらが拾いすぎるとフェンスの開きだけが出どころに残り、以降が全部コードとして描かれるため
-export function scanMemorySections(content: string): MemorySectionScan {
-  const bodyStart = memoryBodyStart(content);
-  const body = content.slice(bodyStart);
-  const lines = body.split('\n');
-
-  // 行の再結合（`join`）を通さない: 通すと改行コードの扱いで1バイト動くため
-  const lineStart: number[] = [];
-  let offset = bodyStart;
-  for (const line of lines) {
-    lineStart.push(offset);
-    offset += line.length + 1;
-  }
-
-  interface Open {
-    depth: number;
-    heading: string;
-    // 節 id は行そのもの（CRLF の `\r` 込み）で計算する: 表示値（`heading`）で計算し直すと、保存済みの CRLF の文書の節 id がすべて変わるため
-    rawHeading: string;
-    start: number;
-    bodyFrom: number;
-  }
-  const open: Open[] = [];
-  const sections: MemorySection[] = [];
-  let fence: { marker: string; length: number } | null = null;
-
-  const close = (upTo: number, minDepth: number): void => {
-    while (open.length > 0 && (open[open.length - 1] as Open).depth >= minDepth) {
-      const entry = open.pop() as Open;
-      const end = upTo;
-      sections.push({
-        id: memorySectionId(entry.rawHeading, content.slice(Math.min(entry.bodyFrom, end), end)),
-        heading: entry.heading,
-        depth: entry.depth,
-        start: entry.start,
-        end,
-        chars: end - entry.start,
-      });
-    }
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] as string;
-    const fenceMatch = SECTION_FENCE_PATTERN.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1] as string;
-      const info = fenceMatch[2] as string;
-      if (fence === null) {
-        if (!(marker.startsWith('`') && info.includes('`'))) {
-          fence = { marker: marker[0] as string, length: marker.length };
-          continue;
-        }
-      } else if (
-        marker.startsWith(fence.marker) &&
-        marker.length >= fence.length &&
-        info.trim().length === 0
-      ) {
-        fence = null;
-        continue;
-      }
-    }
-    if (fence !== null) continue;
-
-    const headingMatch = SECTION_HEADING_PATTERN.exec(line);
-    if (!headingMatch) continue;
-    const depth = (headingMatch[1] as string).length;
-    const start = lineStart[index] as number;
-    // 「同じ深さ」に狭めない: `###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶため
-    close(start, depth);
-    open.push({
-      depth,
-      // 表示値は CRLF の `\r` を落とす: 残すと outline の「— N 文字」が端末で行頭へ戻り、見出しを上書きするため
-      heading: line.endsWith('\r') ? line.slice(0, -1) : line,
-      rawHeading: line,
-      start,
-      bodyFrom: start + line.length + 1,
-    });
-  }
-  close(content.length, 1);
-
-  sections.sort((a, b) => a.start - b.start);
-  return { bodyStart, sections };
-}
-
-export type MemorySectionLookup =
-  | { kind: 'found'; section: MemorySection }
-  | { kind: 'ambiguous'; sections: MemorySection[] }
-  | { kind: 'stale'; sections: MemorySection[] }
-  | { kind: 'absent' };
-
-// ambiguous の片方を黙って選ばない: 消える側が観測できず取り違えに気づけないため。stale と absent を畳まない: 疑う先が違うため
-export function lookupMemorySection(
-  sections: readonly MemorySection[],
-  id: string,
-): MemorySectionLookup {
-  const exact = sections.filter((section) => section.id === id);
-  if (exact.length === 1) return { kind: 'found', section: exact[0] as MemorySection };
-  if (exact.length > 1) return { kind: 'ambiguous', sections: exact };
-  const headingKey = `${id.split('-')[0] ?? ''}-`;
-  const sameHeading = sections.filter((section) => section.id.startsWith(headingKey));
-  if (sameHeading.length > 0) return { kind: 'stale', sections: sameHeading };
-  return { kind: 'absent' };
-}
-
-// 並べ替えた列（ordered）も返す: 呼び手が再度並べ替えると同じ規則が2箇所に立ち、片方を壊してももう片方が結果を正しくして歯が赤くならないため。重なりの検査をここに重ねない: 片方を直したときにもう片方が古いままになる経路ができるため
-export function cutMemorySections(
-  content: string,
-  sections: readonly MemorySection[],
-): { nextContent: string; cut: string; ordered: readonly MemorySection[] } {
-  const ordered = [...sections].sort((a, b) => a.start - b.start);
-
-  let nextContent = '';
-  let cut = '';
-  let cursor = 0;
-  for (const section of ordered) {
-    nextContent += content.slice(cursor, section.start);
-    cut += content.slice(section.start, section.end);
-    cursor = section.end;
-  }
-  nextContent += content.slice(cursor);
-
-  return { nextContent, cut, ordered };
-}
-
-// 兄弟（隣り合う節）は重なりとして拾わない: 判定を `<=` にすると、隣り合う兄弟節をまとめて移す正当な呼び出しまで断るため
-export function findOverlappingMemorySections(
-  sections: readonly MemorySection[],
-): { first: MemorySection; second: MemorySection } | null {
-  const sorted = [...sections].sort((a, b) => a.start - b.start);
-  for (let index = 1; index < sorted.length; index += 1) {
-    const prev = sorted[index - 1] as MemorySection;
-    const next = sorted[index] as MemorySection;
-    if (next.start < prev.end) return { first: prev, second: next };
-  }
-  return null;
-}
-
-interface MemorySectionHierarchyJump {
-  readonly section: MemorySection;
-  readonly parent: MemorySection;
-  readonly gap: number;
-}
-
-export function findMemorySectionHierarchyJumps(
-  allSections: readonly MemorySection[],
-  root: MemorySection,
-): readonly MemorySectionHierarchyJump[] {
-  const descendants = allSections
-    .filter(
-      (section) => section.id !== root.id && section.start >= root.start && section.end <= root.end,
-    )
-    .sort((a, b) => a.start - b.start);
-
-  const jumps: MemorySectionHierarchyJump[] = [];
-  const stack: MemorySection[] = [root];
-  for (const section of descendants) {
-    // スタックの pop の不等号は `<=` にする: `<` にすると兄弟どうしで直前の兄弟が親として誤って残るため。root はスタックの底に置いたまま pop しない: 直近の親が見つからない万一の倒れ先を root に固定するため
-    while (stack.length > 1 && (stack[stack.length - 1] as MemorySection).end <= section.start) {
-      stack.pop();
-    }
-    const parent = stack[stack.length - 1] as MemorySection;
-    if (section.depth - parent.depth > 1) {
-      jumps.push({ section, parent, gap: section.depth - parent.depth });
-    }
-    stack.push(section);
-  }
-  return jumps;
-}
-
-export const MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET = 800;
-
-// 拒否ではなく警告にとどめる: 階層飛びは妥当な構造の可能性が残り、機械的に一意に決まる不正ではなく意味の妥当性の話で、道具には判定できないため
-export function describeMemorySectionMoveHierarchyJumpWarning(
-  allSections: readonly MemorySection[],
-  roots: readonly MemorySection[],
-): string | null {
-  const perRoot = roots.map((root) => ({
-    root,
-    descendantCount: allSections.filter(
-      (section) => section.id !== root.id && section.start >= root.start && section.end <= root.end,
-    ).length,
-    jumps: findMemorySectionHierarchyJumps(allSections, root),
-  }));
-
-  const descendantTotal = perRoot.reduce((sum, entry) => sum + entry.descendantCount, 0);
-  const allJumps = perRoot.flatMap((entry) => entry.jumps);
-  if (allJumps.length === 0) return null;
-
-  const lines = allJumps.map(
-    (jump) =>
-      `- 「${jump.section.heading}」は直近の親「${jump.parent.heading}」より ${jump.gap} 階層深い（1段飛ばし以上）`,
-  );
-  const listing = renderListing(lines, {
-    budget: MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET,
-    omitted: ({ rest, total }) =>
-      `…ほか ${rest} 件は一覧から省略（階層が飛んでいる子孫は全 ${total} 件）。`,
-  });
-
-  return (
-    `⚠ 移した節の子孫 ${descendantTotal} 件のうち ${allJumps.length} 件は、見出しの階層が` +
-    '直近の親より2段以上飛んでいる（例: `##` の子に `####` が直接ぶら下がる、間の `###` が無い）。' +
-    '親と無関係な話題が、書式の都合で子として一緒に運ばれた可能性がある——妥当な構造のこともあるので' +
-    '断ってはいない。移した先を memory_outline で確かめ、無関係なら memory_section_move で切り離すこと。\n' +
-    listing
-  );
-}
-
-// 切れるのは一覧の表示だけ: 移動そのものはこの一覧を組む前に全件の検査を通って一括で終わっているので、「一覧から省略」であって「移動していない」ではない
-export const MEMORY_SECTION_MOVE_LIST_BUDGET = 2_000;
-
 export const MEMORY_OUTLINE_BUDGET = 8_000;
 
 // `side` を窓（オフセット）にしない: 予算は文字数なので何節入るかは見出しの長さで動き、末尾の N 節を添字で当てる材料が呼び手の手元に無いため
 export const MEMORY_OUTLINE_SIDES = ['head', 'tail'] as const;
 
 type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
-
-// 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
-// 重複は `allSections`（文書の全節）で数える: 出す範囲（offset・q の窓）の中だけで数えると、窓の外に同じ id の節があっても印が付かず、
-// memory_section_move（全節で一意かを見る）に断られる id を使えると読ませるため
-// 'tool' は道具の応答の行（文字数あり・見出しは全文）、'prompt' は毎ターンの焼き込みの行（文字数なし・長い見出しは切る）。
-// 道具の応答の形は変えない: 全文と文字数を見たい読み手は memory_outline へ来るため
-type OutlineLineForm = 'tool' | 'prompt';
-
-const OUTLINE_AMBIGUOUS_MARKER =
-  ' ⚠この id は複数箇所に当たる。この id では動かせない（memory_section_move は断る）';
-
-function memorySectionLines(
-  sections: readonly MemorySection[],
-  allSections: readonly MemorySection[] = sections,
-  form: OutlineLineForm = 'tool',
-): string[] {
-  const counts = new Map<string, number>();
-  for (const section of allSections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
-  return sections.map((section) => {
-    const indent = '  '.repeat(section.depth - 1);
-    const ambiguous = (counts.get(section.id) ?? 0) > 1 ? OUTLINE_AMBIGUOUS_MARKER : '';
-    return form === 'prompt'
-      ? `${indent}[${section.id}] ${truncateOutlineHeading(section.heading)}${ambiguous}`
-      : `${indent}[${section.id}] ${section.heading} — ${formatMemoryCharCount(section.chars)} 文字${ambiguous}`;
-  });
-}
 
 // 値を定数から組み立てる: 文字列へ直書きすると値が動いたときに断り書きのほうが嘘をつくため。memory_outline の応答を「目次」と呼ばない: 目次は3つの別のものを指し、予算の値の取り違えの発端だったため。`sibling` が値の一致を直接比較する: どちらかの値だけが動いたときに嘘の一致を言い続けないため
 function renderMemoryOutlineBudgetNote(): string {
