@@ -1,5 +1,7 @@
 import { stdin } from 'node:process';
 import { stderr, stdout } from './terminal-out.js';
+import type { InferRequestType, InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
 
 import { CREDENTIAL_NAME } from '@alteroid/core/cli-light';
 import { hasRunnerPushFailure } from '@alteroid/logic';
@@ -15,27 +17,17 @@ import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 import { readBodyArg } from './input-errors.js';
 
-interface CredentialFingerprint {
-  name: string;
-  sha256: string;
-  updatedAt: string;
-  scope: 'all' | 'app' | 'runner';
-  secret: boolean;
-  value?: string;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり `fetchDaemon` で撃つ（`createClient` は呼ばない）
+type CredentialsView = InferResponseType<DaemonClient['credentials']['$get'], 200>;
+type CredentialScope = CredentialsView['credentials'][number]['scope'];
+// `restartRequired` はデーモンの再起動まで効かない名前（#4830）。無ければ空
+type CredentialsUpdateView = InferResponseType<DaemonClient['credentials']['$put'], 200>;
+type CredentialInput = InferRequestType<
+  DaemonClient['credentials']['$put']
+>['json']['credentials'][number];
 
-interface CredentialsView {
-  credentials: CredentialFingerprint[];
-}
-
-interface CredentialsUpdateView {
-  credentials: CredentialFingerprint[];
-  // デーモンの再起動まで効かない名前（#4830）。無ければ空
-  restartRequired: string[];
-  runners: { runnerId: string; ok: boolean; error?: string }[];
-}
-
-export function describeScope(scope: 'all' | 'app' | 'runner'): string {
+export function describeScope(scope: CredentialScope): string {
   switch (scope) {
     case 'all':
       return 'all（共通）';
@@ -213,10 +205,7 @@ function reportRunners(view: CredentialsUpdateView): void {
   }
 }
 
-async function put(
-  target: Target,
-  credentials: { name: string; value: string; scope?: string; secret?: boolean }[],
-) {
+async function put(target: Target, credentials: CredentialInput[]) {
   return request(target, '/credentials', {
     method: 'PUT',
     body: JSON.stringify({ credentials }),
