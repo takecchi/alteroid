@@ -535,12 +535,11 @@ describe('解除ブロック（#releaseRequested が立っているとき）', (
         "segments": {
           "stale-release-flag": [
             "journal(human/inbound/conv) 一件目 @+1",
-            "journal(self/outbound) [計器] 利用上限に当たった。この文言で仕事 @+94",
-            "emit(usage_limited) @+98",
-            "journal(human/inbound/conv) 二件目 @+100",
-            "journal(human/outbound/conv) わかった @+126",
-            "emit(done) @+144",
-            "inbox.remove(evt-一件目) @+150",
+            "journal(self/outbound) [計器] 利用上限に当たった。この文言で仕事 @+95",
+            "emit(usage_limited) @+99",
+            "journal(human/inbound/conv) 二件目 @+101",
+            "journal(human/outbound/conv) わかった @+127",
+            "emit(done) @+145",
           ],
         },
         "sessions": 1,
