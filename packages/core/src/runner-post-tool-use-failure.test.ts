@@ -176,13 +176,12 @@ describe('PostToolUseFailure の配線（Issue #929）', () => {
     expect(started.options.hooks?.PostToolUseFailure?.[0]?.hooks?.length).toBe(1);
   });
 
-  it('既存の6本（PreToolUse / PostToolUse / PreCompact / UserPromptSubmit / SubagentStop / Stop）はそのまま載っている', async () => {
+  it('既存の5本（PreToolUse / PostToolUse / PreCompact / SubagentStop / Stop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
     expect(hooks?.PreToolUse?.length).toBe(1);
     expect(hooks?.PostToolUse?.length).toBe(1);
     expect(hooks?.PreCompact?.length).toBe(1);
-    expect(hooks?.UserPromptSubmit?.length).toBe(1);
     expect(hooks?.SubagentStop?.length).toBe(1);
     expect(hooks?.Stop?.length).toBe(1);
   });

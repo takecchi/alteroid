@@ -15,7 +15,6 @@ interface FakeSession {
   inputs: string[];
   finish(text: string): Promise<void>;
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
-  submitPrompt(extra?: Record<string, unknown>): Promise<void>;
   taskStarted(taskId: string, extra?: Record<string, unknown>): Promise<void>;
   taskNotification(taskId: string, extra?: Record<string, unknown>): Promise<void>;
   endStream(): void;
@@ -35,10 +34,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
       else buffered.push(message);
     };
 
-    async function fireHook(
-      name: 'PostToolUse' | 'UserPromptSubmit',
-      input: Record<string, unknown>,
-    ): Promise<void> {
+    async function fireHook(name: 'PostToolUse', input: Record<string, unknown>): Promise<void> {
       const matchers = options.hooks?.[name] as HookCallbackMatcher[] | undefined;
       if (matchers === undefined) return;
       for (const matcher of matchers) {
@@ -67,13 +63,6 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           tool_name: tool,
           tool_input: { a: 1 },
           transcript_path: '/tmp/does-not-exist.jsonl',
-          ...extra,
-        });
-      },
-      async submitPrompt(extra = {}) {
-        await fireHook('UserPromptSubmit', {
-          hook_event_name: 'UserPromptSubmit',
-          prompt: 'なにかの一言',
           ...extra,
         });
       },
@@ -198,7 +187,6 @@ describe('runner は worker_wait を出さない（計測をやめた。旧 runn
 
     await session.taskStarted('task-1', { task_type: 'local_agent' });
     await session.usedTool('Bash');
-    await session.submitPrompt({ source: 'system' });
     await session.finish('turn1');
     await session.taskNotification('task-1');
     await session.finish('完了通知を契機に回った回');

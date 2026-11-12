@@ -29,11 +29,6 @@ export interface AgentPreCompactRecord {
   signal?: AbortSignal;
 }
 
-export interface AgentUserPromptSubmitRecord {
-  agentId?: string;
-  source?: string;
-}
-
 export interface AgentSessionStartRecord {
   // 読めなければ欠ける。string のまま運ぶ: 値の集合は provider ごとに違いうるため
   source?: string;

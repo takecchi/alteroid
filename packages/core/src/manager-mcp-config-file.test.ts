@@ -36,7 +36,6 @@ function managerRequest(
     onPostToolUse: noop,
     onPostToolUseFailure: () => undefined,
     onPreCompact: () => undefined,
-    onUserPromptSubmit: () => undefined,
     onSubagentStop: noop,
     onStop: () => undefined,
     onPreToolUse: () => ({ kind: 'continue' }),

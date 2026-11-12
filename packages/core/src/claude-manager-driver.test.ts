@@ -45,7 +45,6 @@ function makeSpec(overrides: Partial<AgentManagerSessionSpec> = {}): AgentManage
     onPostToolUse: noop,
     onPostToolUseFailure: async () => undefined,
     onPreCompact: async () => undefined,
-    onUserPromptSubmit: async () => undefined,
     onSubagentStop: noop,
     onStop: async () => undefined,
     ...overrides,
