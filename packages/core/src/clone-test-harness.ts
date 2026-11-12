@@ -30,6 +30,8 @@ export function fakeSdk(
   reply: (input: string) => string = () => 'わかった',
   options: {
     delayMs?: number;
+    /** 返答を決めたあと、結果を流す前に待たせる（ターンの中で道具の呼びを終わらせたい試験向け。壁時計で待たない） */
+    afterReply?: (input: string) => Promise<unknown> | undefined;
     failWith?: string;
     modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
     resultUsage?: (callIndex: number) => Record<string, unknown> | undefined;
@@ -103,7 +105,10 @@ export function fakeSdk(
         }
         const idx = turnIndex;
         turnIndex += 1;
-        yield* turn(reply(text), idx);
+        const replyText = reply(text);
+        // 指定が無いときは await しない: microtask の周回数を縛る試験（clone-pump-quota-pin）の数が1つ動くため
+        if (options.afterReply !== undefined) await options.afterReply(text);
+        yield* turn(replyText, idx);
         if (options.endSessionAfterTurn === idx) return;
       }
     }

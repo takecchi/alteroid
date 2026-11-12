@@ -1,265 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { createClone } from './clone.js';
-import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry } from './runner-protocol.js';
-import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
-import { fakeGatedSdk, fakeSdk, setup, waitFor, waitForDone } from './clone-test-harness.js';
+import { createMemoryStores, humanMessage } from './testing.js';
+import { setup, waitForDone } from './clone-test-harness.js';
 
-describe('inbox_flow（受信箱の到着・配達・消し込み・滞留を日誌へ残す。Issue #783 段0）', () => {
-  it('人間の発言を1件処理すると、その窓の arrived / delivered に human_message が型別で載る', async () => {
-    const s = setup(() => 'わかった');
-    s.clone.post(humanMessage('やあ'));
-    await waitForDone(s.events);
-
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
-    expect(rows).toHaveLength(1);
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(row.arrived).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-    expect(row.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-    expect(row.settled).toEqual({ total: 0, byType: [] });
-    expect(typeof row.windowStartedAt).toBe('string');
-
-    await s.clone.stop();
-  });
-
-  it('2件目の窓には、1件目の消し込みが型別で載る（`settled` が1窓遅れて現れることの固定）', async () => {
+// `inbox_flow`（受信箱の到着・配達・消し込み・滞留）は新しく書かない。種別は古い行を読むために schema に残す
+describe('inbox_flow は新しい日誌に書かない', () => {
+  it('ターンを2回回しても、日誌に inbox_flow の行が1行も増えない（ターンの記録そのものは書かれる）', async () => {
     const s = setup(() => 'わかった');
     s.clone.post(humanMessage('1件目'));
     await waitForDone(s.events);
     s.clone.post(humanMessage('2件目'));
-    await waitFor(
-      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
-      '2本目の inbox_flow 行',
-    );
-
-    // order: 'asc' を明示する: JournalStore.list() の既定は desc で、既定のままだと窓の順序が逆になるため
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
-    expect(rows).toHaveLength(2);
-    const [first, second] = rows;
-    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
-      throw new Error('inbox_flow が日誌に無い');
-    }
-
-    expect(first.arrived.total).toBe(1);
-    expect(first.settled).toEqual({ total: 0, byType: [] });
-
-    expect(second.arrived).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-    expect(second.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-    expect(second.settled).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-
+    await waitForDone(s.events);
     await s.clone.stop();
+
+    expect(await s.stores.journal.list({ types: ['inbox_flow'] })).toEqual([]);
+    const all = await s.stores.journal.list({});
+    expect(all.some((entry) => entry.type === 'turn_usage' || entry.type === 'exchange')).toBe(
+      true,
+    );
+    expect(all.filter((entry) => entry.type === 'inbox_flow')).toEqual([]);
   });
 
-  it('拾い直しの配達があると delivered が arrived を上回る（Issue #1049。器を跨いだ拾い直しは、この窓には arrived していない）', async () => {
+  it('過去に書かれた inbox_flow の行は、新しい行と並んでいても読み込みを壊さない', async () => {
     const stores = createMemoryStores();
-    const leftover = humanMessage('前の器の置き土産');
-    await stores.inbox.put(leftover, '2026-09-01T00:00:00.000Z');
+    await stores.journal.append({
+      type: 'inbox_flow',
+      windowStartedAt: '2026-01-01T00:00:00.000Z',
+      arrived: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
+      settled: { total: 0, byType: [] },
+      pending: { count: 0 },
+    });
 
     const s = setup(() => 'わかった', stores);
-    await waitForDone(s.events);
-
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-
-    expect(row.delivered).toEqual({ total: 1, byType: [{ type: 'human_message', count: 1 }] });
-    expect(row.arrived).toEqual({ total: 0, byType: [] });
-    expect(row.delivered.total).toBeGreaterThan(row.arrived.total);
-
-    await s.clone.stop();
-  });
-
-  it('`InboxStore.pending()` が読めない窓は書かず、カウンタも失わない（次の窓へ持ち越す）', async () => {
-    const stores = createMemoryStores();
-    const originalPending = stores.inbox.pending.bind(stores.inbox);
-    let fail = true;
-    stores.inbox.pending = async () => {
-      if (fail) throw new Error('inbox.pending が壊れている');
-      return originalPending();
-    };
-
-    const lines = await captureStderr(async () => {
-      const s = setup(() => 'わかった', stores);
-      s.clone.post(humanMessage('1件目'));
-      await waitForDone(s.events);
-
-      expect(await s.stores.journal.list({ types: ['inbox_flow'] })).toEqual([]);
-
-      fail = false;
-      s.clone.post(humanMessage('2件目'));
-      await waitFor(
-        async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-        'inbox_flow 行',
-      );
-
-      const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
-      expect(rows).toHaveLength(1);
-      const row = rows[0];
-      if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-      expect(row.arrived).toEqual({ total: 2, byType: [{ type: 'human_message', count: 2 }] });
-      expect(row.delivered).toEqual({ total: 2, byType: [{ type: 'human_message', count: 2 }] });
-
-      await s.clone.stop();
-    });
-    expect(lines.some((line) => line.includes('受信箱の流量（inbox_flow）'))).toBe(true);
-  });
-});
-
-describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）', () => {
-  it('1つ目の窓には、処理中の合図自身が retained.unread=1 として載る（#forget はターンの後（`#pump` の finally）でしか呼ばれないため）', async () => {
-    const s = setup(() => 'わかった');
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
-
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'] });
-    expect(rows).toHaveLength(1);
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(row.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-
     await s.clone.stop();
-  });
 
-  it('2つ目の窓では、1件目の消し込みが効いて retained.unread が1のまま増えない（`this.#unread.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
-    const s = setup(() => 'わかった');
-    s.clone.post(humanMessage('1件目'));
-    await waitForDone(s.events);
-    s.clone.post(humanMessage('2件目'));
-    await waitFor(
-      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
-      '2本目の inbox_flow 行',
-    );
-
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
-    expect(rows).toHaveLength(2);
-    const [first, second] = rows;
-    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
-      throw new Error('inbox_flow が日誌に無い');
-    }
-
-    expect(first.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-    expect(second.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-
-    await s.clone.stop();
-  });
-
-  it('2つ目の窓でも、取り出し済みの代表の索引が残らず retained.pendingCollapse が0のまま増えない（`#pump` の取り出しで `#dropPendingCollapse` が効いていることの固定。畳み込みの索引は manager_message でしか増えない）', async () => {
-    // waitForDone は使えない: manager_message の会話 id は null で、setup() が購読している 'conv-1' に何も流れないため
-    const s = setup(() => 'わかった');
-    s.clone.post({
-      type: 'manager_message',
-      id: 'evt-mgr-1',
-      at: new Date().toISOString(),
-      managerId: 'mgr-1',
-      kind: 'report',
-      text: '1件目の本文（畳まれない別本文にする）',
-    });
-    await waitFor(
-      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-      '1本目の inbox_flow 行',
-    );
-    s.clone.post({
-      type: 'manager_message',
-      id: 'evt-mgr-2',
-      at: new Date().toISOString(),
-      managerId: 'mgr-2',
-      kind: 'report',
-      text: '2件目の本文（1件目と違う managerId・本文なので畳まれない）',
-    });
-    await waitFor(
-      async () => (await s.stores.journal.list({ types: ['inbox_flow'] })).length >= 2,
-      '2本目の inbox_flow 行',
-    );
-
-    const rows = await s.stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
-    expect(rows).toHaveLength(2);
-    const [first, second] = rows;
-    if (first?.type !== 'inbox_flow' || second?.type !== 'inbox_flow') {
-      throw new Error('inbox_flow が日誌に無い');
-    }
-
-    // 索引は代表がターンへ取り出された時点で落ちる（読まれている最中の代表に同文を畳まない）ので、ターンの終わりの行では0のまま増えない
-    expect(first.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-    expect(second.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-
-    await s.clone.stop();
-  });
-
-  it('拾い直した合図は retained.redelivered に一時的に載り、消し込みが効いた後の窓では0に戻る（`this.#redelivered.delete(event.id);` が `#forget` の中で効いていることの固定）', async () => {
-    const stores = createMemoryStores();
-
-    const live = humanMessage('生きている拾い直し', 'conv-live');
-    await stores.inbox.put(live, '2026-09-01T00:00:00.000Z');
-
-    const { fn, calls, release } = fakeGatedSdk();
-    const clone = createClone({
-      stores,
-      queryFn: fn,
-      env: {},
-      runners: createRunnerRegistry([
-        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
-      ]),
-    });
-
-    await waitFor(
-      () => calls.some((call) => call.inputs.some((text) => text.includes('生きている拾い直し'))),
-      'live のターンが始まる',
-    );
-
-    release();
-
-    await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-      '1本目の inbox_flow 行',
-    );
-    const firstRows = await stores.journal.list({ types: ['inbox_flow'] });
-    expect(firstRows).toHaveLength(1);
-    const first = firstRows[0];
-    if (first?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(first.retained).toEqual({
-      unread: 1,
-      redelivered: 1,
-      pendingCollapse: 0,
-    });
-
-    clone.post(humanMessage('3件目（窓3をトリガー）', 'conv-third'));
-
-    await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'], order: 'asc' })).length >= 2,
-      '2本目の inbox_flow 行',
-    );
-    const secondRows = await stores.journal.list({ types: ['inbox_flow'], order: 'asc' });
-    expect(secondRows).toHaveLength(2);
-    const second = secondRows[1];
-    if (second?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(second.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-
-    await clone.stop();
+    const rows = await stores.journal.list({});
+    expect(rows.filter((entry) => entry.type === 'inbox_flow')).toHaveLength(1);
+    expect(rows.some((entry) => entry.type === 'exchange')).toBe(true);
   });
 });

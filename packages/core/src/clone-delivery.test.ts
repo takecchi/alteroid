@@ -210,21 +210,19 @@ describe('CloneDelivery — pushDeferred/drainDeferred/removeDeferredWhere/remov
   });
 });
 
-describe('CloneDelivery — getUnread/setUnread/deleteUnread/unreadSize（素通しの同期メソッド）', () => {
+describe('CloneDelivery — getUnread/setUnread/deleteUnread/（素通しの同期メソッド）', () => {
   it('setUnread で積んだ Promise がそのまま getUnread で引ける（同一性が保たれる）', () => {
     const delivery = new CloneDelivery();
     const written = Promise.resolve();
     delivery.setUnread('evt-1', written);
     expect(delivery.getUnread('evt-1')).toBe(written);
-    expect(delivery.unreadSize).toBe(1);
   });
 
-  it('deleteUnread で消すと、getUnread は undefined、unreadSize も減る', () => {
+  it('deleteUnread で消すと、getUnread は undefined', () => {
     const delivery = new CloneDelivery();
     delivery.setUnread('evt-1', Promise.resolve());
     delivery.deleteUnread('evt-1');
     expect(delivery.getUnread('evt-1')).toBeUndefined();
-    expect(delivery.unreadSize).toBe(0);
   });
 
   it('積んでいない id を getUnread しても undefined、deleteUnread しても例外にならない', () => {
@@ -234,7 +232,7 @@ describe('CloneDelivery — getUnread/setUnread/deleteUnread/unreadSize（素通
   });
 });
 
-describe('CloneDelivery — getCollapseEntry/registerCollapseRepresentative/dropCollapseEntryIfMatches/hasCollapseKey/collapseSize', () => {
+describe('CloneDelivery — getCollapseEntry/registerCollapseRepresentative/dropCollapseEntryIfMatches/hasCollapseKey', () => {
   it('registerCollapseRepresentative は collapsed: 0 の代表を登録し、getCollapseEntry で読める', () => {
     const delivery = new CloneDelivery();
     delivery.registerCollapseRepresentative('key-1', 'evt-1', '2026-09-01T00:00:00.000Z');
@@ -244,7 +242,6 @@ describe('CloneDelivery — getCollapseEntry/registerCollapseRepresentative/drop
       collapsed: 0,
     });
     expect(delivery.hasCollapseKey('key-1')).toBe(true);
-    expect(delivery.collapseSize).toBe(1);
   });
 
   it('getCollapseEntry が返すのは Map が持つ実体そのもの——呼び出し側の直接 mutate が反映される', () => {
@@ -266,7 +263,6 @@ describe('CloneDelivery — getCollapseEntry/registerCollapseRepresentative/drop
     const dropped = delivery.dropCollapseEntryIfMatches('key-1', 'evt-1');
     expect(dropped).toEqual({ id: 'evt-1', at: '2026-09-01T00:00:00.000Z', collapsed: 3 });
     expect(delivery.hasCollapseKey('key-1')).toBe(false);
-    expect(delivery.collapseSize).toBe(0);
   });
 
   it('dropCollapseEntryIfMatches は id が一致しなければ何もせず undefined を返す', () => {

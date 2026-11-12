@@ -182,27 +182,37 @@ async function mixedBatchTurn(jobs: readonly Job[], managerIds: readonly string[
   let captured: ToolContext | undefined;
   const seen: Seen[] = [];
   const pending: Promise<unknown>[] = [];
-  const { fn, calls } = fakeSdk((input) => {
-    if (captured !== undefined && pending.length === 0 && input.includes('[system] マネージャー')) {
-      const context = captured;
-      const find = (name: string) => {
-        const tool = createCloneTools(context).find((entry) => entry.name === name);
-        if (tool === undefined) throw new Error(`${name} が無い`);
-        return tool;
-      };
-      seen.push({ reply: context.conversationId(), work: context.workConversationId?.() });
-      pending.push(
-        (async () => {
-          await find('ask_human').handler({ question: 'q-none' } as never, {});
-          const first = managerIds[0];
-          await find('ask_human').handler({ question: 'q-with', managerId: first } as never, {});
-          await find('request_permission').handler(PERMISSION, {});
-          await find('task_add').handler({ title: '束のターンの用事', body: 'b' } as never, {});
-        })(),
-      );
-    }
-    return '読んだ';
-  });
+  const { fn, calls } = fakeSdk(
+    (input) => {
+      if (
+        captured !== undefined &&
+        pending.length === 0 &&
+        input.includes('[system] マネージャー')
+      ) {
+        const context = captured;
+        const find = (name: string) => {
+          const tool = createCloneTools(context).find((entry) => entry.name === name);
+          if (tool === undefined) throw new Error(`${name} が無い`);
+          return tool;
+        };
+        seen.push({ reply: context.conversationId(), work: context.workConversationId?.() });
+        pending.push(
+          (async () => {
+            await find('ask_human').handler({ question: 'q-none' } as never, {});
+            const first = managerIds[0];
+            await find('ask_human').handler({ question: 'q-with', managerId: first } as never, {});
+            await find('request_permission').handler(PERMISSION, {});
+            await find('task_add').handler({ title: '束のターンの用事', body: 'b' } as never, {});
+          })(),
+        );
+      }
+      return '読んだ';
+    },
+    {
+      // ターンが終わる前に道具の呼びを終わらせる: 終わったあとに呼ぶと作業会話が外れ、起点が新しい id になるため
+      afterReply: () => Promise.all(pending),
+    },
+  );
   const clone = createClone({
     stores,
     queryFn: fn,
