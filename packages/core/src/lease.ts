@@ -10,6 +10,10 @@ export const LEASE_TTL_MS = 10 * 60_000;
 // 0 にしない: 期限ちょうどで引き取ると、相手が畳み終わる前に新しい方が動き出しうる。
 export const LEASE_MARGIN_MS = 30_000;
 
+// 貸し出しの関門の断り（`held`・`persist-failed`）がこれ以上続いたら、クローンへ1回だけ知らせる。環境変数にしない（設定を増やさない）。
+// `LEASE_TTL_MS` の1.5倍: 持ち主が更新をやめれば `held` は TTL（10分）+ 猶予で自然に解けるので、解けるはずの断りはまず知らせない。
+export const LEASE_REFUSAL_PROLONGED_MS = 15 * 60_000;
+
 export interface LeaseSighting {
   runnerId: string;
   instanceId?: string;

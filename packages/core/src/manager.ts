@@ -1492,7 +1492,19 @@ export interface ManagerRecord {
    * **`kind` を持つ**: `claimableAt` の有無で見分けると、`ambiguous` と「台帳の書き込み失敗」を同じに扱い、
    * 書き込み失敗でも「`ALTEROID_RUNNER_ID` 等を直すまで解けない」と言ってしまう。
    */
-  leaseRefusal?: { detail: string; claimableAt?: number; kind: LeaseRefusalKind };
+  leaseRefusal?: {
+    detail: string;
+    claimableAt?: number;
+    kind: LeaseRefusalKind;
+    /**
+     * 連続して断られ始めた時刻（epoch ms）と、その間に断られた回数。`held` と `persist-failed` の間は同じ episode として引き継ぐ
+     * （kind が変わっても数え直さない）。`ambiguous` は引き継がず数え直す（既存の即時通知があり、長引きの知らせの対象外）。
+     */
+    since: number;
+    count: number;
+    /** 長引きの知らせをクローンへ出した時刻。有るあいだは同じ episode で再度出さない。通ったら refusal ごと消える。 */
+    prolongedNotifiedAt?: number;
+  };
   /**
    * `#resume()` は応答が返るまで倒れたかどうかを知らないので、呼び出し元が resume より前に組み立てる
    * 「移送の一言」へ直接混ぜられない。その橋渡し。**プロセス内の像にしか置かない**。
