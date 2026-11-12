@@ -885,7 +885,8 @@ describe('上限切りの断り書き（mergedBatchTruncationNoticeFor）の時�
     const clone = createClone({
       stores,
       queryFn: gated.fn,
-      env: { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' },
+      env: {},
+      mergedBatchLimit: 2,
       inboxSettleMs: 0,
       reportSettleMs: 0,
       runners: createRunnerRegistry([

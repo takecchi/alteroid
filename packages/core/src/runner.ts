@@ -71,7 +71,6 @@ import {
   peerSystemPromptAppend,
   peerActorOf,
   peerApprovalMark,
-  resolvePeerLimits,
   type PeerApprovalSource,
   type PeerBroker,
   type PeerResumable,
@@ -3434,7 +3433,6 @@ class RunnerSession {
           void rollouts.collect(event.peerId);
         }
       },
-      limits: resolvePeerLimits(this.#env),
       ...(peer.models === undefined ? {} : { models: peer.models }),
       // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
       closedReason: (provider) =>

@@ -174,7 +174,7 @@ describe('まとめ読みの境目の固定（切り出し前後で変えない�
   }, 15_000);
 
   it('上限 1: 束にならず、先頭 1 件のターンに「上限（1 件）・この束は 1 件・あと 1 件」の断り書きが載る', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '1' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 1 });
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
 
@@ -199,7 +199,7 @@ describe('まとめ読みの境目の固定（切り出し前後で変えない�
   }, 15_000);
 
   it('断り書きの全文（上限 2・3 件）: 4 行の並びと区切りが 1 字も変わらない', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
     const before = Date.now();
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');

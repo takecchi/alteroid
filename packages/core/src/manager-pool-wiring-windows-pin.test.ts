@@ -6,7 +6,7 @@ import { QUOTA_STOP_WINDOW_MS } from './quota-stop-notice.js';
 import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import { resolveSynthesizedNoticeWindowMs } from './synthesized-notice.js';
+import { SYNTHESIZED_NOTICE_WINDOW_MS } from './synthesized-notice.js';
 import { createMemoryStores } from './testing.js';
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import { resolveWithheldReportFlushMs } from './withheld-reports.js';
@@ -555,7 +555,7 @@ describe('Pool の constructor の配線: 在庫＋見回り（D）と窓 4 種�
     `);
     expect(values.quotaWindowMs).toBe(QUOTA_STOP_WINDOW_MS);
     expect(values.restoredWindowMs).toBe(QUOTA_STOP_WINDOW_MS);
-    expect(values.synthesizedWindowMs).toBe(resolveSynthesizedNoticeWindowMs());
+    expect(values.synthesizedWindowMs).toBe(SYNTHESIZED_NOTICE_WINDOW_MS);
     expect(values.restoredConfirmTimeoutMs).toBe(RESUME_CONFIRM_TIMEOUT_MS);
     expect(values.tokenSavingExcerpt).toBe(resolveTokenSavingExcerpt());
     expect(values.withheldReportFlushMs).toBe(resolveWithheldReportFlushMs());

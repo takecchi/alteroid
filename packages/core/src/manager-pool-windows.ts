@@ -3,7 +3,7 @@ import { QuotaStopWindows } from './quota-stop-windows.js';
 import { RestoredWindows } from './restored-windows.js';
 import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
 import { ResumeEventWindows } from './resume-event-windows.js';
-import { resolveSynthesizedNoticeWindowMs } from './synthesized-notice.js';
+import { SYNTHESIZED_NOTICE_WINDOW_MS } from './synthesized-notice.js';
 import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import type { WithheldReportsStore } from './withheld-reports-store.js';
 
@@ -77,7 +77,7 @@ export function createWindows(deps: WindowsDeps): Windows {
     journalExchange: deps.journalExchange,
     now: deps.now,
     nowIso: deps.nowIso,
-    windowMs: deps.synthesizedNoticeWindowMs ?? resolveSynthesizedNoticeWindowMs(),
+    windowMs: deps.synthesizedNoticeWindowMs ?? SYNTHESIZED_NOTICE_WINDOW_MS,
   });
   const restored = new RestoredWindows({
     records: deps.records,

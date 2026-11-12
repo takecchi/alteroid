@@ -1,7 +1,5 @@
-import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
 import type { QuotaMark } from './quota-stop-notice.js';
 import type { RestoredEntry } from './restored-notice.js';
-import { MAX_RESCUE_INTERVAL_MS } from './rescue-ref.js';
 
 /**
  * **`string` にしてあるのは、`runner-protocol.ts` の `report.synthesized` と同じ語彙を共有するため**:
@@ -168,35 +166,11 @@ export function isCrossWindowStreakEligible(
  * 広ければ良い値ではない: 広すぎると無関係な束を1件にまとめて情報が混ざる（狭すぎは畳めないだけで情報は消えない）。
  * 窓の役目は一度に吐かれた束を捕まえることで、離れて届いたものを繋ぐことではない。
  * 実測の最大間隔に合わせて数十秒の桁へ広げない。既定は実測の最大の列（1,682ms）に余裕を持たせた値で、
- * 原理から出た値ではない（だから環境変数で差し替えられる）。窓が割れても畳める件数が減るだけでデータは失われない。
+ * 原理から出た値ではない。窓が割れても畳める件数が減るだけでデータは失われない。
  * 「最大でこれだけ待つ」であって「この間隔で配る」ではない（`#emit` が窓の満了を待たずに配り切る）。
+ * 環境変数では差し替えない。
  */
-const SYNTHESIZED_NOTICE_WINDOW_MS = 3_000;
-
-export const SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY = 'ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS';
-
-/** 2箇所（数値として読めない／0以下）から呼ぶので定数に寄せる。 */
-const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせをまとめる窓の長さの設定';
-
-/** `resolveWithheldReportFlushMs` と同じ形（跡の出し方・値そのものを載せないことも同じ理由）。 */
-export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
-  return readNumberEnv(env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY], {
-    fallback: SYNTHESIZED_NOTICE_WINDOW_MS,
-    positive: true,
-    // **上限で挟む（黙って）。運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——`setTimeout` は
-    // 2^31-1 ms を超える値を 1ms へ倒し、窓が効かなくなる。
-    max: MAX_RESCUE_INTERVAL_MS,
-    clamp: true,
-    onProblem: unreadableEnvRecordNote(
-      SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY,
-      SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT,
-      {
-        'not-number': `数値として読めない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`,
-        'non-positive': `0 以下は期限にならない。既定の ${String(SYNTHESIZED_NOTICE_WINDOW_MS)}ms で走る`,
-      },
-    ),
-  });
-}
+export const SYNTHESIZED_NOTICE_WINDOW_MS = 3_000;
 
 /**
  * **要約も間引きもしない。ただ1つの例外は完全な重複**（本文が1バイトでも違えば寄せない）。族ごとに断片は違うことを

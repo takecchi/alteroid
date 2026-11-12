@@ -85,12 +85,13 @@ function gatedAdd(
   };
 }
 
-function gatedClone(stores: Stores, env: NodeJS.ProcessEnv = {}) {
+function gatedClone(stores: Stores, mergedBatchLimit?: number) {
   const gated = fakeGatedSdk();
   const clone = createClone({
     stores,
     queryFn: gated.fn,
-    env,
+    env: {},
+    ...(mergedBatchLimit === undefined ? {} : { mergedBatchLimit }),
     inboxSettleMs: 0,
     reportSettleMs: 0,
     runners: createRunnerRegistry([
@@ -243,7 +244,7 @@ describe('失敗を控えて、その発言を読むターンの断り書きで 
 
   it('その発言を読まない先のターンでは外さない: 束の上限で後ろへ回った発言の失敗は、読むターンで名乗る', async () => {
     const stores = failingAdd(createMemoryStores(), /ng/);
-    const t = gatedClone(stores, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const t = gatedClone(stores, 2);
     t.clone.post(humanMessage('先客'));
     await waitFor(() => t.inputs().length === 1, '先客のターンが投げられる');
     for (const text of ['ng-a', 'ng-b', 'ng-c']) t.clone.post(humanMessage(text));
