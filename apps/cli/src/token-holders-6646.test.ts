@@ -7,7 +7,7 @@ describe('alteroid token list の「使用中」（#6646）', () => {
     { tokenId: 'a', kind: 'clone' },
     { tokenId: 'a', kind: 'manager', managerId: 'mgr-01ad099a-3525' },
     { tokenId: 'b', kind: 'manager', managerId: 'mgr-b4d06dc6-8f45' },
-  ];
+  ] satisfies Parameters<typeof describeTokenHolders>[0];
 
   it('その鍵で動いている担当を並べる（委譲は地図と同じ頭8文字）', () => {
     expect(describeTokenHolders(holders, 'a')).toBe('使用中: クローン / mgr-01ad');
