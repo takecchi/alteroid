@@ -1,4 +1,4 @@
-import { isEnvOffSpelling, placedEnvValue } from '@alteroid/core';
+import { isEnvOffSpelling, placedEnvValue, readNumberEnv } from '@alteroid/core';
 
 // 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、周期の処理が休みなく回ってしまうため。
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -37,23 +37,29 @@ export function readEveryMinutes(
   const raw = placedEnvValue(env, key);
   if (raw === null) return { everyMinutes: defaultMinutes, notes };
   if (isEnvOffSpelling(raw)) return { everyMinutes: null, notes };
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    notes.push(`${key}="${raw}" は分数として読めないので既定 ${defaultMinutes} を使う`);
-    return { everyMinutes: defaultMinutes, notes };
+  let fellBack = false;
+  const everyMinutes = readNumberEnv(raw, {
+    fallback: defaultMinutes,
+    min: minMinutes,
+    max: max?.minutes,
+    positive: true,
+    onProblem: (problem, text) => {
+      fellBack = true;
+      if (problem === 'not-number' || problem === 'non-positive') {
+        notes.push(`${key}="${text}" は分数として読めないので既定 ${defaultMinutes} を使う`);
+      } else if (Number(text) < minMinutes) {
+        notes.push(
+          `${key}="${text}" は下限 ${minMinutes} 分を下回っているので既定 ${defaultMinutes} を使う`,
+        );
+      } else {
+        notes.push(
+          `${key}="${text}" は上限 ${max?.text ?? ''} を超えているので既定 ${defaultMinutes} を使う`,
+        );
+      }
+    },
+  });
+  if (!fellBack && noteNonInteger && !Number.isInteger(everyMinutes)) {
+    notes.push(`${key}="${raw}" は整数でないので ${Math.floor(everyMinutes)} 分として扱う`);
   }
-  if (parsed < minMinutes) {
-    notes.push(
-      `${key}="${raw}" は下限 ${minMinutes} 分を下回っているので既定 ${defaultMinutes} を使う`,
-    );
-    return { everyMinutes: defaultMinutes, notes };
-  }
-  if (max !== undefined && parsed > max.minutes) {
-    notes.push(`${key}="${raw}" は上限 ${max.text} を超えているので既定 ${defaultMinutes} を使う`);
-    return { everyMinutes: defaultMinutes, notes };
-  }
-  if (noteNonInteger && !Number.isInteger(parsed)) {
-    notes.push(`${key}="${raw}" は整数でないので ${Math.floor(parsed)} 分として扱う`);
-  }
-  return { everyMinutes: parsed, notes };
+  return { everyMinutes, notes };
 }
