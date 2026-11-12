@@ -545,6 +545,9 @@ export const STATEMENTS = [
   `create table if not exists manager_credential_removals (
      name text primary key
    )`,
+  // 退役した日誌の種別（毎ターンの受信箱の流量 `inbox_flow` と、待ちの内訳 `worker_wait`）の古い行を消す。
+  // 種別を外した後は読み手が検証で落ちるため、行を残さない。他の索引・墓標・要約はこの 2 種別を数えない。
+  `delete from journal where type in ('inbox_flow', 'worker_wait')`,
 ] as const;
 
 /** 人間への返答（`humanReplies`）だけを持つ部分索引（#5089） */

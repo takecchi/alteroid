@@ -3490,7 +3490,7 @@ describe('chat の /journal', () => {
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
     expect(text).toContain(
-      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation',
+      'tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation',
     );
     expect(text).not.toContain('日誌はまだ空');
   });
@@ -3621,21 +3621,27 @@ describe('chat の /journal', () => {
     expect(read()).not.toContain('これより古い日誌があるかもしれない');
   });
 
-  describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {
+  describe('issue #2016 — turn_usage / context_usage の要約', () => {
     it('診断の行は 80 字を超えても切らずに出す（末尾の数字が読めなくなるため）', async () => {
       const read = captureStdout();
       const entry = {
-        id: 'j-ww-long',
+        id: 'j-tu-long',
         at: '2026-09-01T00:00:00.000Z',
-        type: 'worker_wait',
-        openedAt: '2026-08-31T23:00:00.000Z',
-        tasks: 3,
-        turns: 10,
-        byCause: { input: 1, notification: 2, continuation: 7 },
-        toolless: 4,
-        notifications: 2,
-        submits: 1,
-        settled: false,
+        type: 'turn_usage',
+        layer: 'clone',
+        site: 'session',
+        managerId: 'clone',
+        models: {
+          'claude-fable-5': {
+            inputTokens: 10,
+            outputTokens: 20,
+            cacheReadInputTokens: 120,
+            cacheCreationInputTokens: 40,
+            webSearchRequests: 0,
+            costUsd: 0.5,
+          },
+        },
+        reset: { fromCostUsd: 1, toCostUsd: 0.5 },
       };
       const { client } = stubClient({ journalEntries: [entry] });
 
@@ -3643,37 +3649,7 @@ describe('chat の /journal', () => {
 
       const full = summarizeJournalEntry(entry as JournalEntry);
       expect(full.length).toBeGreaterThan(80);
-      expect(read()).toContain(`[worker_wait] ${full}\n`);
-    });
-
-    it('worker_wait は空欄ではなく、待った内訳を出す', async () => {
-      const read = captureStdout();
-      const { client } = stubClient({
-        journalEntries: [
-          {
-            id: 'j-ww',
-            at: '2026-09-01T00:00:00.000Z',
-            type: 'worker_wait',
-            openedAt: '2026-08-31T23:00:00.000Z',
-            tasks: 3,
-            turns: 10,
-            byCause: { input: 1, notification: 2, continuation: 7 },
-            toolless: 4,
-            notifications: 2,
-            submits: 1,
-            settled: true,
-          },
-        ],
-      });
-
-      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
-
-      const text = read();
-      expect(text).toContain('[worker_wait]');
-      expect(text).toContain('作業者 3 体を待つあいだに 10 ターン');
-      expect(text).toContain('自己継続 7');
-      expect(text).toContain('道具を1つも動かしていない');
-      expect(text).not.toMatch(/\[worker_wait\]\s*\n/);
+      expect(read()).toContain(`[turn_usage] ${full}\n`);
     });
 
     it('turn_usage は空欄ではなく、cache read/write を出す', async () => {
@@ -3734,34 +3710,6 @@ describe('chat の /journal', () => {
       expect(text).toContain('ターン失敗');
       expect(text).toContain('文脈 42%');
       expect(text).not.toMatch(/\[context_usage\]\s*\n/);
-    });
-
-    it('inbox_flow は空欄ではなく、到着/配達/消し込み/滞留の4軸を出す', async () => {
-      const read = captureStdout();
-      const { client } = stubClient({
-        journalEntries: [
-          {
-            id: 'j-if',
-            at: '2026-09-01T00:15:00.000Z',
-            type: 'inbox_flow',
-            windowStartedAt: '2026-09-01T00:00:00.000Z',
-            arrived: { total: 5, byType: [] },
-            delivered: { total: 4, byType: [] },
-            settled: { total: 3, byType: [] },
-            pending: { count: 2, oldestAt: '2026-09-01T00:00:00.000Z' },
-          },
-        ],
-      });
-
-      await runSlashCommand('/journal', ...slashArgs(client, emptyListed()));
-
-      const text = read();
-      expect(text).toContain('[inbox_flow]');
-      expect(text).toContain('到着5');
-      expect(text).toContain('配達4');
-      expect(text).toContain('消し込み3');
-      expect(text).toContain('滞留2');
-      expect(text).not.toMatch(/\[inbox_flow\]\s*\n/);
     });
 
     it('github_observation は空欄ではなく、repo・観測者・件数を出す。failed は理由を出し数を作らない（#2245）', async () => {

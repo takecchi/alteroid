@@ -28,7 +28,7 @@ const DISPATCHERS: readonly {
 }[] = [
   { file: 'clone.ts', method: '#handle', minCases: 7 },
   { file: 'clone.ts', method: '#apply', minCases: 15 },
-  { file: 'manager.ts', method: '#handleEvent', minCases: 27 },
+  { file: 'manager.ts', method: '#handleEvent', minCases: 26 },
   { file: 'runner.ts', method: '#apply', minCases: 15 },
 ];
 

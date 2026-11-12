@@ -319,7 +319,11 @@ function rawRowId(line: string | undefined): string | undefined {
   }
 }
 
-// 飛ばした行は `dropped` へ残す: 「読めなかった」と「そんな行は無い」を跡なしで混ぜないため
+// 退役した日誌の種別。ファイルは書き換えない（読みで黙って飛ばす）ので、古い行は残り続ける。
+// pg は migration で行ごと消したが、fs の日誌は日ごとのファイルに残っており、これが無いと読むたびに「飛ばした」の跡が出続ける。
+const RETIRED_JOURNAL_TYPES: ReadonlySet<string> = new Set(['inbox_flow', 'worker_wait']);
+
+// 飛ばした行は `dropped` へ残す: 「読めなかった」と「そんな行は無い」を跡なしで混ぜないため。退役した種別だけは跡も出さない
 function parseLine(line: string | undefined, dropped: Map<string, number>): JournalEntry | null {
   if (!line) return null;
   const bytes = Buffer.byteLength(line, 'utf8');
@@ -332,6 +336,9 @@ function parseLine(line: string | undefined, dropped: Map<string, number>): Jour
   }
   const parsed = journalEntrySchema.safeParse(raw);
   if (parsed.success) return parsed.data;
+  const type =
+    typeof raw === 'object' && raw !== null ? (raw as { type?: unknown }).type : undefined;
+  if (typeof type === 'string' && RETIRED_JOURNAL_TYPES.has(type)) return null;
   noteDroppedJournalRow(dropped, 'unknown-shape', journalRowType(raw), bytes);
   return null;
 }

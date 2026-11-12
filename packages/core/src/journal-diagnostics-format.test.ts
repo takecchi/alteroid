@@ -7,15 +7,12 @@ import {
 } from './journal-diagnostics-format.js';
 
 describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
-  // turn_timing（#5086）と http_timing（#5089）を足して6種にした
-  it('JOURNAL_DIAGNOSTICS_TYPES はこの6種だけを名乗る', () => {
+  it('JOURNAL_DIAGNOSTICS_TYPES はこの4種だけを名乗る', () => {
     expect(JOURNAL_DIAGNOSTICS_TYPES).toEqual([
-      'worker_wait',
       'turn_usage',
       'context_usage',
       'turn_timing',
       'http_timing',
-      'inbox_flow',
     ]);
   });
 
@@ -49,36 +46,6 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
       expect(summarizeJournalDiagnosticsEntry(entry)).toBe(
         '[normal human_message 成功] 合計 61秒・最初の文字まで 45秒・最も長い段 model 58秒・入力 539,010 トークン',
       );
-    });
-  });
-
-  describe('worker_wait', () => {
-    it('待った内訳と、道具を動かしていないターン数を出す', () => {
-      const entry: JournalDiagnosticsEntryLike = {
-        type: 'worker_wait',
-        tasks: 5,
-        turns: 41,
-        byCause: { input: 1, notification: 3, continuation: 37 },
-        toolless: 38,
-        settled: true,
-      };
-      const summary = summarizeJournalDiagnosticsEntry(entry);
-      expect(summary).toContain('作業者 5 体を待つあいだに 41 ターン');
-      expect(summary).toContain('自己継続 37');
-      expect(summary).toContain('道具を1つも動かしていない');
-      expect(summary).not.toContain('区間は閉じずに終わった');
-    });
-
-    it('settled が false なら「区間は閉じずに終わった」を添える', () => {
-      const entry: JournalDiagnosticsEntryLike = {
-        type: 'worker_wait',
-        tasks: 1,
-        turns: 2,
-        byCause: { input: 0, notification: 0, continuation: 2 },
-        toolless: 0,
-        settled: false,
-      };
-      expect(summarizeJournalDiagnosticsEntry(entry)).toContain('区間は閉じずに終わった');
     });
   });
 
@@ -221,35 +188,6 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
         contextUsage: {},
       };
       expect(summarizeJournalDiagnosticsEntry(entry)).toContain('（詳細なし）');
-    });
-  });
-
-  describe('inbox_flow', () => {
-    it('到着/配達/消し込み/滞留の4軸を混ぜずに並べる', () => {
-      const entry: JournalDiagnosticsEntryLike = {
-        type: 'inbox_flow',
-        arrived: { total: 5 },
-        delivered: { total: 4 },
-        settled: { total: 3 },
-        pending: { count: 2, oldestAt: '2026-09-01T00:00:00.000Z' },
-      };
-      const summary = summarizeJournalDiagnosticsEntry(entry);
-      expect(summary).toContain('到着5');
-      expect(summary).toContain('配達4');
-      expect(summary).toContain('消し込み3');
-      expect(summary).toContain('滞留2');
-      expect(summary).toContain('（最古 2026-09-01T00:00:00.000Z）');
-    });
-
-    it('pending.oldestAt が無ければ「最古」を出さない', () => {
-      const entry: JournalDiagnosticsEntryLike = {
-        type: 'inbox_flow',
-        arrived: { total: 0 },
-        delivered: { total: 0 },
-        settled: { total: 0 },
-        pending: { count: 0 },
-      };
-      expect(summarizeJournalDiagnosticsEntry(entry)).not.toContain('最古');
     });
   });
 });

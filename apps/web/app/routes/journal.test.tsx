@@ -52,20 +52,6 @@ const RECENT_ESCALATION: JournalEntry = {
   approvalId: 'approval-x',
 };
 
-const WORKER_WAIT: JournalEntry = {
-  type: 'worker_wait',
-  id: 'ww-1',
-  at: '2026-08-20T22:10:00.000Z',
-  openedAt: '2026-08-20T21:30:00.000Z',
-  tasks: 5,
-  turns: 41,
-  byCause: { input: 1, notification: 3, continuation: 37 },
-  toolless: 38,
-  notifications: 3,
-  submits: 0,
-  settled: true,
-};
-
 const TURN_USAGE: JournalEntry = {
   type: 'turn_usage',
   id: 'tu-1',
@@ -214,33 +200,6 @@ describe('recent を履歴に重ねる', () => {
       ).toBe(true);
     });
     expect(screen.queryByText(summarizeJournalEntry(SHARED))).toBeNull();
-  });
-});
-
-describe('worker_wait — 種別フィルタと1行の文言', () => {
-  it('絞り込みボタンで type=worker_wait が実際にサーバへ届く（1行の文言は queries.test.ts 側）', async () => {
-    const stub = stubFetch((url) => {
-      if (!url.includes('/journal')) return undefined;
-      const type = new URL(url).searchParams.get('type');
-      if (type === 'worker_wait') return json({ entries: [WORKER_WAIT], scanned: 1 });
-      return json({ entries: [HISTORY_ONLY, WORKER_WAIT], scanned: 2 });
-    });
-
-    renderJournal({ status: 'live', recent: [] });
-    await waitForLoaded();
-
-    expect(screen.queryByText(summarizeJournalEntry(WORKER_WAIT))).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: '作業者の待機' }));
-
-    await waitFor(() => {
-      expect(
-        stub.calls.some(
-          (url) =>
-            url.includes('/journal') && new URL(url).searchParams.get('type') === 'worker_wait',
-        ),
-      ).toBe(true);
-    });
   });
 });
 
@@ -783,7 +742,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     });
 
     const NOTE =
-      '道具の入力・作業者の待機・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・受信箱の出入り・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
     const { unmount } = renderJournal({ status: 'live', recent: [] }, [
       `/?q=${encodeURIComponent('当たらない語')}`,
     ]);
@@ -857,7 +816,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.getByText(/道具の入力/)).toBeTruthy();
     expect(
       screen.getByText(
-        /道具の入力・作業者の待機・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・受信箱の出入り・GitHub の観測・会話の削除/,
+        /道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除/,
       ),
     ).toBeTruthy();
   });

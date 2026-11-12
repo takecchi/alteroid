@@ -2650,6 +2650,31 @@ describe('解釈できずに捨てた出来事の跡', () => {
     });
   });
 
+  it('入れ替え中の旧 runner が出す worker_wait（退役した出来事）は、受け口を持たずに跡つきで捨て、後ろの出来事は届く', async () => {
+    const oldFrame = JSON.stringify({
+      type: 'worker_wait',
+      managerId: 'mgr-1',
+      openedAt: '2026-11-05T00:00:00.000Z',
+      tasks: 1,
+      turns: 2,
+      byCause: { input: 1, notification: 1, continuation: 0 },
+      toolless: 0,
+      notifications: 1,
+      submits: 2,
+      settled: true,
+    });
+    const { dropped, events } = await collect([
+      oldFrame,
+      JSON.stringify({ type: 'hello', runnerId: 'r1' }),
+    ]);
+
+    expect(dropped.find((r) => r.phase === 'first')).toMatchObject({
+      reason: 'unknown-shape',
+      type: 'worker_wait',
+    });
+    expect(events).toHaveLength(1);
+  });
+
   it('JSON にならないフレームでは、type を作らない', async () => {
     const { dropped } = await collect(['{壊れている']);
 

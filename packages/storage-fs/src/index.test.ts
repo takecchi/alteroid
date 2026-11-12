@@ -530,6 +530,38 @@ describe('FsJournalStore', () => {
       expect(trace).not.toContain('新しい版が書いた行');
     });
 
+    it('退役した種別（inbox_flow・worker_wait）の古い行は、落とさず・跡も出さずに黙って飛ばす', async () => {
+      const kept = await stores.journal.append({
+        type: 'decision',
+        decision: '健全な行',
+        grounds: 'g',
+      });
+
+      const journalDir = join(root, 'journal');
+      const today = new Date().toISOString().slice(0, 10);
+      await writeFile(
+        join(journalDir, `${today}.jsonl`),
+        ['inbox_flow', 'worker_wait']
+          .map(
+            (type, i) =>
+              `${JSON.stringify({ type, id: `retired-${i}`, at: `${today}T00:00:0${i}.000Z` })}\n`,
+          )
+          .join(''),
+        { flag: 'a' },
+      );
+
+      let entries: Awaited<ReturnType<typeof stores.journal.list>> = [];
+      let found: JournalEntry | null = null;
+      const lines = await captureStderr(async () => {
+        entries = await stores.journal.list();
+        found = await stores.journal.get(kept.id);
+      });
+
+      expect(entries.map((entry) => entry.id)).toEqual([kept.id]);
+      expect(found).toMatchObject({ id: kept.id });
+      expect(lines).toEqual([]);
+    });
+
     it('list(): スキーマに合わない行を跡に残しつつ、読めた行はそのまま返す', async () => {
       await stores.journal.append({ type: 'decision', decision: '健全な行', grounds: 'g' });
 

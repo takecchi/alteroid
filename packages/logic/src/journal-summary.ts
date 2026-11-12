@@ -83,12 +83,10 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}${attachmentNote(entry.attachments)}`;
-    case 'worker_wait':
     case 'turn_usage':
     case 'context_usage':
     case 'turn_timing':
     case 'http_timing':
-    case 'inbox_flow':
       return summarizeJournalDiagnosticsEntry(entry);
     case 'token_rotation':
       // `text` を組み直さない: 同じ事実を読む面ごとに言い方が分かれるため。`event` は落とさない: `exhausted` と `not_rotated` が一覧で見分けられなくなる。

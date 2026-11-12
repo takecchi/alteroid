@@ -38,28 +38,6 @@ describe('summarizeJournalEntry — daily_report', () => {
   });
 });
 
-describe('summarizeJournalEntry — worker_wait', () => {
-  it('空回りが目で分かる文言を含む', () => {
-    const entry: JournalEntry = {
-      type: 'worker_wait',
-      id: 'ww-1',
-      at: '2026-08-20T22:10:00.000Z',
-      openedAt: '2026-08-20T21:30:00.000Z',
-      tasks: 5,
-      turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      settled: true,
-    };
-    const summary = summarizeJournalEntry(entry);
-    expect(summary).toContain('作業者 5 体を待つあいだに 41 ターン');
-    expect(summary).toContain('自己継続 37');
-    expect(summary).toContain('道具を1つも動かしていない');
-  });
-});
-
 describe('summarizeJournalEntry — memory_update', () => {
   it('action と前後バイト数を出す（新形式）', () => {
     const entry: JournalEntry = {

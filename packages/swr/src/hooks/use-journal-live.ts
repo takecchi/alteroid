@@ -161,8 +161,6 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
         });
       }
       break;
-    case 'worker_wait':
-      break;
     case 'turn_usage':
       break;
     case 'context_usage':
@@ -178,8 +176,6 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       break;
     // `exchange` と同じにしない: マネージャーの詳細や生ログの中身を変える出来事ではない
     case 'subagent_stall':
-      break;
-    case 'inbox_flow':
       break;
     case 'github_observation':
       break;

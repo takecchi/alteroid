@@ -9,23 +9,13 @@ type ContextUsageLike = {
 };
 
 export const JOURNAL_DIAGNOSTICS_TYPES = [
-  'worker_wait',
   'turn_usage',
   'context_usage',
   'turn_timing',
   'http_timing',
-  'inbox_flow',
 ] as const;
 
 export type JournalDiagnosticsEntryLike =
-  | {
-      type: 'worker_wait';
-      tasks: number;
-      turns: number;
-      byCause: { input: number; notification: number; continuation: number };
-      toolless: number;
-      settled: boolean;
-    }
   | {
       type: 'turn_usage';
       layer: string;
@@ -46,13 +36,6 @@ export type JournalDiagnosticsEntryLike =
       managerId: string;
       turnSucceeded: boolean;
       contextUsage: ContextUsageLike & { error?: string };
-    }
-  | {
-      type: 'inbox_flow';
-      arrived: { total: number };
-      delivered: { total: number };
-      settled: { total: number };
-      pending: { count: number; oldestAt?: string };
     }
   | {
       type: 'turn_timing';
@@ -92,15 +75,6 @@ function contextUsageNote(context: ContextUsageLike | undefined): string {
 
 export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryLike): string {
   switch (entry.type) {
-    case 'worker_wait': {
-      const cause = entry.byCause;
-      return (
-        `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
-        `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
-        `うち ${entry.toolless} ターンは道具を1つも動かしていない` +
-        (entry.settled ? '' : '（区間は閉じずに終わった）')
-      );
-    }
     case 'turn_usage': {
       // キャッシュの read/write を潰さない: 潰すと「キャッシュ書き直しに払っているか」が推測に戻るため
       const models = Object.entries(entry.models);
@@ -131,15 +105,6 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
           ? `測れなかった（${context.error}）`
           : contextUsageNote(context).trim() || '（詳細なし）';
       return `[${entry.layer}/${entry.site}] ${entry.managerId} ターン${status}: ${note}`;
-    }
-    case 'inbox_flow': {
-      // 4つの総数を混ぜない: 別のものを数えており、食い違いそのものが読む材料であるため
-      const oldest =
-        entry.pending.oldestAt === undefined ? '' : `（最古 ${entry.pending.oldestAt}）`;
-      return (
-        `受信箱 到着${entry.arrived.total} / 配達${entry.delivered.total} / ` +
-        `消し込み${entry.settled.total} / 滞留${entry.pending.count}${oldest}`
-      );
     }
     case 'turn_timing': {
       // 親の段（`.` の無い段）だけで最も長い段を選ぶ: 内訳は親に含まれるため（#5086）
