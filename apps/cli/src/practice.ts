@@ -11,16 +11,6 @@ import { failEditConflict, runEditSession } from './edit-session.js';
 import { readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
-// `kind` を固定の選択肢にしない: `practiceKindSchema` が自由文字列で、列挙ではないため
-export interface PracticeSummary {
-  slug: string;
-  kind: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  chars: number;
-}
-
 export async function practiceListCommand(): Promise<void> {
   const conn = await connect('read');
   if (conn === null) return;
@@ -35,10 +25,7 @@ export async function practiceListCommand(): Promise<void> {
       ),
     );
   }
-  const { practices, unreadable = [] } = (await response.json()) as {
-    practices: PracticeSummary[];
-    unreadable?: { slug?: string; reason: string }[];
-  };
+  const { practices, unreadable = [] } = await response.json();
   if (practices.length === 0 && unreadable.length === 0) {
     // 「正常」と言うのは読めない行が0件のときだけにする: 空なのか読めていないのかを区別できないため
     stdout.write('やり方はまだ1件も無い（これは正常な状態）。\n');
@@ -133,9 +120,7 @@ export async function practiceHistoryCommand(slug: string): Promise<void> {
       ),
     );
   }
-  const { versions } = (await response.json()) as {
-    versions: Array<{ version: number; kind: string; title: string; at: string; chars: number }>;
-  };
+  const { versions } = await response.json();
   if (versions.length === 0) {
     stdout.write(`やり方 ${slug} の版はまだ無い（一度も書かれていないか、打ち間違い）。\n`);
     return;

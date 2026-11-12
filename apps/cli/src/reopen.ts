@@ -1,6 +1,7 @@
 import { stdout } from './terminal-out.js';
 
 import { describeReopenResult } from '@alteroid/logic';
+import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
@@ -13,11 +14,8 @@ interface ReopenOptions {
   reason?: string;
 }
 
-interface ReopenResult {
-  outcome: 'now' | 'deferred' | 'unsupported';
-  previousSessionId?: string | null | undefined;
-  runningManagers?: number | undefined;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type ReopenResult = InferResponseType<DaemonClient['clone']['session']['reopen']['$post'], 200>;
 
 /**
  * `alteroid reopen` — クローンのセッションを resume せずに新しく開き直す。
@@ -69,5 +67,5 @@ async function requestReopen(
       ),
     );
   }
-  return (await response.json()) as ReopenResult;
+  return await response.json();
 }

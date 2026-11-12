@@ -1,4 +1,5 @@
 import { stdin } from 'node:process';
+import type { InferResponseType } from 'hono/client';
 import {
   MEMORY_SLUG_RULE,
   describeSlugViolation,
@@ -16,30 +17,8 @@ import { failEditConflict, runEditSession } from './edit-session.js';
 import { readBodyArg } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
-export type MemoryDescriptionDrift =
-  | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
-  | {
-      kind: 'at-least';
-      baselineBytes: number;
-      baselineAt: string;
-      currentBytes: number;
-      deltaBytes: number;
-    }
-  | { kind: 'unrecorded' };
-
-export interface MemorySummary {
-  slug: string;
-  title: string;
-  kind: 'premise' | 'fact' | 'indexed';
-  description?: string;
-  descriptionFreshness:
-    | { kind: 'fresh' }
-    | { kind: 'stale'; staleForMs: number; drift: MemoryDescriptionDrift }
-    | { kind: 'unknown' }
-    | { kind: 'absent' };
-  updatedAt: string;
-  createdAt: { kind: 'known'; at: string } | { kind: 'unknown' };
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type MemorySummary = InferResponseType<DaemonClient['memory']['$get'], 200>['documents'][number];
 
 // 根拠が無ければ空欄にせず「不明」と言う: 片方だけ空欄にすると、人間とクローンが同じ記憶を見て違う判断をするため
 export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
@@ -68,7 +47,7 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
       ),
     );
   }
-  const { documents } = (await response.json()) as { documents: MemorySummary[] };
+  const { documents } = await response.json();
   if (documents.length === 0) {
     stdout.write('記憶はまだ空です。\n');
     stdout.write('置くには: alteroid memory edit <slug>\n');
