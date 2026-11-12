@@ -136,7 +136,10 @@ export function tokensRoutes(deps: AppDeps) {
         async (c) => {
           if (deps.tokens === undefined) {
             return c.json(
-              tokensResponseSchema.parse({ tokens: [], settings: DEFAULT_TOKEN_ROTATION_SETTINGS }),
+              tokensListResponseSchema.parse({
+                tokens: [],
+                settings: DEFAULT_TOKEN_ROTATION_SETTINGS,
+              }),
             );
           }
           const view = await deps.tokens.list();
