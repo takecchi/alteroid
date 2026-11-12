@@ -246,8 +246,6 @@ function labelOf(event: RunnerEvent): string {
       return `emit:report(status=${event.status},unreported=${String(event.unreported !== undefined)})`;
     case 'settled':
       return `emit:settled(requestId=${event.requestId})`;
-    case 'worker_wait':
-      return `emit:worker_wait(settled=${String(event.settled)})`;
     case 'archive':
       return `emit:archive(len=${String(event.body?.length ?? event.ref?.chars ?? 0)})`;
     case 'usage':
@@ -346,7 +344,6 @@ describe('#1533: stop() と #finish の畳みの順序を、現状のまま固�
     // 名乗るため（`stop()` 冒頭で `statusAtStop` を控える）。`settleAll` 後の値に揃えない。
     expect(s.timeline).toEqual([
       'emit:usage',
-      'emit:worker_wait(settled=false)',
       'emit:settled(requestId=req-1)',
       'query.close()',
       'emit:archive(len=9)',
@@ -385,7 +382,6 @@ describe('#1533: stop() と #finish の畳みの順序を、現状のまま固�
 
     expect(s.timeline).toEqual([
       'emit:usage',
-      'emit:worker_wait(settled=false)',
       'emit:settled(requestId=req-1)',
       'query.close()',
       'emit:archive(len=9)',

@@ -1005,7 +1005,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     return [];
   }
 
-  // `background_tasks_changed` を `worker_wait` の区間の開閉に使わない: level 信号で edge と相関させられず、フォアグラウンドのまま終わる委譲は載らないため
+  // `background_tasks_changed` を委譲の区間の開閉に使わない: level 信号で edge と相関させられず、フォアグラウンドのまま終わる委譲は載らないため
   // `tasks` が配列でなければ0個返す: SDK が版で形を変えたと見て、作り物の「0本」を主張しないため
   if (subtype === 'background_tasks_changed') {
     const tasks = liveBackgroundTasksOf(message);

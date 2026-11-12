@@ -32,7 +32,6 @@ import type {
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentSessionStartRecord,
-  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
@@ -265,7 +264,6 @@ import { decideAnswer } from './runner-decide-answer.js';
 import { type PendingRequest, RunnerRequestQueue } from './runner-request-queue.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
-import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
 import { WorkerToolWatch, type WorkerToolWatchClock } from './runner-worker-tool-watch.js';
 import { RunnerFenceError } from './runner-protocol.js';
 import { definedProps } from './defined-props.js';
@@ -2700,7 +2698,6 @@ class RunnerSession {
   #sessionAllowRulesPush: Promise<unknown> = Promise.resolve();
   readonly #resumeState = new RunnerResumeState();
   #tokenFingerprint: string | undefined;
-  readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
   readonly #nonWorkerTaskIds = new Set<string>();
   // `task_notification` に tool_use_id を載せない古い CLI のために、`task_started` で見た対応を覚える（#4996）
   readonly #toolUseIdByTaskId = new Map<string, string>();
@@ -2926,7 +2923,7 @@ class RunnerSession {
     return this.#sdkSession.stopped;
   }
 
-  // 作業者の完了を契機に呼ばない: 同一の query ストリームで完了が現れるので、呼ぶと SDK の自己継続と二重にターンが回り `worker_wait` の `byCause` も壊れるため
+  // 作業者の完了を契機に呼ばない: 同一の query ストリームで完了が現れるので、呼ぶと SDK の自己継続と二重にターンが回るため
   push(text: string, images?: readonly AgentInputImage[]): void {
     if (this.#sdkSession.stopped) return;
     this.#sdkSession.enqueueInput(
@@ -3166,9 +3163,6 @@ class RunnerSession {
 
     // `result` を待たずに渡す: この経路で畳まれたぶんは台帳に1行も残らず、渡し損ねたら二度と取れないため
     await this.#flushUsage();
-
-    // `worker_wait` をここで閉じる: この経路は `#finish` を通らず、閉じないと開いたままの区間が黙って消えるため
-    this.#closeWorkerWaitWindow();
 
     // 分類できなかった失敗の件数もここで出す: `#finish` にだけ置くと、器の入れ替えと `manager_stop` で畳まれたぶんの量が失われるため
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
@@ -3698,7 +3692,7 @@ class RunnerSession {
       onPostToolUse: (record) => this.#onPostToolUse(record),
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       onPreCompact: (record) => this.#onPreCompact(record),
-      onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
+      onUserPromptSubmit: () => undefined,
       onSessionStart: (record) => this.#onSessionStart(record),
       onSubagentStop: (record) => this.#subagentStopObserver.observe(record),
       onStop: (record) => this.#stopObserver.observe(record),
@@ -4078,7 +4072,6 @@ class RunnerSession {
       if (generation !== this.#sdkSession.generation) return;
       const next = this.#sdkSession.dequeueInput();
       if (next !== undefined) {
-        this.#turnTally.incrementInputsSinceResult();
         yield next;
         continue;
       }
@@ -4199,10 +4192,7 @@ class RunnerSession {
     takeResumeAttempt: () => this.#resumeState.takeAttempt(),
     hasProgressed: () => this.#resumeState.progressed,
     renderSeedRecord: () => renderSessionLog(this.#resumeState.seed),
-    closeWorkerWaitWindow: () => this.#closeWorkerWaitWindow(),
     discardCarriedOverWork: () => {
-      // 委譲の区間を持ち越さない: 二度と来ない `task_notification` を待ち続けて区間が永久に閉じないため（`closeWorkerWaitWindow` の後に呼ぶ）
-      this.#workerWaitWindow.clear();
       this.#nonWorkerTaskIds.clear();
       // **このターンで開いた作業者の数も、同じ理由で持ち越さない。**
       // この経路は `turn_ended` を通らないので、捨てないと前のセッションの作業者が次のセッションの最初のターンの数に入る。
@@ -4381,27 +4371,11 @@ class RunnerSession {
     const {
       said,
       rejected,
-      inputsThisTurn,
-      notificationsThisTurn,
-      toolsThisTurn,
-      submitsThisTurn,
-      sourcesThisTurn,
       openedWorkersThisTurn,
       workerRejectionsThisTurn,
       failedWorkerNotificationsThisTurn,
       failedWorkerNotificationsNamingLimitThisTurn,
     } = this.#turnTally.takeAtResult();
-
-    const closedWindow = this.#workerWaitWindow.foldTurn({
-      inputsThisTurn,
-      notificationsThisTurn,
-      toolsThisTurn,
-      submitsThisTurn,
-      sourcesThisTurn,
-    });
-    if (closedWindow !== null) {
-      this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
-    }
 
     // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載り、ゼロ埋めで害が出る値でもないため
     for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');
@@ -4503,7 +4477,7 @@ class RunnerSession {
     }
   }
 
-  // 作業者（`local_agent`）のタスクだけを数える: SDK は作業者以外のタスクでも `task_started` を出し、一律に数えると委譲していないターンでも `openedWorkers` が増え `worker_wait` の区間まで開くため
+  // 作業者（`local_agent`）のタスクだけを数える: SDK は作業者以外のタスクでも `task_started` を出し、一律に数えると委譲していないターンでも `openedWorkers` が増えるため
   #onTaskStarted(event: AgentDelegationStarted): void {
     // id を名乗らなければ偽の id で数える: 取りこぼすより多く数える方を選ぶため
     const taskId = event.taskId ?? randomUUID();
@@ -4520,14 +4494,12 @@ class RunnerSession {
       return;
     }
     this.#turnTally.addOpenedWorker(taskId);
-    this.#workerWaitWindow.taskStarted(taskId);
   }
 
   // `status` を `=== 'failed'` の一致だけで見る: SDK が値を増やしても知らない値は「失敗ではない」側へ落ちるため。枠(429)は手書きの文言一致にせず `classifyUsageNotice` を通す
   // `output_file` が読めなければ `null` を渡す: 作り物のパスを主張しないため
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
-    this.#workerWaitWindow.notified(taskId);
     if (taskId !== undefined) {
       this.#sdkSession.backgroundWaiters.noteFinished(
         taskId,
@@ -4536,7 +4508,6 @@ class RunnerSession {
     }
     // 作業者ではないタスクの通知を `notifications`・failed 通知に入れない: `task_started` 側だけを直すと Bash の失敗が「作業者の failed 通知」に積まれ、枠を名乗れば枠の件数まで立つため
     const nonWorker = taskId !== undefined && this.#nonWorkerTaskIds.delete(taskId);
-    if (!nonWorker) this.#turnTally.incrementNotificationsSinceResult();
 
     if (!nonWorker && event.status === 'failed') {
       const limitNamed =
@@ -4711,13 +4682,6 @@ class RunnerSession {
     );
   }
 
-  // `settled` を引数で受けない: 呼び出し側に持たせると3経路が固定で `false` を渡し、受け切った直後に畳まれた場合まで偽の印が付くため
-  #closeWorkerWaitWindow(): void {
-    const closedWindow = this.#workerWaitWindow.close();
-    if (closedWindow === null) return;
-    this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
-  }
-
   // 分類ロジックを複製しない: SDK の値をそのまま写し、集計は読む側（`context-usage.ts`）が1箇所で持つため
   // `this.#query` が無ければ聞かない: セッションが終わる窓で `getContextUsage` を持たない値を呼ぶことになるため（「まだ観測していない」側）
   // 例外の理由は `describeProbeError` でしか運ばない: 秘密を漏らさないため
@@ -4793,7 +4757,6 @@ class RunnerSession {
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
     // `close()` より先に読む: 閉じた後の control channel からは何も取れないため
     await this.#flushUsage();
-    this.#closeWorkerWaitWindow();
     this.#settleAll(reason);
     this.#workerTools.settleAll();
     this.#dropSessionAllowRulesOnClose();
@@ -5367,8 +5330,6 @@ class RunnerSession {
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
     this.#settleToolUse(record, false);
 
-    if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
-
     // 作業者の分も数える: マージや push を打つのは作業者のことが多い
     // PreToolUse ではなくここで拾う: 拒否されて走らなかったコマンドを「外へ出した」と言わないため
     const command = (record.toolInput as { command?: unknown } | undefined)?.command;
@@ -5676,8 +5637,6 @@ class RunnerSession {
     // 失敗で終わっても、道具は分類器を通って走った: 連続の数えを0に戻す（このフックは文脈を返せないので、知らせは次に通った道具へ持ち越す）
     this.#denialStreaks.noteProgress(record.agentId ?? 'manager');
 
-    if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
-
     const actor = actorOf(this.#id, record);
     const tool = record.toolName ?? '(不明)';
     const error =
@@ -5723,17 +5682,6 @@ class RunnerSession {
     if (this.#sessionReportLanguage() !== 'ja') return null;
     this.#note(`${record.source} で開いたので、応答の言語の段落を会話へ足した。#4995`);
     return REPORT_LANGUAGE_PROMPT_PARAGRAPH;
-  }
-
-  // `{ continue: true }` を返すだけでブロックしない: ブロックすれば能力の削除になるため
-  async #onUserPromptSubmit(record: AgentUserPromptSubmitRecord): Promise<void> {
-    if (record.agentId === undefined) {
-      this.#turnTally.incrementSubmitsSinceResult();
-      // 取れない回に `'unknown': 1` のような行を作らない（AGENTS.md 地雷「取れない軸に0の行を作る」）
-      if (typeof record.source === 'string') {
-        this.#turnTally.recordSubmitSource(record.source);
-      }
-    }
   }
 
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {

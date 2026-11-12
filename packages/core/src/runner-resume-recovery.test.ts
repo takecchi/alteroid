@@ -29,9 +29,6 @@ function createFakeHost(input: {
       calls.push('renderSeedRecord');
       return input.record;
     },
-    closeWorkerWaitWindow() {
-      calls.push('closeWorkerWaitWindow');
-    },
     discardCarriedOverWork() {
       calls.push('discardCarriedOverWork');
     },
@@ -83,7 +80,7 @@ describe('recoverFromFailedResume — 手順（host への呼び出し順）', (
     expect(host.calls).toEqual(['takeResumeAttempt']);
   });
 
-  it('既に手が動いていれば、待つ窓や作業者の在り高には触れずに not-a-resume-failure を返す', () => {
+  it('既に手が動いていれば、作業者の在り高には触れずに not-a-resume-failure を返す', () => {
     const host = createFakeHost({
       attempt: { sessionId: 's1' },
       progressed: true,
@@ -93,20 +90,19 @@ describe('recoverFromFailedResume — 手順（host への呼び出し順）', (
     expect(host.calls).toEqual(['takeResumeAttempt', 'hasProgressed', 'renderSeedRecord']);
   });
 
-  it('記録が組み立てられなければ unresumable。closeWorkerWaitWindow → discardCarriedOverWork の順で呼び、テアダウンはしない', () => {
+  it('記録が組み立てられなければ unresumable。discardCarriedOverWork を呼び、テアダウンはしない', () => {
     const host = createFakeHost({ attempt: { sessionId: 's1' }, progressed: false, record: null });
     expect(recoverFromFailedResume(host, '理由')).toBe('unresumable');
     expect(host.calls).toEqual([
       'takeResumeAttempt',
       'hasProgressed',
       'renderSeedRecord',
-      'closeWorkerWaitWindow',
       'discardCarriedOverWork',
       'emitResumeFailed',
     ]);
   });
 
-  it('記録が組み立てられれば recovered。closeWorkerWaitWindow → discardCarriedOverWork の後にテアダウンし、pushHandoff → openSession の順で開き直す', () => {
+  it('記録が組み立てられれば recovered。discardCarriedOverWork の後にテアダウンし、pushHandoff → openSession の順で開き直す', () => {
     const host = createFakeHost({
       attempt: { sessionId: 's1' },
       progressed: false,
@@ -117,21 +113,11 @@ describe('recoverFromFailedResume — 手順（host への呼び出し順）', (
       'takeResumeAttempt',
       'hasProgressed',
       'renderSeedRecord',
-      'closeWorkerWaitWindow',
       'discardCarriedOverWork',
       'teardownForRecreate',
       'emitResumeFailed',
       'pushHandoff',
       'openSession',
     ]);
-  });
-
-  it('⚠️ 変異: closeWorkerWaitWindow と discardCarriedOverWork の順序を入れ替えると、この歯が赤くなる', () => {
-    const host = createFakeHost({ attempt: { sessionId: 's1' }, progressed: false, record: null });
-    recoverFromFailedResume(host, '理由');
-    const closeIndex = host.calls.indexOf('closeWorkerWaitWindow');
-    const discardIndex = host.calls.indexOf('discardCarriedOverWork');
-    expect(closeIndex).toBeGreaterThanOrEqual(0);
-    expect(discardIndex).toBeGreaterThan(closeIndex);
   });
 });

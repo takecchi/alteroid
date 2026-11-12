@@ -1,7 +1,7 @@
 import type { SdkFailure } from './sdk-failure.js';
 
 /**
- * 畳む場所が3つあり、それぞれ畳む範囲が違う（`takeAtResult` は全12フィールド、`takeSaid` は `said` と `uuid` だけ、
+ * 畳む場所が3つあり、それぞれ畳む範囲が違う（`takeAtResult` は全フィールド、`takeSaid` は `said` と `uuid` だけ、
  * `discardOpenedWorkersAndRejections` は作業者の3本を読まずに捨てる）。1本へ統合しない: 統合すると、
  * 畳まなくていいフィールドまで畳まれるか、畳みたいフィールドが畳まれない呼び出し元が出るから。
  */
@@ -22,17 +22,6 @@ export class RunnerTurnTally {
    * `takeSaid` では読まない: `result` が来ていない経路では「失敗として終わった」と名乗れないため。
    */
   #rejected: SdkFailure | null = null;
-
-  #inputsSinceResult = 0;
-
-  #notificationsSinceResult = 0;
-
-  /**
-   * 作業者の道具は数えない: 混ぜると「マネージャーは何もしていないターン」の再現条件が消える。
-   */
-  #toolsSinceResult = 0;
-
-  #submitsSinceResult = 0;
 
   /**
    * `task_type` を名乗らない provider の `task_started` は区別が付かず作業者として数える
@@ -55,9 +44,6 @@ export class RunnerTurnTally {
   /** `taskId` が無い通知は重複を除けないので、1件ずつ別の鍵で数える。 */
   #failedWorkerNotificationsWithoutTaskId = 0;
 
-  /** 取れない回に `'unknown': 1` のような行を作らない（AGENTS.md 地雷「取れない軸に0の行を作る」）。 */
-  #submitSources = new Map<string, number>();
-
   get hasSaid(): boolean {
     return this.#said.length > 0;
   }
@@ -69,26 +55,6 @@ export class RunnerTurnTally {
 
   setRejected(rejected: SdkFailure): void {
     this.#rejected = rejected;
-  }
-
-  incrementInputsSinceResult(): void {
-    this.#inputsSinceResult += 1;
-  }
-
-  incrementNotificationsSinceResult(): void {
-    this.#notificationsSinceResult += 1;
-  }
-
-  incrementToolsSinceResult(): void {
-    this.#toolsSinceResult += 1;
-  }
-
-  incrementSubmitsSinceResult(): void {
-    this.#submitsSinceResult += 1;
-  }
-
-  recordSubmitSource(source: string): void {
-    this.#submitSources.set(source, (this.#submitSources.get(source) ?? 0) + 1);
   }
 
   addOpenedWorker(taskId: string): void {
@@ -114,11 +80,6 @@ export class RunnerTurnTally {
   takeAtResult(): {
     said: string[];
     rejected: SdkFailure | null;
-    inputsThisTurn: number;
-    notificationsThisTurn: number;
-    toolsThisTurn: number;
-    submitsThisTurn: number;
-    sourcesThisTurn: Map<string, number>;
     openedWorkersThisTurn: number;
     workerRejectionsThisTurn: string[];
     failedWorkerNotificationsThisTurn: number;
@@ -131,11 +92,6 @@ export class RunnerTurnTally {
     const rejected = this.#rejected;
     this.#rejected = null;
 
-    const inputsThisTurn = this.#inputsSinceResult;
-    const notificationsThisTurn = this.#notificationsSinceResult;
-    const toolsThisTurn = this.#toolsSinceResult;
-    const submitsThisTurn = this.#submitsSinceResult;
-    const sourcesThisTurn = this.#submitSources;
     const openedWorkersThisTurn = this.#openedWorkersThisTurn.size;
     const workerRejectionsThisTurn = this.#workerRejectionsThisTurn;
     const failedWorkerNotificationsThisTurn = this.#failedWorkerNotificationsThisTurn.size;
@@ -143,11 +99,6 @@ export class RunnerTurnTally {
       ...this.#failedWorkerNotificationsThisTurn.values(),
     ].filter(Boolean).length;
 
-    this.#inputsSinceResult = 0;
-    this.#notificationsSinceResult = 0;
-    this.#toolsSinceResult = 0;
-    this.#submitsSinceResult = 0;
-    this.#submitSources = new Map();
     this.#openedWorkersThisTurn = new Set();
     this.#workerRejectionsThisTurn = [];
     this.#failedWorkerNotificationsThisTurn = new Map();
@@ -156,11 +107,6 @@ export class RunnerTurnTally {
     return {
       said,
       rejected,
-      inputsThisTurn,
-      notificationsThisTurn,
-      toolsThisTurn,
-      submitsThisTurn,
-      sourcesThisTurn,
       openedWorkersThisTurn,
       workerRejectionsThisTurn,
       failedWorkerNotificationsThisTurn,

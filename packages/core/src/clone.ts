@@ -4997,7 +4997,7 @@ class Clone implements CloneHost {
         return this.#applyTurnEnded(event);
       }
 
-      // 反応を足さない: 区間（`worker_wait`）や背景処理（`background_tasks`）を数えるのはマネージャー層（`runner.ts`）で、
+      // 反応を足さない: 背景処理（`background_tasks`）を数えるのはマネージャー層（`runner.ts`）で、
       // この層は見ないと決めてある。クローンのターンは人間が読む面で、報告を握り潰す判断が別に要る。
       // 例外は `delegation_notified` の失敗通知だけ: 作業者が上限で落ちた事実だけを覚え、次の道具の結果へ添える（#4911）。
       case 'delegation_notified': {
