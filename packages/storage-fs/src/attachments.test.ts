@@ -5,6 +5,7 @@ import {
   ATTACHMENT_UNBOUND_TTL_MS,
   captureStderr,
   verifyAttachmentStoreContract,
+  type AttachmentMeta,
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -173,6 +174,76 @@ describe('FsAttachmentStore', () => {
     for (const id of broken) await utimes(join(dir, 'attachments', id), old, old);
     expect(await store.prune(now)).toBe(2);
     expect(await readdir(join(dir, 'attachments'))).toEqual([]);
+  });
+
+  it('meta.json の size が負・小数なら壊れた行として「無い」と答え、0 と正の整数は読める（metaSchema の .int().nonnegative()）', async () => {
+    const cases: [number, boolean][] = [
+      [-1, false],
+      [1.5, false],
+      [0, true],
+      [10, true],
+    ];
+    for (const [index, [size, readable]] of cases.entries()) {
+      const id = `5555555${index}-5555-4555-8555-555555555555`;
+      const orphan = join(dir, 'attachments', id);
+      await mkdir(orphan, { recursive: true });
+      const meta = {
+        id,
+        name: 'n.txt',
+        mediaType: 'text/plain',
+        size,
+        sha256: 'x',
+        createdAt: '2026-10-07T00:00:00.000Z',
+        // 保存中の印にする: 期限つきだと実時間で切れて「無い」になり、size の検査と見分けが付かない
+        keptAt: '2026-10-07T01:00:00.000Z',
+      };
+      await writeFile(join(orphan, 'meta.json'), JSON.stringify(meta));
+      await writeFile(join(orphan, 'data'), 'whatever');
+      expect(await store.getMeta(id), `size=${size}`).toEqual(readable ? meta : undefined);
+    }
+  });
+
+  it('meta.json の全13欄は1欄も落ちずに読め、欄の欠けた meta は optional の欄だけ省ける', async () => {
+    const id = '66666666-6666-4666-8666-666666666666';
+    const full = {
+      id,
+      name: 'n.txt',
+      mediaType: 'text/plain',
+      size: 3,
+      sha256: 'x',
+      conversationId: 'c',
+      externalEventId: 'e',
+      managerReportId: 'r',
+      uploadedBy: 'operator',
+      createdAt: '2026-10-07T00:00:00.000Z',
+      expiresAt: '2026-10-08T00:00:00.000Z',
+      keptAt: '2026-10-07T01:00:00.000Z',
+      releasedAt: '2026-10-07T02:00:00.000Z',
+    } satisfies Required<AttachmentMeta>;
+    const orphan = join(dir, 'attachments', id);
+    await mkdir(orphan, { recursive: true });
+    await writeFile(join(orphan, 'data'), 'abc');
+    await writeFile(join(orphan, 'meta.json'), JSON.stringify(full));
+    expect(Object.keys(full)).toHaveLength(13);
+    expect(await store.getMeta(id)).toEqual(full);
+    // 必須の6欄は欠けると壊れた行（optional の7欄は欠けても読める）
+    for (const key of ['id', 'name', 'mediaType', 'size', 'sha256', 'createdAt']) {
+      const rest = Object.entries(full).filter(([name]) => name !== key);
+      await writeFile(join(orphan, 'meta.json'), JSON.stringify(Object.fromEntries(rest)));
+      expect(await store.getMeta(id), key).toBeUndefined();
+    }
+    const core = {
+      id,
+      name: full.name,
+      mediaType: full.mediaType,
+      size: full.size,
+      sha256: full.sha256,
+      createdAt: full.createdAt,
+      expiresAt: full.expiresAt,
+      keptAt: full.keptAt,
+    };
+    await writeFile(join(orphan, 'meta.json'), JSON.stringify(core));
+    expect(await store.getMeta(id)).toEqual(core);
   });
 
   it('書きかけの data.tmp.*（put の途中で落ちた残骸）は預かった扱いにならず、1時間たってから片付く', async () => {
