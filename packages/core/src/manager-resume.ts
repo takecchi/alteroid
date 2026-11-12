@@ -1,6 +1,11 @@
-import { noteResumeAfterStopFoldFailed, reasonOf } from './dropped-record.js';
+import {
+  noteBackgroundFailure,
+  noteResumeAfterStopFoldFailed,
+  reasonOf,
+} from './dropped-record.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX, EXCHANGE_KIND_RECOVERY_PREFIX } from './exchange-kind.js';
 import {
+  LEASE_REFUSAL_PROLONGED_MS,
   LEASE_TTL_MS,
   describeAmbiguousSighting,
   describeVerdict,
@@ -10,6 +15,7 @@ import {
   type LeaseSighting,
 } from './lease.js';
 import type { LeaseRefusalKind, ManagerRecord, ResumeOutcome } from './manager.js';
+import { describeLeaseRefusalProlonged, describeLeaseRefusalResolved } from './manager-notices.js';
 import { judgeClaimAgainst } from './runner-roster.js';
 import {
   listRunnerManagers,
@@ -203,6 +209,94 @@ export class ManagerResume {
   }
 
   /**
+   * 断りを `record.leaseRefusal` に書く。置き場を `#claimForResume` の1か所にするのは、3つの契機（restore・reattach・send）がすべて通るから。
+   * `held` と `persist-failed` は同じ episode として引き継ぐ（kind が変わっても数え直さない）。`ambiguous` は引き継がず、長引きの知らせの対象にもしない。
+   * 知らせの失敗は関門の結果（断る）を変えない: 知らせは断った後の記録であって、判定の一部ではない。
+   */
+  #recordRefusal(
+    record: ManagerRecord,
+    kind: LeaseRefusalKind,
+    detail: string,
+    now: number,
+    extra: { claimableAt?: number } = {},
+  ): void {
+    const prior = record.leaseRefusal;
+    const episode = kind !== 'ambiguous' && prior?.kind !== 'ambiguous' ? prior : undefined;
+    const next: NonNullable<ManagerRecord['leaseRefusal']> = {
+      detail,
+      kind,
+      ...extra,
+      since: episode?.since ?? now,
+      count: (episode?.count ?? 0) + 1,
+      ...(episode?.prolongedNotifiedAt === undefined
+        ? {}
+        : { prolongedNotifiedAt: episode.prolongedNotifiedAt }),
+    };
+    record.leaseRefusal = next;
+    if (
+      kind === 'ambiguous' ||
+      next.prolongedNotifiedAt !== undefined ||
+      now - next.since < LEASE_REFUSAL_PROLONGED_MS
+    ) {
+      return;
+    }
+    // 出す前に印を立てる: 知らせが投げても、梯子の次の周で同じ知らせを積み直さない。
+    next.prolongedNotifiedAt = now;
+    this.#noteProlonged(record.job.id, kind, next, now);
+  }
+
+  /** 通った（引き取れた）。長引きを知らせた episode に限り「解けた」を1回言う。 */
+  #clearRefusal(record: ManagerRecord, now: number): void {
+    const prior = record.leaseRefusal;
+    delete record.leaseRefusal;
+    if (prior?.prolongedNotifiedAt === undefined) return;
+    this.#noteResolved(record.job.id, now - prior.since);
+  }
+
+  // 日誌（`void` + catch）と report（try）を別々に隔離する: どちらかが投げても、もう一方と関門の結果を巻き込まない。
+  #noteProlonged(
+    managerId: string,
+    kind: LeaseRefusalKind,
+    refusal: NonNullable<ManagerRecord['leaseRefusal']>,
+    now: number,
+  ): void {
+    if (kind === 'ambiguous') return;
+    const text = describeLeaseRefusalProlonged({
+      managerId,
+      kind,
+      detail: refusal.detail,
+      elapsedMs: now - refusal.since,
+      count: refusal.count,
+    });
+    try {
+      void this.#journalExchange(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] ${text}`,
+      ).catch((error: unknown) => {
+        noteBackgroundFailure('貸し出しの関門の長引きの日誌', `managerId=${managerId}`, error);
+      });
+      this.#postReport(managerId, text);
+    } catch (error) {
+      noteBackgroundFailure('貸し出しの関門の長引きの知らせ', `managerId=${managerId}`, error);
+    }
+  }
+
+  #noteResolved(managerId: string, elapsedMs: number): void {
+    const text = describeLeaseRefusalResolved(managerId, elapsedMs);
+    try {
+      void this.#journalExchange(
+        'outbound',
+        `${EXCHANGE_KIND_RECOVERY_PREFIX}[${managerId}] ${text}`,
+      ).catch((error: unknown) => {
+        noteBackgroundFailure('貸し出しの関門の解消の日誌', `managerId=${managerId}`, error);
+      });
+      this.#postReport(managerId, text);
+    } catch (error) {
+      noteBackgroundFailure('貸し出しの関門の解消の知らせ', `managerId=${managerId}`, error);
+    }
+  }
+
+  /**
    * 関門を契機（`restore` / `hello` / `manager_send`）ごとに置かない: 足し忘れた契機だけが素通しになり、二重実行が起きるまで見えない。`#resume` は3つとも通る。
    * 断っても回数で諦めない: 持ち主が握っている間だけの話で待てば通る。諦めると、台帳では走っているのに誰も走っていない仕事が残る。
    */
@@ -218,25 +312,23 @@ export class ManagerResume {
     if (!mayClaim(verdict)) {
       // 未知の判定が増えて落ちてきても `ambiguous`（時間では解けない側）に倒す: `mayClaim` の「名指ししなかった判定は断る」と同じ安全側。
       const kind: LeaseRefusalKind = verdict.kind === 'held' ? 'held' : 'ambiguous';
-      record.leaseRefusal = {
-        detail: describeVerdict(verdict),
-        kind,
+      this.#recordRefusal(record, kind, describeVerdict(verdict), now, {
         ...(verdict.kind === 'held' ? { claimableAt: verdict.claimableAt } : {}),
-      };
+      });
       if (kind === 'ambiguous') {
         const duplicates = verdict.kind === 'ambiguous' ? verdict.duplicates : 0;
         this.noteAmbiguousSighting(runner.runnerId, duplicates, [record.job.id]);
       }
       return false;
     }
-    // delete する前に「直前が併存だったか」を見る: 後だと `#noteAmbiguousResolved` が「解けた」を出す機会を失う。
+    // 消す前に「直前が併存だったか」を見る: 後だと `#noteAmbiguousResolved` が「解けた」を出す機会を失う。
     if (record.leaseRefusal?.kind === 'ambiguous') {
       this.noteAmbiguousResolved(runner.runnerId, [record.job.id]);
     }
-    delete record.leaseRefusal;
 
     // 世代を進めない: 台帳の世代が runner の持つ世代より新しくなり、次の命令が拒まれる。
     if (verdict.kind === 'same-holder') {
+      this.#clearRefusal(record, now);
       record.job.lease = touchLease(verdict.lease, now);
       return true;
     }
@@ -261,13 +353,17 @@ export class ManagerResume {
       // `updatedAt` も戻す: 貸し出しだけ戻すと、次に書けた回の台帳が「この時刻に何かを書いた」と言うのに中身が伴わない。
       record.job.lease = before;
       record.job.updatedAt = beforeUpdatedAt;
-      record.leaseRefusal = {
-        detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${reasonOf(error)}`,
-        // `ambiguous` にしない: `ALTEROID_RUNNER_ID` は正しく、落ちたのは台帳への書き込みだけ。
-        kind: 'persist-failed',
-      };
+      // `ambiguous` にしない: `ALTEROID_RUNNER_ID` は正しく、落ちたのは台帳への書き込みだけ。
+      this.#recordRefusal(
+        record,
+        'persist-failed',
+        `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${reasonOf(error)}`,
+        now,
+      );
       return false;
     }
+    // 書けた後に消す（判定の前に消さない）: 書けない回は直前の断りを引き継いで数え続けないと、梯子の1周ごとに始まりへ戻り、長引きに気づけない。
+    this.#clearRefusal(record, now);
 
     // 奪った回も根拠つきで残す: `drained`（畳んだという約束が根拠）と `undecidable`（判定材料なし）は「奪っていない」とは言えない。
     await this.#journal({
