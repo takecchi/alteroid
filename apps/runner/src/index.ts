@@ -49,6 +49,7 @@ import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
 import { childUserIds } from './child-user-ids.js';
 import { openManagerToolsSocket } from './manager-tools-socket.js';
 import { planPeerSocket } from './peer-socket.js';
+import { warnRetiredEnv } from './retired-env-warning.js';
 import { gateDuringShutdown, waitForPickups } from './shutdown-pickups.js';
 import {
   startReclaimSweep,
@@ -588,6 +589,9 @@ export async function main(): Promise<void> {
         `既定へ戻すにはこの環境変数を外してください\n`,
     );
   }
+
+  // 外した調整用の環境変数が置かれたままなら、効いていると思い込ませないために名前だけ言う（値は出さない）。
+  warnRetiredEnv(process.env, writeStderrLine);
 
   // この時点の袋は0件・プロファイルも未着（後からデーモンが降ろす）。降りて変われば上の `emit` が出し直す。
   for (const line of host.anthropicRoute()) process.stdout.write(`alteroid-runner: ${line}\n`);
