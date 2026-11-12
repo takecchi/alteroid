@@ -36,16 +36,12 @@ interface PasswordProvider {
 export type AuthProvider = OAuthProvider | PasswordProvider;
 
 export interface AuthProviderRegistry {
-  list(): AuthProvider[];
-  get(id: string): AuthProvider | null;
   oauth(id: string): OAuthProvider | null;
 }
 
 export function createAuthProviderRegistry(providers: AuthProvider[]): AuthProviderRegistry {
   const byId = new Map(providers.map((provider) => [provider.id, provider]));
   return {
-    list: () => [...byId.values()],
-    get: (id) => byId.get(id) ?? null,
     oauth: (id) => {
       const provider = byId.get(id);
       return provider !== undefined && provider.kind === 'oauth2' ? provider : null;

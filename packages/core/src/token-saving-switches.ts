@@ -1,4 +1,4 @@
-import { clearEnvSwitchNotesForTesting, resolveEnvSwitch } from './env-switch.js';
+import { resolveEnvSwitch } from './env-switch.js';
 
 // トークン節約の改修を系統別に入り切りするスイッチ。応答の質が下がったときに、節約が原因かを切り分けるための口である。
 // 値の綴り: `on` / `1` / `true` / `yes` / `enabled` が有効、`off` / `0` / `false` / `no` / `disabled` が無効、未設定と空は既定。大文字小文字は問わない。
@@ -6,9 +6,6 @@ import { clearEnvSwitchNotesForTesting, resolveEnvSwitch } from './env-switch.js
 
 /** 系統3「可変内容の抜粋・予算」。既定は有効＝現状のまま。無効にすると抜粋・予算を節約改修の前の形に戻す。 */
 export const TOKEN_SAVING_EXCERPT_ENV = 'ALTEROID_TOKEN_SAVING_EXCERPT';
-
-/** テスト用: 読めない綴りの痕跡の「1回だけ」の控えを空にする。 */
-export const clearTokenSavingNotesForTesting = clearEnvSwitchNotesForTesting;
 
 // 読み方は `env-switch.ts`。セッションを組むたびに呼ばれうるので、痕跡は同じ名前・同じ値で1回だけ残る。
 export function resolveTokenSavingExcerpt(env: NodeJS.ProcessEnv = process.env): boolean {
