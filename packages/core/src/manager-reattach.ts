@@ -365,7 +365,7 @@ export class ManagerReattach {
     // 待っていた確認（`waiting`）が消えたまま戻らず、回答が届かなくなる。`attached = false` も残り、次の `manager_send` が生きたセッションへ resume を撃ち直す（#4454）。
     if (known && !relocating) known.attached = false;
 
-    // 印は resume を挑む直前に置き、戻れたときに消す: `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ resume が成功しなかった、が成り立つ。
+    // 印は貸し出しの関門を通った直後（resume を挑む直前）に置き、戻れたときに消す: 関門の後で `#resumeOnce` が投げる回も「戻れなかった」側へ落ち、この節を抜けて印が立っている ⟺ 関門を通って resume を挑み、成功しなかった、が成り立つ。
     const missingAt = this.#nowIso();
 
     // 手を動かしている最中だったものだけ戻す: `done` は死ではなく待機で、起こすと開いたままの窓を勝手に閉じる。判定より前に `#records` へ載せない: 終わった仕事まで `live: true` で見せ、話しかけると必ず失敗する相手が生まれる。
@@ -376,15 +376,23 @@ export class ManagerReattach {
 
     const record = current ?? { job: { ...fresh }, waiting: [], attached: false };
     this.#records.set(job.id, record);
-    const markMissing = (): void => {
+    const detach = (): void => {
       record.attached = false;
       // 待っていた確認を持ち越さない: 新しい器はその request_id を知らず、残すと以後の `manager_send` が死んだ確認への回答として横取りされ、誰からも届かないマネージャーになる。
       this.#withdrawWaiting(record, '器が入れ替わり、新しい器はこの確認を知らない');
+    };
+    // 「resume でも入り直せなかった」の印は、貸し出しの関門を通って resume を挑む回にだけ立てる（`resumeOnce` の `onClaimed`）: 関門が断った回（held / persist-failed / ambiguous）は resume を呼んでいないので、立てると前の器が握っているだけの `held` を「セッション無し」と読ませる。
+    const markResumeFailed = (): void => {
       record.sessionMissingSince ??= missingAt;
-      // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ resume でも入り直せなかった。
+      // 由来を上書きする（格上げ）: ここを抜けて印が残っている ⟺ 関門を通って resume を挑み、入り直せなかった。
       record.sessionMissingKind = 'resume-failed';
     };
-    if (!relocating) markMissing();
+    const markMissing = (): void => {
+      detach();
+      markResumeFailed();
+    };
+    // 同じ runner の取り直しは、器が入れ替わったと分かっているので像は先に倒す（`attached = false`・確認の取り下げ）。印だけは関門の後まで待つ。
+    if (!relocating) detach();
 
     // 1本が戻せなくても残りを道連れにしない。移送の窓はどの抜け方でも必ず1回閉じる（`ResumeEventWindows#close`）。
     try {
@@ -412,8 +420,12 @@ export class ManagerReattach {
           runner,
           message,
           undefined,
-          relocating ? markMissing : undefined,
+          relocating ? markMissing : markResumeFailed,
         );
+        // 関門より前に「開き直せない」と分かる回（session_id が無い・cwd が分からない）は、断ったのではなく入り直せないことが事実なので、従来どおり印を立てる。
+        if (!relocating && (outcome === 'no-session' || outcome === 'workspace-path-unknown')) {
+          markResumeFailed();
+        }
         if (outcome === 'resumed') {
           // `#resumeOnce` から戻った直後、他の await を挟む前に読む（`#restoreJobs` と同じ理由）。
           const swapNotice = cwdSwapNoticeClause(record);
