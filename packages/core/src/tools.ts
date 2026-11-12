@@ -84,10 +84,8 @@ export {
 } from './clone-tools-manager-list.js';
 export { renderPeerReach } from './clone-tools-self.js';
 export { formatPracticeKindRangeJa } from './clone-tools-practice.js';
-export {
-  GITHUB_OBSERVATION_CLONE_OBSERVER,
-  REMOVE_MANY_JOURNAL_ID_CHARS,
-} from './clone-tools-task.js';
+export { GITHUB_OBSERVATION_CLONE_OBSERVER } from './clone-tools-task.js';
+export { REMOVE_MANY_JOURNAL_ID_CHARS } from './clone-tools-inbox-remove-many.js';
 export { USAGE_AXES } from './clone-tools-usage.js';
 export { describePermissionEvidence } from './clone-tools-approval.js';
 export { GROUNDS_NOT_DELIVERED } from './clone-tools-journal.js';
