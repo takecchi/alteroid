@@ -128,7 +128,8 @@
     "unreadable-race": 306,
     "unreadable-journal-stopped": 2773,
     "peek-fails#1": 11,
-    "peek-fails#2": 11
+    "peek-fails#2": 11,
+    "race-all-one": 113
   },
   "scenarios": {
     "arg-errors#1": {
@@ -13183,6 +13184,36 @@
         "unreadable": []
       },
       "journal": [],
+      "delivery": []
+    },
+    "race-all-one": {
+      "output": {
+        "length": 113,
+        "text": "**1 件も消せなかった**（理由: 1件だけ競合）。\n未読 1 件 → 絞り込みで 1 件\n絞り込み: types=[external]\n⚠ 対象 1 件のうち 1 件は消せなかった（この呼びの最中に他の経路が先に消した）。",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "inbox": {
+        "entries": [],
+        "unreadable": []
+      },
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "受信箱の未読を絞り込みで一括して畳む（消す）（1/1 塊目、この塊は 1 件）: 1件だけ競合\n絞り込み: types=[external]\n消す id: e-1",
+          "grounds": "クローン自身が inbox_remove_many で絞り込んで消す（人間はこれを読んで後から否定する）"
+        },
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "直前の行を一部打ち消す。受信箱の合図を消す行のうち、次の id は消していない（他経路が先に消していた）: e-1",
+          "grounds": "日誌を先に書いたが、その id を消す操作は実行されなかったため打ち消す"
+        }
+      ],
       "delivery": []
     }
   }
