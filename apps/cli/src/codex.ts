@@ -1,4 +1,6 @@
 import { stdout } from './terminal-out.js';
+import type { InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
 
 import { describeAuthFailure, fetchDaemon, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
@@ -6,24 +8,11 @@ import { redactError } from './redact.js';
 
 /** 値は1文字も出さない。 */
 
-interface CodexAuthStatus {
-  loggedIn: boolean;
-  email: string | null;
-  planType: string | null;
-  updatedAt: string | null;
-  fingerprint: string | null;
-  failure: { at: string; reason: string } | null;
-}
-
-interface CodexLoginView {
-  id: string;
-  state: 'pending' | 'succeeded' | 'failed' | 'canceled' | 'expired';
-  verificationUrl: string;
-  userCode: string;
-  startedAt: string;
-  finishedAt: string | null;
-  error: string | null;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり `fetchDaemon` で撃つ（`createClient` は呼ばない）
+type CodexAuthStatus = InferResponseType<DaemonClient['codex']['auth']['$get'], 200>;
+type CodexLoginView = InferResponseType<DaemonClient['codex']['login']['$post'], 200>;
+type CodexLogoutView = InferResponseType<DaemonClient['codex']['auth']['$delete'], 200>;
 
 function describeCodexAuthStatus(status: CodexAuthStatus): string {
   if (!status.loggedIn) {
@@ -136,9 +125,7 @@ export async function codexLogoutCommand(
     options,
     io,
   );
-  const result = (await request(target, '/codex/auth', { method: 'DELETE' })) as {
-    removed: boolean;
-  };
+  const result = (await request(target, '/codex/auth', { method: 'DELETE' })) as CodexLogoutView;
   stdout.write(
     result.removed
       ? 'Codex の ChatGPT ログインを消しました（runner からも外しました）。\n'
