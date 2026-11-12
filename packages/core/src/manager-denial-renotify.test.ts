@@ -189,7 +189,7 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     });
     expect(delivered.text).toContain('Bash');
     expect(delivered.text).toContain('動きが無い');
-    expect(delivered.text).toContain('知らせ直し 1/2 回目');
+    expect(delivered.text).toContain('知らせ直し 1/1 回目');
     expect(delivered.text).toContain('issue #1105 C');
     expect(delivered.text).toContain('requestId` が無く');
     expect(delivered.text).toContain('journal_read');
@@ -197,7 +197,7 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     await pool.stop();
   });
 
-  it('1回目の後さらに30分、まだ動きが無ければ2回目が届く', async () => {
+  it('1回目の後は、さらに30分以上経って動きが無くても2通目を出さない（2段目は外した。無音の通知と同じ時刻に重なるため）', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
     fake.denied('mgr-denial-renotify', 'Bash');
     await waitForDenialJournaled(stores, 'Bash');
@@ -209,24 +209,17 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     });
     const afterFirst = inbox.length;
 
-    advance(THIRTY_MINUTES_MS - 1 - (TEN_MINUTES_MS + 1));
+    advance(THIRTY_MINUTES_MS - (TEN_MINUTES_MS + 1) + 1);
+    await pool.renotifyStalledDenials();
+    advance(THIRTY_MINUTES_MS);
     await pool.renotifyStalledDenials();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inbox.length).toBe(afterFirst);
 
-    advance(2);
-    await pool.renotifyStalledDenials();
-    const second = await vi.waitFor(() => {
-      const found = inbox.slice(afterFirst).find((event) => event.type === 'manager_message');
-      if (!found) throw new Error('2回目がまだ届いていない');
-      return found as { text: string };
-    });
-    expect(second.text).toContain('知らせ直し 2/2 回目');
-
     await pool.stop();
   });
 
-  it('2回とも出したら、それ以上は黙る。黙ったことは日誌に1行残る', async () => {
+  it('1回出したら、それ以上は黙る。黙ったことは日誌に1行残る', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
     fake.denied('mgr-denial-renotify', 'Bash');
     await waitForDenialJournaled(stores, 'Bash');
@@ -236,15 +229,15 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     await vi.waitFor(() => {
       if (!inbox.some((event) => event.type === 'manager_message')) throw new Error('1回目がまだ');
     });
-
-    advance(THIRTY_MINUTES_MS - TEN_MINUTES_MS);
-    await pool.renotifyStalledDenials();
     await vi.waitFor(async () => {
       const entries = await stores.journal.list({ types: ['exchange'] });
-      if (!entries.some((entry) => JSON.stringify(entry).includes('知らせ直しを2回とも出した'))) {
+      if (!entries.some((entry) => JSON.stringify(entry).includes('知らせ直しを1回とも出した'))) {
         throw new Error('黙った跡がまだ日誌に無い');
       }
     });
+
+    advance(THIRTY_MINUTES_MS - TEN_MINUTES_MS);
+    await pool.renotifyStalledDenials();
 
     const before = inbox.length;
     advance(4 * 60 * 60_000);
@@ -337,7 +330,7 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     await pool.renotifyStalledDenials();
     const afterFirst = await vi.waitFor(() => {
       const found = inbox.find(
-        (event) => event.type === 'manager_message' && event.text.includes('知らせ直し 1/2 回目'),
+        (event) => event.type === 'manager_message' && event.text.includes('知らせ直し 1/1 回目'),
       );
       if (!found) throw new Error('1回目がまだ');
       return inbox.length;
@@ -359,7 +352,7 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
       if (!found) throw new Error('新しいエピソードの1回目がまだ届いていない');
       return found as { text: string };
     });
-    expect(second.text).toContain('知らせ直し 1/2 回目');
+    expect(second.text).toContain('知らせ直し 1/1 回目');
 
     await pool.stop();
   });

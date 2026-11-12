@@ -6,7 +6,7 @@ import { describeSilenceNotice, describeSilenceRecovered } from './manager-notic
 
 /**
  * running の担当が、進捗の出来事を 1 本も出さないまま続いたら知らせる長さ。環境変数にしない。
- * 既存の「待ち」の最大（拒否の知らせ直しの 2 段目・背景待ちのまとめ配り＝30 分）に揃えた。10 分だと長いビルド・長い推論で誤検出が増え、60 分だと放置が長い。
+ * 既存の「待ち」の最大（背景待ちのまとめ配り＝30 分）に揃えた。10 分だと長いビルド・長い推論で誤検出が増え、60 分だと放置が長い。
  */
 export const MANAGER_SILENCE_NOTICE_MS = 30 * 60_000;
 

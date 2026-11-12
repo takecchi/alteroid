@@ -5,18 +5,14 @@ import { laterIso } from './later-iso.js';
 import type { ManagerRecord } from './manager.js';
 import { codeSpan } from './markdown-span.js';
 import { ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
-import { WITHHELD_REPORT_FLUSH_MS } from './withheld-reports.js';
 
 /**
- * **配列の長さがそのまま知らせ直しの上限回数（2回）を兼ねる。**
- * 1回目は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）、2回目は `WITHHELD_REPORT_FLUSH_MS` と同じ値だが、
- * 参照で結びつけない: 別の関心事の期限なので、あちらの env を差し替えてもこちらは動かさない。
+ * **配列の長さがそのまま知らせ直しの上限回数（1回）を兼ねる。**
+ * 1回目は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）。かつてあった30分後の2回目は外した:
+ * 無音の通知（`SilenceWatch`。`permission_denied` も進捗に数え、無音30分で1通）と同じ時刻に2通届くため。
  * ここが数えるのは新設した通知の回数であって、道具の実行回数でもターン数でもない（暴走を機械的に止めるものではない）。
  */
-const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
-  ONE_SHOT_ALLOW_TTL_MS,
-  WITHHELD_REPORT_FLUSH_MS,
-];
+const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [ONE_SHOT_ALLOW_TTL_MS];
 
 interface DenialRenotifierDeps {
   records: ReadonlyMap<string, ManagerRecord>;
