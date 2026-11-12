@@ -119,6 +119,7 @@ async function copyOpenedAttachment(
   await mkdir(dir, { recursive: true, mode: 0o700 });
   // 一時ファイル名に名前を足さない: NAME_MAX を超えるため
   const tmp = resolve(dir, `.${randomUUID()}.tmp`);
+  const out = createWriteStream(tmp, { mode: 0o600 });
   try {
     const hash = createHash('sha256');
     let size = 0;
@@ -131,7 +132,7 @@ async function copyOpenedAttachment(
           yield chunk;
         }
       },
-      createWriteStream(tmp, { mode: 0o600 }),
+      out,
     );
     const digest = hash.digest('hex');
     // 置き場が途中で切れて例外なしに終わっても、欠けた写しを「取れた」と言わない: 担い手が壊れたファイルで作業を進めるため
@@ -145,6 +146,10 @@ async function copyOpenedAttachment(
     return copy(false, size, digest);
   } catch (error) {
     stream.destroy();
+    // 書き込み先が閉じるのを待ってから消す: 流れが先に落ちると pipeline は書き込み先の open の完了前に reject し、
+    // 後から open が一時ファイルを作ると、先に済ませた rm をすり抜けて 0 バイトの `.tmp` が残るため
+    out.destroy();
+    if (!out.closed) await new Promise<void>((done) => out.once('close', () => done()));
     await rm(tmp, { force: true }).catch(() => undefined);
     throw error;
   }
