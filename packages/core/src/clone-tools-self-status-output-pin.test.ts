@@ -298,7 +298,6 @@ function turnTimingEntry(overrides: Record<string, unknown> = {}): Record<string
       ],
     },
     sdk: { durationMs: 58_000, durationApiMs: 45_000, numTurns: 4 },
-    contextTokens: 540_000,
     tokens: { input: 10, cacheRead: 530_000, cacheCreation: 9_000, output: 800 },
     ...overrides,
   };
@@ -331,7 +330,6 @@ const TURN_TIMING_SOME: Record<string, unknown>[] = [
     tools: undefined,
     tokens: undefined,
     sdk: undefined,
-    contextTokens: undefined,
   }),
   turnTimingEntry({
     triggers: [],

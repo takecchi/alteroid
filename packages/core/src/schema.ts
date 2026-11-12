@@ -783,7 +783,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         numTurns: z.number().int().nonnegative().optional(),
       })
       .optional(),
-    contextTokens: z.number().int().nonnegative().optional(),
+    // `contextTokens` は持たない: 同じ値が `context_usage` の行にある。古い行に残る欄は `z.object` が黙って捨てるので読み込みは落ちない
     // そのターンのメインループの消費（`result.usage`）。入力の重さと費用を、遅い段と同じ行で突き合わせるため
     tokens: z
       .object({
