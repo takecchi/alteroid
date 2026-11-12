@@ -1043,9 +1043,11 @@ describe('renderManagerList', () => {
           shutdownObservationArrivedAfterSwap: false,
         }),
       ]);
-      expect(text).toContain('器が止まる直前の観測は届いていない');
-      expect(text).toContain('未pushが無かったことを意味しない');
-      expect(text).toContain('表示中の観測は無い');
+      // 断りの全文を字面で縛る（core の定数から引く実装でも、出力が1字も変わらないことの歯）
+      expect(text).toContain(
+        '      ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
+          '（best-effort の送信のため。未pushが無かったことを意味しない）。表示中の観測は無い（一度も取れていない）',
+      );
     });
 
     it('sessionMissingSince が在り、stop 由来（Issue #1266 残り2）は shutdown ではないので「届いていない」に倒す', () => {
