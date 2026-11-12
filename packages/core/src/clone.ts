@@ -146,6 +146,7 @@ import {
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
   noteInboxEventRefused,
+  noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
 import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
@@ -283,10 +284,12 @@ import { describeProbeError } from './usage-probe.js';
 import {
   describeDroppedSignals,
   describeDroppedSignalsForJournal,
+  describeSettledDroppedSignalsForJournal,
   digestOfDroppedSignal,
   DROPPED_SIGNAL_NOTICE_MAX,
   type DroppedSignalDigest,
 } from './dropped-signals.js';
+import { readDroppedSignalsFromJournal } from './dropped-signals-journal.js';
 import {
   classifyContextWindowFailure,
   type ContextWindowFailure,
@@ -873,9 +876,11 @@ class Clone implements CloneHost {
   /**
    * 枠以外の理由で失敗したターンで、処理されないまま受信箱から外れた合図の要旨（#4633 の案C）。
    * 次の通常ターンの入力に添え、そのターンが失敗せずに終わったら消す（失敗したら次のターンでもう一度添える）。
-   * メモリにしか持たない: 器が入れ替わったら、日誌の「処理されないまま受信箱から外した」の行だけが残る。
+   * 器が入れ替わっても残るのは日誌の「処理されないまま受信箱から外した」の行（要旨を構造化した欄つき）で、起動時に `#restoreDroppedSignals` がここへ組み直す。
    */
   #droppedSignals: DroppedSignalDigest[] = [];
+  /** 起動時の組み直し。最初の通常ターンの入力を組む前に待つ（`#pump` で起こし、待つ側が受け取って空にする）。投げない。 */
+  #droppedRestore: Promise<void> | null = null;
   /** 上限を超えて要旨を落とした件数。 */
   #droppedSignalsOverflowed = 0;
   /** いまのターンの入力に添えた要旨の id。 */
@@ -1837,6 +1842,8 @@ class Clone implements CloneHost {
     void this.#restoreUnread().catch((error: unknown) => {
       noteDroppedRecord('未読の読み直し', '', error);
     });
+    // 外れた合図の要旨の組み直しも待たない（待つのは最初の通常ターンの入力を組む所）。`#restoreUnread` の後に起こす: あちらの `claimPending` の時機を遅らせないため
+    this.#droppedRestore = this.#restoreDroppedSignals();
 
     // 墓標の拾い直しも待たない: こちらはモデルを呼び、枠が閉じていると人間の発言がその間ずっと処理されないため。
     // 2本（`CloneGraves` の `#pickUpTranscriptGrave` / `#pickUpLostSession`）に分けたまま `sweep` が直列に回す: 畳むとどちらの材料が無かったのかが日誌から消え、同時に走らせると同じ蒸留の枠を取り合うため
@@ -2800,6 +2807,14 @@ class Clone implements CloneHost {
       if (shown.size === 0) return;
       this.#droppedSignals = this.#droppedSignals.filter((digest) => !shown.has(digest.id));
       if (this.#droppedSignals.length === 0) this.#droppedSignalsOverflowed = 0;
+      // 届け終えた印を日誌へ（再起動後に同じ要旨をもう一度届けないため）。成功の後に書く: 書く前に落ちたときだけ1回余計に届く（消えるより二度届く）
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_DECISION_PREFIX}${describeSettledDroppedSignalsForJournal([...shown])}`,
+        droppedSignalsSettled: [...shown],
+      });
       return;
     }
     const digests = batch.flatMap((event) => {
@@ -2813,10 +2828,34 @@ class Clone implements CloneHost {
       this.#droppedSignals.splice(0, over);
       this.#droppedSignalsOverflowed += over;
     }
-    await this.#journalSelf(
-      'outbound',
-      `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
-    );
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: `${EXCHANGE_KIND_DECISION_PREFIX}${describeDroppedSignalsForJournal(digests, this.#pumpTurnFailureReason)}`,
+      droppedSignals: digests,
+    });
+  }
+
+  /**
+   * 起動時に、日誌の「外れた」行から「届け終えた」行を引いて、前の器で外れたままの要旨を `#droppedSignals` へ組み直す。
+   * 投げない: 読めなければ記録して空で進む（組み直しが無かった頃と同じ挙動）。
+   */
+  async #restoreDroppedSignals(): Promise<void> {
+    try {
+      const restored = await readDroppedSignalsFromJournal(this.#stores.journal, Date.now());
+      // この器が先に外した分（蒸留のターンの失敗）と重なる id は1件に畳む。組み直した分を前に置く（古い側）
+      const restoredIds = new Set(restored.digests.map((digest) => digest.id));
+      const merged = [
+        ...restored.digests,
+        ...this.#droppedSignals.filter((digest) => !restoredIds.has(digest.id)),
+      ];
+      const over = Math.max(0, merged.length - DROPPED_SIGNAL_NOTICE_MAX);
+      this.#droppedSignals = merged.slice(over);
+      this.#droppedSignalsOverflowed += restored.overflowed + over;
+    } catch (error) {
+      noteUnreadableRecord('外れた合図の要旨（日誌）', '', error);
+    }
   }
 
   // 蒸留のターンには載せない: 内部のターンで、拾い直すかを判断する場ではないため
@@ -3804,6 +3843,12 @@ class Clone implements CloneHost {
       // `distillGap` と `contextWindowFold` の呼び出しはここから動かさない: 呼ぶこと自体が遷移（pending を倒す）で、並びが元の `+` の連結と同じ順序を保つため。`...this.#notices.forTurn()` はこの2行より後ろに置く: 前に置くと「まだ消費していない時点の6本」を読むように見え、読む者を誤らせるため
       // 入力は投げる前に変数へ受ける（#5086）: 組み立ての時間と、投げてからの時間を分けて測るため。評価の順は引数の中で組んでいたときと同じ
       const composeStartedAt = Date.now();
+      // 起動時の組み直しが終わるまで待つ（最初の通常ターンだけ。受け取って空にするので以後のターンは待たない）。蒸留のターンは要旨を載せないので待たない
+      const droppedRestore = kind === 'distill' ? null : this.#droppedRestore;
+      if (droppedRestore !== null) {
+        this.#droppedRestore = null;
+        await droppedRestore;
+      }
       const input = await this.#turnInput.withFreshMemory(
         await this.#turnInput.withHumanActions(
           composeTurnInputText({

@@ -2641,6 +2641,40 @@
                           "type": "string",
                           "enum": ["auth", "quota", "other"]
                         },
+                        "droppedSignals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string"
+                              },
+                              "head": {
+                                "type": "string"
+                              },
+                              "requestId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "at", "type", "from", "head"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "droppedSignalsSettled": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
                         "approvalId": {
                           "type": "string"
                         },
@@ -8473,6 +8507,40 @@
                                 "type": "string",
                                 "enum": ["auth", "quota", "other"]
                               },
+                              "droppedSignals": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "head": {
+                                      "type": "string"
+                                    },
+                                    "requestId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "at", "type", "from", "head"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "droppedSignalsSettled": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -10754,6 +10822,40 @@
                         "turnFailureKind": {
                           "type": "string",
                           "enum": ["auth", "quota", "other"]
+                        },
+                        "droppedSignals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string"
+                              },
+                              "head": {
+                                "type": "string"
+                              },
+                              "requestId": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "at", "type", "from", "head"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "droppedSignalsSettled": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         },
                         "approvalId": {
                           "type": "string"
@@ -15334,6 +15436,40 @@
                                   "type": "string",
                                   "enum": ["auth", "quota", "other"]
                                 },
+                                "droppedSignals": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "type": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string"
+                                      },
+                                      "head": {
+                                        "type": "string"
+                                      },
+                                      "requestId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["id", "at", "type", "from", "head"],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "droppedSignalsSettled": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
                                 "approvalId": {
                                   "type": "string"
                                 },
@@ -17480,6 +17616,40 @@
                                 "turnFailureKind": {
                                   "type": "string",
                                   "enum": ["auth", "quota", "other"]
+                                },
+                                "droppedSignals": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "type": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string"
+                                      },
+                                      "head": {
+                                        "type": "string"
+                                      },
+                                      "requestId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["id", "at", "type", "from", "head"],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "droppedSignalsSettled": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 },
                                 "approvalId": {
                                   "type": "string"
@@ -19628,6 +19798,40 @@
                                 "type": "string",
                                 "enum": ["auth", "quota", "other"]
                               },
+                              "droppedSignals": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "head": {
+                                      "type": "string"
+                                    },
+                                    "requestId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "at", "type", "from", "head"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "droppedSignalsSettled": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -21765,6 +21969,40 @@
                               "turnFailureKind": {
                                 "type": "string",
                                 "enum": ["auth", "quota", "other"]
+                              },
+                              "droppedSignals": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "type": "string"
+                                    },
+                                    "head": {
+                                      "type": "string"
+                                    },
+                                    "requestId": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["id", "at", "type", "from", "head"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "droppedSignalsSettled": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               },
                               "approvalId": {
                                 "type": "string"

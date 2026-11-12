@@ -529,7 +529,9 @@ exchange self/outbound: [判断] ターンが枠以外の理由で失敗した�
 - 2026-10-29T00:00:00.000Z human_message 人間（会話 conv-1） id=evt-2ターン目（失敗する）: 「2ターン目（失敗する）」
 exchange human/inbound conv-1: 3ターン目（失敗の後）
 exchange human/outbound conv-1: わかった
-decision: task を自動で done にした（evt-3ターン目（失敗の後）: 3ターン目（失敗の後））: 起点の会話 conv-1 へ返答したターンが終わった ／根拠: 返答の経路: そのターン自身の返答。queued で、「続く」の印が無く、問いを出しておらず、結び付く委譲も走っていないため（#5469 P5）。本文は書かない（task_list id で読める）"
+decision: task を自動で done にした（evt-3ターン目（失敗の後）: 3ターン目（失敗の後））: 起点の会話 conv-1 へ返答したターンが終わった ／根拠: 返答の経路: そのターン自身の返答。queued で、「続く」の印が無く、問いを出しておらず、結び付く委譲も走っていないため（#5469 P5）。本文は書かない（task_list id で読める）
+exchange self/outbound: [判断] 外れた合図の要旨 1 件を入力に添えたターンが成功したので、届け終えた（#4633）。
+- id=evt-2ターン目（失敗する）"
 `;
 
 exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 自動要約（compact_boundary）の後の次のターンの入力と、記憶の索引の載せ直しの gauge 行 > 入力 1`] = `

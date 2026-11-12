@@ -1386,6 +1386,18 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: '`auth` / `quota` / `other` の3語の列挙。`turnFailure` と同じく落ちた行の形を追うのに要らない。',
       },
+      droppedSignals: {
+        emit: 'never',
+        why:
+          '外れた合図の要旨（#4633 の案C）。各件の `head` は人間の発言・報告・webhook の本文の冒頭（最大200字）で、' +
+          '`from` も出どころの名前を含む。自由文を運ぶ配列なので件数も含めて跡に出さない（文面側は `text` が桁だけ持つ）。',
+      },
+      droppedSignalsSettled: {
+        emit: 'never',
+        why:
+          '届け終えた合図の id の配列。id は受信箱の合図の id（`evt-` に発言の本文が続く形がありうる）で、' +
+          '呼び出し側が決める値のため `conversationId` と同じ判断。`tag()` は禁止。',
+      },
       approvalId: { emit: 'tag', token: 'approvalId' },
       managerId: { emit: 'tag', token: 'managerId' },
       answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
@@ -1847,6 +1859,16 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
       turnFailure: 'failed',
       turnFailureKind: 'other',
+      droppedSignals: [
+        {
+          id: SECRET,
+          at: '2026-08-20T00:00:00.000Z',
+          type: 'human_message',
+          from: SECRET,
+          head: SECRET,
+        },
+      ],
+      droppedSignalsSettled: [SECRET],
       approvalId: 'ap-1',
       managerId: 'mgr-1',
       answeredApprovalId: 'ap-2',
