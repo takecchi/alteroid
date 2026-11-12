@@ -1,10 +1,18 @@
 import { archiveIdBranch } from './archive-id.js';
 import type { ArchiveEntry } from './store.js';
 
-// tools.ts の定数を使い回さない: 値が同じでも出所が違うため
-export const ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT = 500;
-export const ARCHIVE_REMOVE_MANY_LIMIT_MAX = 2_000;
-export const ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
+// 定義は `remove-many-limit.ts`（3 道具で共有）。外へ出していた名前はここから変えない
+import {
+  REMOVE_MANY_JOURNAL_ID_CHARS as ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+  REMOVE_MANY_LIMIT_DEFAULT as ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
+  REMOVE_MANY_LIMIT_MAX as ARCHIVE_REMOVE_MANY_LIMIT_MAX,
+} from './remove-many-limit.js';
+
+export {
+  ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
+  ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
+  ARCHIVE_REMOVE_MANY_LIMIT_MAX,
+};
 
 export interface ArchiveRemoveManyFilter {
   readonly sessionIds?: readonly string[];
