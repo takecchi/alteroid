@@ -29,6 +29,8 @@ export type TaskPlacementInput = NonNullable<
 
 export type AnsweredApprovalDate = Ok<paths['/approvals/answered-dates']['get']>['dates'][number];
 
+export type WorkspaceResetSummary = Ok<paths['/reset']['post']>['cleared'];
+
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
 export type Progress = Ok<paths['/progress']['get']>;
