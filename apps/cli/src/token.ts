@@ -1,5 +1,7 @@
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
+import type { InferRequestType, InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
 
 import {
   describeAuthFailure,
@@ -12,86 +14,23 @@ import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 import { readBodyArg } from './input-errors.js';
 
-interface AgentTokenView {
-  id: string;
-  label: string;
-  order: number;
-  sha256?: string;
-  source?: 'stored';
-  disabledAt?: string;
-  cooldownUntil?: number;
-  cooldownSource?: 'quota_reset' | 'overage_reset' | 'notice_text' | 'default';
-  lastRejectedAt?: string;
-  lastRejectedReason?: string;
-  invalidatedAt?: string;
-  invalidatedReason?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  recovery?: 'time' | 'action' | 'unknown';
-  // 週の枠のリセット（#6651）。欄が無いのは観測していないか古いデーモン
-  weeklyReset?: { at: number; zone: string; observedAt: string };
-}
-
-interface TokenRotationSettings {
-  rotateOn: 'free_exhausted' | 'overage_exhausted' | 'off';
-  cooldownMs: number;
-  distribution?: 'failover' | 'balanced';
-  updatedAt?: string;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり `fetchDaemon` で撃つ（`createClient` は呼ばない）
+type TokensView = InferResponseType<DaemonClient['tokens']['$get'], 200>;
+type AgentTokenView = TokensView['tokens'][number];
+type TokenRotationSettings = InferResponseType<DaemonClient['tokens']['policy']['$put'], 200>;
+type TokenHolder = NonNullable<TokensView['usedBy']>[number];
+type TokenLoad = NonNullable<TokensView['loads']>[number];
+type AgentTokenInput = InferRequestType<DaemonClient['tokens']['$put']>['json']['tokens'][number];
+// 置き換えの応答と、読めない行を消す応答（どちらも読み直しに失敗すると `viewUnavailable` だけを返す）
+type PutTokensView = InferResponseType<DaemonClient['tokens']['$put'], 200>;
+type RemoveUnreadableView = InferResponseType<
+  DaemonClient['tokens']['unreadable']['remove']['$post'],
+  200
+>;
 
 function describeDistribution(settings: TokenRotationSettings): string {
   return `配り方: ${settings.distribution ?? 'balanced'}（未設定なら balanced（既定））\n`;
-}
-
-interface TokensView {
-  tokens: AgentTokenView[];
-  settings?: TokenRotationSettings;
-  settingsUnreadable?: { reason: string };
-  rowsUnreadable?: {
-    count: number;
-    rows: { id?: string; label?: string; reason: string }[];
-    carriedOver?: true;
-  };
-  // 現役の指名。3つの状態は別の欄で来る（`activeNever` / `activeUnreadable`）。どれも無いのは現役を返さない古いデーモン
-  active?: { tokenId: string; generation: number; rotatedAt: string };
-  activeNever?: true;
-  activeUnreadable?: { reason: string };
-  // プールの版。読んだ一覧で全文置換するときに `ifMatch` として返す（古いデーモンは返さない）
-  version?: string;
-  // 鍵ごとの枠の最後の観測（#6633）。欄が無いのは古いデーモン
-  loads?: TokenLoad[];
-  // いまその鍵で動いている担当（#6646）。欄が無いのは数えられなかったか古いデーモン
-  usedBy?: TokenHolder[];
-}
-
-interface TokenHolder {
-  tokenId: string;
-  kind: string;
-  managerId?: string;
-}
-
-// 表示に要る形だけを持つ（`AccountUsageState` の全部は写さない）
-interface TokenLoad {
-  tokenId: string;
-  state:
-    | {
-        state: 'ok';
-        usage: {
-          at: string;
-          limitsAvailable: boolean;
-          windows: { kind: string; utilization?: number }[];
-        };
-      }
-    | { state: 'failed' | 'unavailable'; at: string; reason: string }
-    | { state: 'unknown' };
-}
-
-interface AgentTokenInput {
-  id?: string;
-  label: string;
-  value?: string;
-  order?: number;
-  disabled?: boolean;
 }
 
 // 直し方は両方を渡す形だけを案内する: 読めない現在値は、両方揃った入力でしか上書きできないため
@@ -175,10 +114,7 @@ export async function tokenRemoveUnreadableCommand(
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
     body: JSON.stringify({ ids }),
-  })) as Partial<TokensView> & {
-    removedIds: string[];
-    viewUnavailable?: { reason: string };
-  };
+  })) as RemoveUnreadableView;
   stdout.write(
     `読めないトークンの行を ${String(result.removedIds.length)} 行消した（id: ${result.removedIds.join(', ')}）。\n`,
   );
@@ -496,8 +432,6 @@ function printSettings(settings: TokenRotationSettings): void {
 function toInput(token: AgentTokenView): AgentTokenInput {
   return { id: token.id, label: token.label, order: token.order };
 }
-
-type PutTokensView = Partial<TokensView> & { viewUnavailable?: { reason: string } };
 
 // 読んだときの版を渡す: 読んでから（確認を待つ間に）ほかで足された行を、全文置換で黙って消さないため。古いデーモンは版を返さないので、そのときだけ省く
 async function putTokens(
