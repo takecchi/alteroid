@@ -1,11 +1,8 @@
 import { stdout } from './terminal-out.js';
 
-import {
-  describeUnreadableRowsList,
-  formatElapsedAgo,
-  withErrorReason,
-  type RowsUnreadable,
-} from './format.js';
+import type { InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
+import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import {
   describeAuthFailure,
   fetchDaemon,
@@ -22,24 +19,17 @@ import { describeGrantedBy } from '@alteroid/logic';
  * PRD「権限境界」が禁じる「確認が要る行為の一覧」と同じ形になり、クローンが記憶で下す判断を設定で置き換えるため。
  */
 
-interface AccountView {
-  id: string;
-  displayName: string | null;
-  email: string | null;
-  createdAt: string;
-  lastLoginAt: string | null;
-  grantedAt: string | null;
-  grantedBy: string | null;
-  granted: boolean;
-  identities: { provider: string; email: string | null; lastLoginAt: string }[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり `fetchDaemon` で撃つ（`createClient` は呼ばない）
+type AccessListView = InferResponseType<DaemonClient['access']['$get'], 200>;
+type AccessAccountView = InferResponseType<
+  DaemonClient['access'][':accountId']['grant']['$post'],
+  200
+>;
 
 export async function accessListCommand(now: number = Date.now()): Promise<void> {
   const target = await resolveTarget();
-  const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
-    accounts: AccountView[];
-    rowsUnreadable?: RowsUnreadable;
-  };
+  const { accounts, rowsUnreadable } = (await request(target, '/access')) as AccessListView;
   stdout.write(
     describeUnreadableRowsList({
       noun: 'アカウント',
@@ -90,7 +80,7 @@ export async function accessGrantCommand(accountId: string): Promise<void> {
   const target = await resolveTarget();
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/grant`, {
     method: 'POST',
-  })) as { account: AccountView };
+  })) as AccessAccountView;
   stdout.write(`許可しました: ${account.email ?? account.displayName ?? account.id}\n`);
 }
 
@@ -103,10 +93,7 @@ export async function accessRevokeCommand(
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   // 読めない行（`rowsUnreadable`）に在る id は「無い」と言わない: 確認へ進み、POST の 409 の案内に任せる。
-  const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
-    accounts: AccountView[];
-    rowsUnreadable?: RowsUnreadable;
-  };
+  const { accounts, rowsUnreadable } = (await request(target, '/access')) as AccessListView;
   const exists =
     accounts.some((account) => account.id === accountId) ||
     (rowsUnreadable?.rows.some((row) => row.id === accountId) ?? false);
@@ -118,7 +105,7 @@ export async function accessRevokeCommand(
   );
   const { account } = (await request(target, `/access/${encodeURIComponent(accountId)}/revoke`, {
     method: 'POST',
-  })) as { account: AccountView };
+  })) as AccessAccountView;
   stdout.write(`許可を取り消しました: ${account.email ?? account.displayName ?? account.id}\n`);
   stdout.write('（発行済みのトークンは、この時点から通らなくなります）\n');
 }

@@ -1,17 +1,10 @@
 import { stdout } from './terminal-out.js';
 
 import { describeManagerPeers, describeRevisionStatus } from '@alteroid/core/cli-light';
-import type { ManagerPeersView } from '@alteroid/core/cli-light';
-import type {
-  RunnerCredentialFingerprint,
-  RunnerProfileFingerprint,
-  RunnerPushHealth,
-  RunnerPushOutcome,
-  RunnerRevisionReport,
-  RunnerRevisionStatus,
-} from '@alteroid/core';
+import type { RunnerPushHealth, RunnerPushOutcome } from '@alteroid/core';
+import type { InferResponseType } from 'hono/client';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, describeFailedResponse } from './format.js';
 import { resolveTarget } from './target.js';
 import { redactError } from './redact.js';
@@ -94,34 +87,10 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
   );
 }
 
-// 3状態を1つも潰さない: 「配られていない」のか「確かめられなかった」のかが端末から区別できなくなるため
-type RunnerProbe =
-  { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
-
-// `daemonRevision` と runner の版を同じ型にしない: 自分の版は訊きに行く経路が無く、`unheard` が意味を持たないため
-interface RunnersView {
-  runners: {
-    label: string;
-    state: string;
-    since: string;
-    runnerId?: string;
-    workspacePath?: string;
-    error?: string;
-    instanceId?: string;
-    instanceSince?: string;
-    // 空であることだけで「鍵が配られていない」と読まない: 叩けなかったときも空になるため
-    credentials: RunnerCredentialFingerprint[];
-    credentialsProbe: RunnerProbe;
-    // 無いことだけで「置かれていない」と読まない: 叩けなかったときも省略されるため
-    profile?: RunnerProfileFingerprint;
-    profileProbe: RunnerProbe;
-    revision: RunnerRevisionStatus;
-    pushHealth?: RunnerPushHealth;
-    // `unknown` は名乗らない旧い runner（「頼めない」とは読まない）
-    managerPeers: ManagerPeersView;
-  }[];
-  daemonRevision: RunnerRevisionReport;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 3状態の probe を1つも潰さない: 「配られていない」のか「確かめられなかった」のかが端末から区別できなくなるため
+// 空の `credentials`・無い `profile` だけで「置かれていない」と読まない（叩けなかったときも空・省略になる）
+type RunnersView = InferResponseType<DaemonClient['runners']['$get'], 200>;
 
 // デーモン自身の版は runner が0台でも出す: 0台は版を確かめたい状態そのもので、そこで答えが消えるため
 export function renderRunners(view: RunnersView, now: number = Date.now()): string {

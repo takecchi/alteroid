@@ -14,14 +14,12 @@ import {
   summarizeUsage,
   usageLayerSchema,
   usageSiteSchema,
-  type AccountUsageState,
-  type UnrecordedManager,
-  type UsageAggregate,
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
+import type { InferResponseType } from 'hono/client';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { describeFailedResponse } from './format.js';
 import { resolveTarget } from './target.js';
 
@@ -94,11 +92,12 @@ export { describeUsageDateOrder };
 // 黙って切り捨てない: 「全部でこれだけ」と読める出力が嘘になるため
 const AXIS_LIMIT = 20;
 
-// `account` などを `?:` にしない: 渡し忘れた口が黙って「アカウント全体の残り」「取りこぼしは無い」を出せてしまうため
-export interface UsageView extends UsageAggregate {
-  account: AccountUsageState | undefined;
-  unrecordedManagers: readonly UnrecordedManager[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// `breakdown`（デーモンの集計）と `today` は読まない: 集計は `rows` から `summarizeUsage` で組む（口ごとに数字が食い違わないため）
+export type UsageView = Omit<
+  InferResponseType<DaemonClient['usage']['$get'], 200>,
+  'breakdown' | 'today'
+>;
 
 export function renderUsage(view: UsageView): string {
   const {

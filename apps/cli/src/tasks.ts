@@ -2,7 +2,8 @@ import { clipWithEllipsis } from '@alteroid/core/cli-light';
 
 import { stdout } from './terminal-out.js';
 
-import { createClient } from './client.js';
+import type { InferResponseType } from 'hono/client';
+import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 import { redactBody } from './redact.js';
@@ -11,25 +12,9 @@ interface TasksOptions {
   all?: boolean;
 }
 
-interface TaskRowView {
-  id: string;
-  status: string;
-  origin: string;
-  source?: string | undefined;
-  title: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-  closedAt?: string | undefined;
-  closedReason?: string | undefined;
-  closedBy?: string | undefined;
-  keep?: boolean | undefined;
-}
-
-interface TasksView {
-  entries: TaskRowView[];
-  unreadable: { id?: string | undefined; reason: string }[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+export type TasksView = InferResponseType<DaemonClient['tasks']['$get'], 200>;
+type TaskRowView = TasksView['entries'][number];
 
 const EXCERPT = 80;
 
@@ -319,6 +304,6 @@ export async function tasksCommand(options: TasksOptions = {}): Promise<void> {
       described ?? `task の一覧を読めませんでした（HTTP ${String(response.status)}）`,
     );
   }
-  const view = (await response.json()) as TasksView;
+  const view = await response.json();
   stdout.write(`${redactBody(renderTasks(view))}\n`);
 }
