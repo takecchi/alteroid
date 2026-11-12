@@ -372,7 +372,7 @@ async function scenarioForget() {
   const forgotten = !s.pool.denials(JOB_ID).some((d) => d.tool === 'Tool0');
   // 直近の知らせ直しの鍵が Tool0 のまま残っていれば、ここで「知らせ直しが届いている」と断られる
   const sent = await s.pool.send(JOB_ID, 'ok', { decision: 'allow' });
-  // 最後に止められた時刻が残っていれば、Tool0 に 2 回目の知らせ直しが出る
+  // 最後に止められた時刻が残っていれば、Tool0 に知らせ直しがもう一度出る
   s.setClock('2026-11-01T00:42:00.000Z');
   await s.pool.renotifyStalledDenials();
   await settle();
@@ -608,7 +608,7 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
   it('蓋で忘れた組は、最後に止められた時刻・知らせ直しの段・直近の知らせ直しの鍵も一緒に忘れる', async () => {
     const out = await scenarioForget();
     const renotice =
-      '[mgr-denial-pin] `Tool0` の拒否（マネージャー自身）から11分、動きが無い（知らせ直し 1/2 回目。issue #1105 C）。<ROUTE>';
+      '[mgr-denial-pin] `Tool0` の拒否（マネージャー自身）から11分、動きが無い（知らせ直し 1/1 回目。issue #1105 C）。<ROUTE>';
     expect(out.first).toEqual([renotice]);
     expect(out.forgotten).toBe(true);
     // 直近の知らせ直しの鍵が忘れた組を指したままなら、ここは「知らせ直しが届いている」という断りになる
@@ -617,7 +617,7 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
       detail:
         'req-other は runner 側で既に解けている。台帳の待ちからも外した（次の送信はこの確認への答えとしては扱われない）。',
     });
-    // 忘れた組へは 2 回目の知らせ直しが出ない（最後に止められた時刻が残っていれば出る）
+    // 忘れた組へは再び知らせ直しが出ない（知らせ直しの段の帳面を忘れたのに最後に止められた時刻が残っていれば、1 回目がもう一度出る）
     expect(out.afterForget).toEqual([renotice]);
     // 同じ時刻の拒否が戻ってきたら 1 回目から数え直す（知らせ直しの段の帳面が残っていれば出ない）
     expect(out.afterReturn).toEqual([renotice, renotice]);
