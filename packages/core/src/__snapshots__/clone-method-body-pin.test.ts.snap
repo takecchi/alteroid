@@ -81,6 +81,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > #pump: 出した先を差し戻した中身が変わらない 1`] = `
 [
   "void this.#restoreUnread().catch((error: unknown) => {noteDroppedRecord('未読の読み直し', '', error);});",
+  "this.#droppedRestore = this.#restoreDroppedSignals();",
   "void this.#graves.sweep();",
   "pump: for await (const event of this.#delivery.inbox) {this.#inFlight = {events: [event], started: false};",
   "const arrivedWhileIdle = this.#delivery.inbox.consumeBypass(event);",

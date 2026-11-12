@@ -1,5 +1,5 @@
 import { clipWithEllipsis } from './excerpt.js';
-import type { InboxEvent } from './schema.js';
+import type { InboxEvent, JournalEntry } from './schema.js';
 
 /**
  * 枠以外の理由で失敗したターンに渡したまま、処理されずに受信箱から外れた合図の要旨（#4633 の案C）。
@@ -98,14 +98,120 @@ export function describeDroppedSignals(
   );
 }
 
+/** 外れた行を日誌から探す語（`JournalQuery.q`）。{@link describeDroppedSignalsForJournal} の文面に含まれる。 */
+export const DROPPED_SIGNALS_JOURNAL_WORD = '処理されないまま受信箱から外した';
+
+/** 届け終えた行を日誌から探す語。外れた行の文面には含まれない（互いの検索に混ざらない）。 */
+export const SETTLED_SIGNALS_JOURNAL_WORD = '届け終えた';
+
+/** 外れた合図の要旨を日誌から組み直すとき、どこまで遡るか。これより古い外れは届け直さない。 */
+export const DROPPED_SIGNALS_RESTORE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** 日誌に残す1行。次のターンに添える前に器が入れ替わっても、外れたことが残るようにする。 */
 export function describeDroppedSignalsForJournal(
   digests: readonly DroppedSignalDigest[],
   reason: string,
 ): string {
   return (
-    `ターンが枠以外の理由で失敗したので、渡した合図 ${String(digests.length)} 件を処理されないまま受信箱から外した` +
+    `ターンが枠以外の理由で失敗したので、渡した合図 ${String(digests.length)} 件を${DROPPED_SIGNALS_JOURNAL_WORD}` +
     `（理由: ${reason}）。次の通常ターンの入力に要旨を添える（#4633）。\n` +
     digests.map(describeOne).join('\n')
   );
+}
+
+/** 届け終えた印の日誌の1行。外れた行から引く id は構造化した欄（`droppedSignalsSettled`）が持ち、この文面は人が読む用。 */
+export function describeSettledDroppedSignalsForJournal(ids: readonly string[]): string {
+  return (
+    `外れた合図の要旨 ${String(ids.length)} 件を入力に添えたターンが成功したので、${SETTLED_SIGNALS_JOURNAL_WORD}` +
+    '（#4633）。\n' +
+    ids.map((id) => `- id=${id}`).join('\n')
+  );
+}
+
+// `InboxEvent['type']` と対応を保つ: 版のずれで知らない種別の要旨を、読み戻しで黙って落とすため
+const KNOWN_INBOX_TYPES = {
+  human_message: true,
+  human_answer: true,
+  distill: true,
+  timer: true,
+  external: true,
+  self_initiative: true,
+  manager_message: true,
+} satisfies Record<InboxEvent['type'], true>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** 読めない要旨は null（呼び手が飛ばす）。 */
+function readDigest(raw: unknown): DroppedSignalDigest | null {
+  if (!isRecord(raw)) return null;
+  const { id, at, type, from, head: headText, requestId } = raw;
+  if (
+    typeof id !== 'string' ||
+    typeof at !== 'string' ||
+    typeof from !== 'string' ||
+    typeof headText !== 'string' ||
+    typeof type !== 'string' ||
+    !Object.hasOwn(KNOWN_INBOX_TYPES, type)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    at,
+    type: type as InboxEvent['type'],
+    from,
+    head: headText,
+    ...(typeof requestId === 'string' ? { requestId } : {}),
+  };
+}
+
+/**
+ * 日誌の行（外れた行・届け終えた行）から、再起動後に添え直す要旨を組む。
+ * 外れた要旨から届け終えた id を引き、同じ id は新しい側の1件にし、上限（{@link DROPPED_SIGNAL_NOTICE_MAX}）を超えた古い側は件数だけ `overflowed` に数える。
+ * 読めない行・要旨は飛ばす（全部読めなくても投げない）。入力は古い順に並べて渡すこと。
+ */
+export function restoreDroppedSignals(
+  dropped: readonly JournalEntry[],
+  settled: readonly JournalEntry[],
+): { digests: DroppedSignalDigest[]; overflowed: number } {
+  const done = new Set<string>();
+  for (const row of settled) {
+    if (row.type !== 'exchange') continue;
+    const ids: unknown = row.droppedSignalsSettled;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) if (typeof id === 'string') done.add(id);
+  }
+  const byId = new Map<string, DroppedSignalDigest>();
+  for (const row of dropped) {
+    if (row.type !== 'exchange') continue;
+    const digests: unknown = row.droppedSignals;
+    if (!Array.isArray(digests)) continue;
+    for (const raw of digests) {
+      const digest = readDigest(raw);
+      if (digest === null || done.has(digest.id)) continue;
+      // 同じ id が2回来たら後の行で置き換え、並びは新しい側へ寄せる
+      byId.delete(digest.id);
+      byId.set(digest.id, digest);
+    }
+  }
+  const all = [...byId.values()];
+  const over = Math.max(0, all.length - DROPPED_SIGNAL_NOTICE_MAX);
+  return { digests: all.slice(over), overflowed: over };
+}
+
+/**
+ * 日誌から組み直した要旨(`restored`)と、この器が先に外した分(`current`)を併せる。
+ * 組み直した分を前(古い側)に置き、`current` のうち同じ id は1件に畳み、上限を超えた古い側は件数だけ `overflowed` に数える
+ * (`restored.overflowed` を含む。呼び手は既存の件数にこの値を足す)。
+ */
+export function mergeDroppedSignals(
+  restored: { digests: readonly DroppedSignalDigest[]; overflowed: number },
+  current: readonly DroppedSignalDigest[],
+): { digests: DroppedSignalDigest[]; overflowed: number } {
+  const restoredIds = new Set(restored.digests.map((digest) => digest.id));
+  const merged = [...restored.digests, ...current.filter((digest) => !restoredIds.has(digest.id))];
+  const over = Math.max(0, merged.length - DROPPED_SIGNAL_NOTICE_MAX);
+  return { digests: merged.slice(over), overflowed: restored.overflowed + over };
 }

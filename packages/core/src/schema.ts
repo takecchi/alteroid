@@ -450,6 +450,16 @@ export const workerWaitMeasureShape = {
   settled: z.boolean(),
 };
 
+// `DroppedSignalDigest`（`dropped-signals.ts`）の写し。型の対応は `dropped-signals.ts` が `satisfies` で縛る
+const droppedSignalDigestSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  type: z.string(),
+  from: z.string(),
+  head: z.string(),
+  requestId: z.string().optional(),
+});
+
 export const journalEntrySchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('exchange'),
@@ -474,6 +484,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     turnFailure: z.enum(['failed', 'held']).optional(),
     // 無い行を文面から推し量って `auth` / `quota` へ読み替えない: この欄を足す前の行は種別を決めていない＝不明のため
     turnFailureKind: turnFailureKindSchema.optional(),
+    // 枠以外で失敗したターンに渡したまま受信箱から外れた合図の要旨（#4633 の案C）。再起動をまたいで次の通常ターンへ届け直すための構造化した写し: 文面（`[判断]` の行）から読み戻さない。`type` を列挙にしない: 版のずれで知らない値の行を、行ごと読めなくしないため
+    droppedSignals: z.array(droppedSignalDigestSchema).optional(),
+    // 上の要旨を入力に添えたターンが成功し、届け終えた合図の id。外れた行から引く
+    droppedSignalsSettled: z.array(z.string()).optional(),
     // `conversationId` では結ばない: 同じ会話で近接した時刻に複数の承認へ回答すると、どの outbound がどの承認への返答か見分けられないため
     approvalId: z.string().optional(),
     answeredApprovalId: z.string().optional(),

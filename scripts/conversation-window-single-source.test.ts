@@ -16,8 +16,10 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // `journal-conversation-id-contract.ts` も同じ理由: `conversationId` の絞りが `limit` より前に効くことを、ストアの `list` を直に呼んで測る道具である。
 // `journal-scan.ts` も窓ではない: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）を頁で読み切る写し（`withdrawnClientMessageIdsFromPages`）で、会話の窓を組み立てていない。
 // `initiative-gate.ts` も窓ではない: 発意 tick の門（#5469 P6a）が「直近24時間に tick のターンを回したか」を日誌の `with: 'self'` の行（人間との往復の窓には入らない）から1件探すだけで、会話の窓を組み立てていない。
+// `dropped-signals-journal.ts` も窓ではない: 外れた合図の要旨の組み直し（#4633）が、クローン自身の跡（`with: 'self'`。人間との往復の窓には入らない）の「外れた」「届け終えた」行を語で探すだけで、会話の窓を組み立てていない。
 const ALLOWED_FILES = new Set([
   'packages/core/src/conversation.ts',
+  'packages/core/src/dropped-signals-journal.ts',
   'packages/core/src/initiative-gate.ts',
   'packages/core/src/journal-conversation-id-contract.ts',
   'packages/core/src/journal-scan.ts',
