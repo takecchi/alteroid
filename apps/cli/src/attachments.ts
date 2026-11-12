@@ -5,6 +5,7 @@ import { basename, resolve, sep } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
+import type { InferResponseType } from 'hono/client';
 import { stderr, stdout } from './terminal-out.js';
 
 import {
@@ -29,7 +30,7 @@ import {
 import { integrationKeyUsageView } from '@alteroid/core/attachment-usage-keys';
 import { formatBytes } from '@alteroid/logic';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { confirmIrreversible } from './confirm.js';
 import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { describeFailedResponse } from './format.js';
@@ -223,13 +224,12 @@ function errnoOf(error: unknown): string {
   return typeof code === 'string' ? code : error instanceof Error ? error.message : String(error);
 }
 
-interface UploadedAttachment {
-  id: string;
-  name: string;
-  mediaType: string;
-  size: number;
-  sha256: string;
-}
+// 型だけ: アップロードは素の `fetch` でストリームを送る（`createClient` は呼ばない）。引き継いだ添付の分は
+// 控えの残りを持たないので、使う欄だけに絞る
+type UploadedAttachment = Pick<
+  InferResponseType<DaemonClient['attachments']['$post'], 200>,
+  'id' | 'name' | 'mediaType' | 'size' | 'sha256'
+>;
 
 interface FileOnDisk {
   readonly path: string;
@@ -453,16 +453,10 @@ const FROM_LABEL: Readonly<Record<AttachmentFromClass, string>> = {
   unknown: '不明',
 };
 
-interface ListedAttachment {
-  id: string;
-  name: string;
-  mediaType: string;
-  size: number;
-  uploadedBy?: string | undefined;
-  createdAt: string;
-  expiresAt?: string | undefined;
-  keptAt?: string | undefined;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type AttachmentList = InferResponseType<DaemonClient['attachments']['$get'], 200>;
+type ListedAttachment = AttachmentList['items'][number];
+type AttachmentUsage = AttachmentList['usage'];
 
 // 保存中は期限を持たない: 期限が無いまま「期限 undefined」と出さない
 function keptStateOf(meta: {
@@ -480,17 +474,9 @@ function renderAttachmentRow(meta: ListedAttachment): string {
   );
 }
 
-interface UsageBucket {
-  count: number;
-  totalBytes: number;
-}
+type UsageBucket = AttachmentUsage['byFrom']['human'];
 
-export function renderAttachmentUsage(
-  usage: UsageBucket & {
-    byFrom: Record<string, UsageBucket>;
-    byIntegrationKey: Record<string, UsageBucket>;
-  },
-) {
+export function renderAttachmentUsage(usage: AttachmentUsage) {
   const bucket = (b: UsageBucket): string => `${b.count} 件 ${formatBytes(b.totalBytes)}`;
   const parts = ATTACHMENT_FROM_CLASSES.map((from) => {
     const b = usage.byFrom[from];
