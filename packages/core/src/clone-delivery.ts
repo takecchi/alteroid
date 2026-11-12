@@ -151,6 +151,11 @@ export class CloneDelivery {
     return existing;
   }
 
+  /** 試験の観測口（`retainedSizesForTest`）だけが読む。本番の経路は呼ばない。 */
+  get collapseSize(): number {
+    return this.#pendingCollapse.size;
+  }
+
   #pendingTokenPoolNotice: PendingTokenPoolNotice | null = null;
 
   get pendingTokenPoolNotice(): PendingTokenPoolNotice | null {
