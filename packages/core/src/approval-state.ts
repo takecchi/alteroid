@@ -18,6 +18,14 @@ export function isApprovalFieldSet(value: string | null | undefined): boolean {
 }
 
 /**
+ * 承認が決着した時刻。回答を先に見て、無ければ取り下げ（`answeredAt ?? withdrawnAt`）。どちらも立っていなければ `undefined`（`null` は `undefined` に揃える）。
+ * 両方立った行は回答の時刻を返す。状態の判定（`approvalStateOf`、取り下げ優先）とは順が逆で、今までの挙動のまま保つ。
+ */
+export function approvalSettledAt(approval: ApprovalStateFields): string | undefined {
+  return approval.answeredAt ?? approval.withdrawnAt ?? undefined;
+}
+
+/**
  * 承認の状態。取り下げを先に見る: 回答の後で取り下げた行・取り下げの後に回答が届いた行（両方立った行）は取り下げ。
  * 取り下げの行は `answer` を持たないので、回答済みを先に見ると破損の分岐に誤って落ちる。
  */

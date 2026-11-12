@@ -113,7 +113,7 @@ export {
   describeUnobservedOutcome,
 } from './digest.js';
 /** 承認の状態（取り下げを先に見る）の判定は 1 つの関数に寄せてある。web は軽い出口 `@alteroid/core/answered-via` から引く。 */
-export { approvalStateOf, isApprovalFieldSet } from './approval-state.js';
+export { approvalSettledAt, approvalStateOf, isApprovalFieldSet } from './approval-state.js';
 export type { ApprovalState } from './approval-state.js';
 /** 委譲の「動いている」の判定は1つの名前付きの関数に寄せてある（`job-status-running.ts`）。daemon の地図などが書き下ろさず使う。 */
 export { isManagerInFlight } from './job-status-running.js';

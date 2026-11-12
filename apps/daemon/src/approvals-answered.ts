@@ -1,12 +1,5 @@
-import { localDate } from '@alteroid/core';
+import { approvalSettledAt, localDate } from '@alteroid/core';
 import type { PendingApproval } from '@alteroid/core';
-
-// 取り下げ済みも決着として数える: 外すと、従来見えていた取り下げ済みが Web から見えなくなるため。
-function approvalSettledAt(
-  approval: Pick<PendingApproval, 'answeredAt' | 'withdrawnAt'>,
-): string | undefined {
-  return approval.answeredAt ?? approval.withdrawnAt ?? undefined;
-}
 
 // 日付はブラウザの TZ で決めず `localDate()` で決める: 日報と日付の区切りが食い違うため。
 export function approvalSettledDate(

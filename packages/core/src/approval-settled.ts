@@ -1,3 +1,4 @@
+import { approvalSettledAt } from './approval-state.js';
 import type { ApprovalList, JobStore } from './store.js';
 
 // 承認を全部読んで答える写し（#5089）。決着の時刻の列を持たない器（fs・メモリ）は、これで `listApprovalsSettledAround` / `listApprovalSettledAts` を実装する。
@@ -21,8 +22,8 @@ export async function listApprovalSettledAtsFromApprovals(
   const { entries } = await store.listApprovals({ pendingOnly: false });
   const settledAts: string[] = [];
   for (const approval of entries) {
-    const settledAt = approval.answeredAt ?? approval.withdrawnAt;
-    if (settledAt !== undefined && settledAt !== null) settledAts.push(settledAt);
+    const settledAt = approvalSettledAt(approval);
+    if (settledAt !== undefined) settledAts.push(settledAt);
   }
   return settledAts;
 }

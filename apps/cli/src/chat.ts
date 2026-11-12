@@ -21,6 +21,7 @@ import {
   JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
   SCHEDULE_EVERY_MINUTES_MAX,
+  approvalSettledAt,
   renderApprovalTrace,
   summarizeQuestions,
   usageLayerSchema,
@@ -2330,7 +2331,7 @@ export async function runSlashCommand(
           stdout.write(`${dayArg} に決着した承認 ${approvals.length} 件（決着の新しい順）\n`);
           for (const approval of approvals) {
             const withdrawn = approval.withdrawnAt && !approval.answeredAt;
-            const settledAt = approval.answeredAt ?? approval.withdrawnAt ?? '';
+            const settledAt = approvalSettledAt(approval) ?? '';
             stdout.write(
               `  ${settledAt}  ${withdrawn ? '取り下げ済み' : '回答済み'}  ${summarizeText(approval.question)}\n`,
             );
