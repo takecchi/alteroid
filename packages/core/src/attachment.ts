@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
+import type { z } from 'zod';
+
 import {
   S3_MAX_OBJECT_BYTES,
   readAttachmentBlobConfig,
@@ -21,6 +23,12 @@ import {
   attachmentTooManyMessage,
   attachmentTotalTooLargeMessage,
 } from './attachment-wording.js';
+import type {
+  attachmentLimitsSchema,
+  attachmentMetaSchema,
+  attachmentUsageBucketSchema,
+  attachmentUsageSchema,
+} from './attachment-schema.js';
 import { sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 
@@ -31,26 +39,8 @@ import { assertNoNul, stripNul } from './nul-guard.js';
 // `uploadedBy` は自由な識別子の文字列で、値の一覧を型や zod では持たない（`operator` / `account:<id>` / `integration:<keyId>` も同じ）
 export const ATTACHMENT_UPLOADED_BY_CLONE = 'clone';
 
-export interface AttachmentMeta {
-  readonly id: string;
-  readonly name: string;
-  readonly mediaType: string;
-  readonly size: number;
-  readonly sha256: string;
-  readonly conversationId?: string;
-  readonly externalEventId?: string;
-  /** 結び付け先は会話・外部イベント・報告のどれか1つ。 */
-  readonly managerReportId?: string;
-  /** 中身ではなく識別子だけを持つ（認証済みの主体を表す）。 */
-  readonly uploadedBy?: string;
-  readonly createdAt: string;
-  /** 保存中（`keptAt` がある間）は持たない。 */
-  readonly expiresAt?: string;
-  /** 保存の印を付けた時刻。在る間は期限（`expiresAt`）でも未結び付け1時間の掃除でも消えない。外すと無くなる。 */
-  readonly keptAt?: string;
-  /** 在るものには未結び付け1時間の掃除を掛けない: 一度保存されたものは「上げただけで使わなかった残骸」ではないため。 */
-  readonly releasedAt?: string;
-}
+// 欄の宣言と意味は `attachment-schema.ts` の zod が正本（型はそこから導く）
+export type AttachmentMeta = Readonly<z.infer<typeof attachmentMetaSchema>>;
 
 export interface AttachmentPutInput {
   readonly name: string;
@@ -157,19 +147,14 @@ export interface AttachmentListPage {
   readonly nextCursor?: string;
 }
 
-interface AttachmentUsageBucket {
-  readonly count: number;
-  readonly totalBytes: number;
-}
+type AttachmentUsageBucket = Readonly<z.infer<typeof attachmentUsageBucketSchema>>;
 
-export interface AttachmentUsage extends AttachmentUsageBucket {
-  readonly byFrom: Readonly<Record<AttachmentFromClass, AttachmentUsageBucket>>;
-  /**
-   * 連携の鍵ごとの内訳（鍵の id → 期限内の件数と合計）。上げたことの無い鍵は載らない。
-   * 出所の区分（`byFrom.integration`）だけだと、どの鍵が増やしているかが見えず、枠を置くかを決め直せないため（#4005）。
-   */
+// 欄の宣言と意味は `attachment-schema.ts` の zod が正本。入れ子の欄も `readonly` に保つ
+type AttachmentUsageShape = z.infer<typeof attachmentUsageSchema>;
+export type AttachmentUsage = AttachmentUsageBucket & {
+  readonly byFrom: Readonly<Record<keyof AttachmentUsageShape['byFrom'], AttachmentUsageBucket>>;
   readonly byIntegrationKey: Readonly<Record<string, AttachmentUsageBucket>>;
-}
+};
 
 const INTEGRATION_UPLOADER_PREFIX = 'integration:';
 
@@ -359,15 +344,8 @@ function readPositiveIntEnv(
   return parsed;
 }
 
-export interface AttachmentLimits {
-  readonly maxImageBytes: number;
-  readonly maxFileBytes: number;
-  /** 外部ストレージが有効なときだけ効く別枠。0 は枠なし。 */
-  readonly maxLargeFileBytes: number;
-  readonly maxPerMessage: number;
-  readonly maxTotalBytes: number;
-  readonly retentionDays: number;
-}
+// 欄の宣言と意味は `attachment-schema.ts` の zod が正本
+export type AttachmentLimits = Readonly<z.infer<typeof attachmentLimitsSchema>>;
 
 // 添付1つの上限（core の検査は全部これに揃える）。軽い口（attachment-wording）が正本で、Web・CLI も同じものを使う
 export { attachmentMaxBytes };

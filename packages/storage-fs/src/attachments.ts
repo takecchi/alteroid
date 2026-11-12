@@ -14,6 +14,7 @@ import {
   addToAttachmentUsage,
   assertNoNul,
   attachmentBindTargetLabel,
+  attachmentMetaSchema,
   canBindAttachmentTo,
   emptyAttachmentUsage,
   matchesAttachmentListQuery,
@@ -51,22 +52,9 @@ const DATA_FILE = 'data';
 // UUID 以外の形は「無い」と答える: `../` でディレクトリの外へ出さないため
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-const metaSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  mediaType: z.string(),
-  size: z.number().int().nonnegative(),
-  sha256: z.string(),
-  conversationId: z.string().optional(),
-  externalEventId: z.string().optional(),
-  managerReportId: z.string().optional(),
-  uploadedBy: z.string().optional(),
-  createdAt: z.string(),
-  // 保存中（keptAt あり）は期限を持たない。どちらも無い meta は壊れたものとして「無い」と扱う（期限なしで残り続けないため）
-  expiresAt: z.string().optional(),
-  keptAt: z.string().optional(),
-  releasedAt: z.string().optional(),
-});
+// 欄は core の共有 schema を使い、`size` だけ厳しく読む（meta.json の負値は壊れ扱いにする。共有側は OpenAPI を変えないため `.int()` のまま）
+// 保存中（keptAt あり）は期限を持たない。どちらも無い meta は壊れたものとして「無い」と扱う（期限なしで残り続けないため。下の `#readMeta`）
+const metaSchema = attachmentMetaSchema.extend({ size: z.number().int().nonnegative() });
 
 export class FsAttachmentStore implements AttachmentStore {
   readonly #dir: string;
