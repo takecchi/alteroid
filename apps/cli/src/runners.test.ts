@@ -64,7 +64,7 @@ const KNOWN_DAEMON = {
 
 const RUNNER = {
   label: 'https://runner-a.internal',
-  state: 'connected',
+  state: 'connected' as const,
   since: '2026-08-22T00:00:00.000Z',
   runnerId: 'runner-a',
   workspacePath: '/work',

@@ -5,9 +5,9 @@ import {
   describeDroppedTraceOrigin,
   describeDroppedTraceRetention,
 } from '@alteroid/core/cli-light';
-import type { DroppedTraceOrigin } from '@alteroid/core';
+import type { InferResponseType } from 'hono/client';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { describeFailedResponse } from './format.js';
 import { redactBody } from './redact.js';
 import { resolveTarget } from './target.js';
@@ -32,13 +32,8 @@ export async function droppedCommand(): Promise<void> {
   stdout.write(`${renderDropped(await response.json())}\n`);
 }
 
-interface DroppedView {
-  origin: DroppedTraceOrigin;
-  since: string;
-  limit: number;
-  total: number;
-  traces: readonly string[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type DroppedView = InferResponseType<DaemonClient['dropped']['$get'], 200>;
 
 export function renderDropped(view: DroppedView): string {
   const lines: string[] = [

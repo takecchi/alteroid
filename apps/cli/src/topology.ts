@@ -2,46 +2,15 @@ import { parseSseJson, readSse } from '@alteroid/logic';
 
 import { stderr, stdout } from './terminal-out.js';
 
-import { createClient } from './client.js';
+import type { InferResponseType } from 'hono/client';
+import { createClient, type DaemonClient } from './client.js';
 import { describeFailedResponse } from './format.js';
 import { redactBody, redactError } from './redact.js';
 import { resolveTarget } from './target.js';
 
-interface TopologyView {
-  observedAt: string;
-  clone: { state: string; turn?: { conversationId?: string; kind: string } };
-  storage: { label?: string; state: string; checkedAt?: string; error?: string };
-  runners: { label: string; runnerId?: string; state: string; since: string }[];
-  managers: {
-    managerId: string;
-    status: string;
-    live: boolean;
-    runnerId?: string;
-    runnerListedAt?: string;
-    usageStoppedAt?: string;
-    request: string;
-    startedAt: string;
-    updatedAt: string;
-    lastReportAt?: string;
-    waiting: { requestId: string; kind: string; summary: string; askedAt: string }[];
-    waitingOmitted?: number;
-    awaitingBackground?: {
-      tasks: number;
-      withheldReports: number;
-      breakdown: string;
-      since: string;
-    };
-    workers: {
-      agentType: string;
-      lastTool?: string;
-      lastToolAt?: string;
-      runningTool?: { tool: string; startedAt: string };
-    }[];
-  }[];
-  managersOmitted?: number;
-  unreadable?: { id?: string; reason: string }[];
-  links: { key: string; lastDownAt?: string; lastUpAt?: string; lastActivityAt?: string }[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// `GET /topology/stream` の `snapshot` イベントも同じ形（`topologyResponseSchema`）
+type TopologyView = InferResponseType<DaemonClient['topology']['$get'], 200>;
 
 export function formatAge(iso: string, now: number): string {
   const at = Date.parse(iso);
@@ -270,7 +239,7 @@ export async function topologyCommand(options: TopologyOptions = {}): Promise<vo
     stdout.writeRaw(`${JSON.stringify(view, null, 2)}\n`);
     return;
   }
-  stdout.write(`${renderTopology(view as TopologyView)}\n`);
+  stdout.write(`${renderTopology(view)}\n`);
 }
 
 async function watchTopology(

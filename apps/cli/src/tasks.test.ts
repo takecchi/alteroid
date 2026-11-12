@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
+import type { TasksView } from './tasks.js';
 
 vi.mock('./target.js', async () => {
   const actual = await vi.importActual<typeof import('./target.js')>('./target.js');
@@ -68,7 +69,7 @@ afterEach(() => {
 });
 
 const AT = '2026-10-01T00:00:00.000Z';
-const row = (overrides: Record<string, unknown>) => ({
+const row = (overrides: Partial<TasksView['entries'][number]>): TasksView['entries'][number] => ({
   id: 't',
   status: 'queued',
   origin: 'self',
