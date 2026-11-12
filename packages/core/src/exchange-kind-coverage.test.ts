@@ -463,7 +463,10 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     notifyUnresumable: 'failure',
   },
   // resume の核（旧 `Pool#noteAmbiguousSighting` / `#noteAmbiguousResolved`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
+  // 加えて、貸し出しの関門の断り（held・persist-failed）が長引いたときの知らせ（A3）: 長引きは failure、通ったときの「解けた」は recovery（併存の対と同じ組）。どちらも `#` 付きの私的メソッド
   'manager-resume.ts': {
+    '#noteProlonged': 'failure',
+    '#noteResolved': 'recovery',
     noteAmbiguousResolved: 'recovery',
     noteAmbiguousSighting: 'failure',
   },

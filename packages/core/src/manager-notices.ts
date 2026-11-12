@@ -219,6 +219,34 @@ export function leaseRefusalDecision(
   return `[${jobId}] 引き取りを見送った（貸し出しの関門。${resolution}）`;
 }
 
+// 長引いた断り（`held` / `persist-failed`）をクローンへ知らせる文。`ambiguous` は既存の即時通知（`describeAmbiguousSighting`）があり対象外。
+// 「新しく起こし直さないこと」はどの `kind` でも必ず言う（`resumeFailureDetail` と同じ）: 消すと二重実行の入口になる。
+export function describeLeaseRefusalProlonged(input: {
+  managerId: string;
+  kind: Exclude<LeaseRefusalKind, 'ambiguous'>;
+  detail: string;
+  elapsedMs: number;
+  count: number;
+}): string {
+  const why =
+    input.kind === 'held'
+      ? 'まだ前の器が握っている（貸し出しが更新され続けている）。起こし直すと同じ仕事が2本になる。持ち主が居ないはずなら、人間に相談すること'
+      : '貸し出しを台帳へ書けない。書けないまま走らせると、次の契機が同じ委譲を無条件で奪える。台帳の障害の可能性があるので、人間に相談すること';
+  return (
+    `${input.managerId} の引き取りが ${formatDurationMinutes(input.elapsedMs)}以上、貸し出しの関門に断られ続けている` +
+    `（${String(input.count)}回。いまの理由: ${input.kind}）。${input.detail} ` +
+    `**新しく起こし直さないこと** — ${why}。挑み直しは続けており、通ったら続けて知らせる。`
+  );
+}
+
+/** 長引きを知らせた episode だけ、通ったときに言う。 */
+export function describeLeaseRefusalResolved(managerId: string, elapsedMs: number): string {
+  return (
+    `${managerId} は貸し出しの関門を通った（${formatDurationMinutes(elapsedMs)}続いた断りが解けた）。` +
+    '引き取りを再開した。以後は自動で引き取る。'
+  );
+}
+
 // 恒久（`no-session`）と一時（`unreadable` / `busy`）を混ぜない: 全部を「起こし直すこと」と言うと、待てば直る失敗でも続きが失われる行動を指示してしまう。
 // 言い方の持ち主を1つにする。`send()` は `#resuming` を事前にも見るので、同じ「取り直している最中」を2箇所で書くと、片方だけが直る形になる。
 export function resumeFailureDetail(
