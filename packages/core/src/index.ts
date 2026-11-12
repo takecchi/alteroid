@@ -46,13 +46,7 @@ export {
   probeTokenCandidate,
   type TokenCandidateVerdict,
 } from './token-candidate.js';
-export {
-  CONTAINER_AFFINITY_MAX_LOAD,
-  keepsContainerToken,
-  selectBalancedToken,
-  tokenLoadScoreOf,
-  type BalancedTokenPickInput,
-} from './token-balance.js';
+export { keepsContainerToken, selectBalancedToken, tokenLoadScoreOf } from './token-balance.js';
 export { usageTransitionOf } from './usage-limits.js';
 /** PRD「権限境界」とは別の層: あちらは行為の一覧を持ってはいけないが、こちらは実行環境の境界（認証情報の配布範囲）である。 */
 export {
@@ -81,7 +75,6 @@ export {
   createAuthProviderRegistry,
   createGoogleProvider,
   type AuthProvider,
-  type OAuthProfile,
   type OAuthProvider,
 } from './auth-providers.js';
 export { createAuthService, type AuthService, type GrantResult } from './auth-service.js';
@@ -121,7 +114,7 @@ export {
 } from './digest.js';
 /** 承認の状態（取り下げを先に見る）の判定は 1 つの関数に寄せてある。web は軽い出口 `@alteroid/core/answered-via` から引く。 */
 export { approvalStateOf, isApprovalFieldSet } from './approval-state.js';
-export type { ApprovalState, ApprovalStateFields } from './approval-state.js';
+export type { ApprovalState } from './approval-state.js';
 /** 委譲の「動いている」の判定は1つの名前付きの関数に寄せてある（`job-status-running.ts`）。daemon の地図などが書き下ろさず使う。 */
 export { isManagerInFlight } from './job-status-running.js';
 /** `GET /conversations` と `conversation_read` が同じ規則を使う: 片方だけに実装を持たせると、直したほうと忘れたほうで見えるものがずれる。 */
@@ -263,7 +256,6 @@ export {
 } from './schedule-run-transition.js';
 export { dropUnreadTimersOfKind, removeScheduleJournalFirst } from './schedule-remove.js';
 export {
-  removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,
   removeInboxChunkJournalFirst,
 } from './removal-journal-first.js';
@@ -313,7 +305,6 @@ export {
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   selectArchiveRemovalTargets,
-  type ArchiveRemoveManyFilter,
 } from './archive-prune.js';
 export { type SelfFacts } from './self.js';
 export {
@@ -362,7 +353,6 @@ export {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   type ManagerPool,
-  type ManagerTokenAssignmentPort,
   type VacateResult,
   type ManagerSendResult,
   type ManagerSummary,
@@ -512,8 +502,6 @@ export {
   agentTokenSchema,
   agentTokenViewSchema,
   cooldownSourceSchema,
-  weeklyResetSchema,
-  type WeeklyReset,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   TokenPoolInputError,
   credentialOf,
@@ -706,7 +694,6 @@ export {
   setStderrSinkForTesting,
   writeStderrLine,
   writeStderrSync,
-  type DroppedTraceOrigin,
 } from './dropped-record.js';
 
 export {
