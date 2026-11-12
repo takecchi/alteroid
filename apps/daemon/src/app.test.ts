@@ -8831,10 +8831,19 @@ describe('認証トークンのプール', () => {
       tokens: service,
     });
     await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
-    await service.noteUnusable({
-      id: 'tok-a',
-      message: "You've hit your org's monthly spend limit",
-    });
+    // 回し手が付ける止まった記録を、器へ直に置く
+    const [row] = await stores.tokens.list();
+    if (row === undefined) throw new Error('行が置けていない');
+    const at = new Date().toISOString();
+    await stores.tokens.replace([
+      {
+        ...row,
+        lastRejectedAt: at,
+        lastRejectedReason: "You've hit your org's monthly spend limit",
+        cooldownUntil: Date.now() + 60_000,
+        updatedAt: at,
+      },
+    ]);
 
     const response = await withTokens.request('/tokens');
     expect(response.status).toBe(200);
