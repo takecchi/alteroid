@@ -316,6 +316,26 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(rest.map((r) => r.event.id)).toEqual(['evt-1']);
   });
 
+  it('5b. sources が外れたとき、実在する送信元は多い順に 8 種まで並べ、残りは「ほか N 種」', async () => {
+    const stores = createMemoryStores();
+    await putAll(
+      stores,
+      Array.from({ length: 9 }, (_, index) =>
+        managerEvent(index, { managerId: `mgr-${index}` } as Partial<InboxEvent>),
+      ),
+    );
+
+    const reply = await remover(stores)({
+      types: ['manager_message'],
+      sources: ['manager:nobody'],
+      reason: '外れた絞り込み',
+    });
+
+    expect(reply).toContain('…ほか 1 種は省略');
+    expect(reply).toContain('manager:mgr-7 1');
+    expect(reply).not.toContain('manager:mgr-8 1');
+  });
+
   it('6. before は「その瞬間ちょうど」を含み、それより後は含まない', async () => {
     const stores = createMemoryStores();
     const boundary = '2026-02-01T00:00:00.000Z';
