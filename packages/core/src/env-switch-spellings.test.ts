@@ -4,10 +4,8 @@ import { resolveBashShapeGuard } from './bash-guard-mode.js';
 import { resolveRefusalAutoReopen } from './clone-refusal.js';
 import { CLONE_HUMAN_PRIORITY_ENV_KEY, resolveCloneHumanPriority } from './clone.js';
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
-import {
-  clearTokenSavingNotesForTesting,
-  resolveTokenSavingExcerpt,
-} from './token-saving-switches.js';
+import { clearEnvSwitchNotesForTesting } from './env-switch.js';
+import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import { resolveMemoryGuard } from './tools.js';
 
 // 環境変数の on/off の読み方（5か所）の、受け付ける綴りと、知らない綴り・空・空白だけの扱いを縛る。
@@ -15,7 +13,7 @@ import { resolveMemoryGuard } from './tools.js';
 
 afterEach(() => {
   clearRecentTracesForTesting();
-  clearTokenSavingNotesForTesting();
+  clearEnvSwitchNotesForTesting();
 });
 
 const ON = ['on', '1', 'true', 'yes', 'enabled', 'ON', ' True ', '\t1\n'];

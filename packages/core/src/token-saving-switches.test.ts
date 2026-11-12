@@ -1,15 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
-import {
-  clearTokenSavingNotesForTesting,
-  resolveTokenSavingExcerpt,
-  TOKEN_SAVING_EXCERPT_ENV,
-} from './token-saving-switches.js';
+import { clearEnvSwitchNotesForTesting } from './env-switch.js';
+import { resolveTokenSavingExcerpt, TOKEN_SAVING_EXCERPT_ENV } from './token-saving-switches.js';
 
 afterEach(() => {
   clearRecentTracesForTesting();
-  clearTokenSavingNotesForTesting();
+  clearEnvSwitchNotesForTesting();
 });
 
 describe('トークン節約スイッチの既定', () => {
