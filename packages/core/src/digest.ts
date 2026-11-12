@@ -6,6 +6,7 @@ import { scanJournalPages } from './journal-scan.js';
 // 型だけを取る: `manager.ts` との間に実行時の循環を作らないため
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
+import { journalBytesChange } from './journal-bytes.js';
 import type { Job, JobStatus, JournalEntry, PendingApproval, ScheduledRequest } from './schema.js';
 import {
   UnreadableApprovalError,
@@ -1046,10 +1047,8 @@ function appendMemoryUpdatesSection(
     for (const entry of shownMemoryUpdates) {
       // 無いバイト数を `0` として出さない: 「変化が無かった」と読めてしまうため
       const action = entry.action === undefined ? '' : `/${entry.action}`;
-      const bytes =
-        entry.bytesBefore === undefined || entry.bytesAfter === undefined
-          ? '前後バイト数不明（旧形式）'
-          : `${entry.bytesBefore}→${entry.bytesAfter} バイト`;
+      const change = journalBytesChange(entry);
+      const bytes = change === undefined ? '前後バイト数不明（旧形式）' : `${change} バイト`;
       sections.push(
         `- ${entry.slug}（${entry.cause}${action} / ${bytes}）${brief(entry.summary, 120)}`,
       );

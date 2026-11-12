@@ -7,6 +7,7 @@ import {
   describeUnreadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
+import { journalBytesChange } from './journal-bytes.js';
 import { noteDroppedRecord } from './dropped-record.js';
 import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } from './excerpt.js';
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
@@ -298,10 +299,8 @@ function renderJournalEntry(
       // バイトは `head`、文字を含みうる自由文（`summary`）は `body` に分ける: 1行・1文にバイトと文字を混ぜないため
       // 値が無いときは `0` ではなく「不明」と明示する: `0` だと「変化が無かった」と読め、省くと出ている行と混ざって「変化なし」に読めるため
       const action = entry.action === undefined ? '' : ` ${entry.action}`;
-      const bytes =
-        entry.bytesBefore === undefined || entry.bytesAfter === undefined
-          ? ' bytes=不明(旧形式)'
-          : ` bytes=${entry.bytesBefore}→${entry.bytesAfter}`;
+      const change = journalBytesChange(entry);
+      const bytes = change === undefined ? ' bytes=不明(旧形式)' : ` bytes=${change}`;
       return {
         head: `[memory_update ${field(entry.slug)} (${entry.cause})${action}${bytes}]`,
         body: entry.summary,
