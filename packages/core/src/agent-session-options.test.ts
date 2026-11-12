@@ -293,7 +293,7 @@ describe('マネージャー（runner）へ渡す Options', () => {
     expect(typeof options.canUseTool).toBe('function');
     expect(options.hooks?.PostToolUse).toHaveLength(1);
     expect(options.hooks?.PreCompact).toHaveLength(1);
-    expect(options.hooks?.UserPromptSubmit).toHaveLength(1);
+    expect(options.hooks).not.toHaveProperty('UserPromptSubmit');
     expect(options.hooks?.SubagentStop).toHaveLength(1);
     expect(typeof options.hooks?.SubagentStop?.[0]?.hooks?.[0]).toBe('function');
     expect(options.sessionStore).toBeDefined();

@@ -180,12 +180,11 @@ describe('PreToolUse の配線（#894 段1・案(A)）', () => {
     expect(started.options.hooks?.PreToolUse?.[0]?.hooks?.length).toBe(1);
   });
 
-  it('既存の5本（PostToolUse / PreCompact / UserPromptSubmit / SubagentStop / Stop）はそのまま載っている', async () => {
+  it('既存の4本（PostToolUse / PreCompact / SubagentStop / Stop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
     expect(hooks?.PostToolUse?.length).toBe(1);
     expect(hooks?.PreCompact?.length).toBe(1);
-    expect(hooks?.UserPromptSubmit?.length).toBe(1);
     expect(hooks?.SubagentStop?.length).toBe(1);
     expect(hooks?.Stop?.length).toBe(1);
   });
