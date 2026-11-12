@@ -48,6 +48,7 @@ import {
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
 import {
+  UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
@@ -2992,11 +2993,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
           ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${redactBody(observation.reason)}）`
           : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
             unpushedWorkObservationIncompleteSuffix(observation);
-    return (
-      '      ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
-      '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
-      shown
-    );
+    return `      ${UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE}` + shown;
   }
 
   if (observation === undefined) return null;
