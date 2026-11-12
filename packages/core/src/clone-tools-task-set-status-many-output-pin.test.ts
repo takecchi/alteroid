@@ -10,7 +10,7 @@ import { createCloneTools } from './tools.js';
 
 // `task_set_status_many` の出力（全文と字数）と、呼んだあとの状態（task の行・日誌へ足された行）を、
 // 場面ごとにコミットした固定値（clone-tools-task-set-status-many-output-pin.json）と丸ごと比べる。
-// `clone-tools-task.ts` の `tool('task_set_status_many', …)`（約 288 行・入れ子 9 段の式）を段ごと・部分ごとの小さな関数へ分けるとき、
+// `clone-tools-task-set-status-many.ts` の `tool('task_set_status_many', …)`（約 120 行）を段ごと・部分ごとの小さな関数へ分けるとき、
 // 振る舞いが1文字も変わらないことを機械で確かめる歯。固定値の側で値を伏せず、入力（時計・id・時刻・task の本文）を固定して毎回同じにする。
 // この道具は task を書き換えるので、出力だけでなく「呼んだあとの状態」も固定する:
 //   - output: 道具の出力の全文と字数（isError・例外で返ったか）
@@ -540,6 +540,26 @@ const SCENARIOS: Scenario[] = [
         }),
         writes: 'some',
       },
+    ],
+  },
+  {
+    name: 'reason-lone-surrogate',
+    covers:
+      '理由に孤立サロゲート（前半だけ・後半だけ）を含む: U+FFFD に置き換わって task の行（closedReason）・日誌・出力で同じ文字列になる。対になったサロゲート（絵文字）はそのまま残る',
+    seed: [
+      t('s-1', 'external', 1),
+      t('s-2', 'external', 2),
+      t('s-3', 'external', 3),
+      t('s-4', 'external', 4),
+    ],
+    steps: [
+      { args: call({ origin: ['external'], limit: 1, reason: '前\ud800後' }), writes: 'some' },
+      { args: call({ origin: ['external'], limit: 1, reason: '前\udc00後' }), writes: 'some' },
+      {
+        args: call({ origin: ['external'], limit: 1, reason: '対\u{1F600}と\ud800\u0000' }),
+        writes: 'some',
+      },
+      { args: call({ origin: ['external'], limit: 1, reason: '\ud83d' }), writes: 'some' },
     ],
   },
   {
@@ -1177,6 +1197,14 @@ describe('task_set_status_many の出力と呼んだあとの状態の固定（�
     expect(decisionOf('reason-forms#1', 0)).toContain(': 一行目\n二行目です\n');
     expect(text('reason-forms#1')).not.toContain('\u0000');
     expect(text('reason-forms#1')).toContain('（理由: 一行目\n二行目です）');
+    // 孤立サロゲートは U+FFFD に置き換わり、task と日誌と出力で同じ文字列になる。対になったサロゲートは残る
+    expect(task('reason-lone-surrogate#1', 's-1')?.closedReason).toBe('前�後');
+    expect(decisionOf('reason-lone-surrogate#1', 0)).toContain(': 前�後\n');
+    expect(text('reason-lone-surrogate#1')).toContain('（理由: 前�後）');
+    expect(task('reason-lone-surrogate#2', 's-2')?.closedReason).toBe('前�後');
+    expect(task('reason-lone-surrogate#3', 's-3')?.closedReason).toBe('対\u{1F600}と�');
+    expect(text('reason-lone-surrogate#3')).toContain('（理由: 対\u{1F600}と�）');
+    expect(task('reason-lone-surrogate#4', 's-4')?.closedReason).toBe('�');
     expect(task('reason-forms#2', 'r-2')?.closedReason).toBe('  前後に空白  ');
     expect(text('reason-forms#3')).toContain(LONG_REASON);
     expect(text('limit-steps#1')).toContain('残り 3 件');

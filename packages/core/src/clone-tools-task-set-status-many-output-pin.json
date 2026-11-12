@@ -76,6 +76,10 @@
     "reason-forms#2": 180,
     "reason-forms#3": 2175,
     "reason-forms#4": 134,
+    "reason-lone-surrogate#1": 174,
+    "reason-lone-surrogate#2": 174,
+    "reason-lone-surrogate#3": 176,
+    "reason-lone-surrogate#4": 110,
     "limit-steps#1": 180,
     "limit-steps#2": 180,
     "limit-steps#3": 113,
@@ -9551,6 +9555,272 @@
           "id": "id-4",
           "at": "2026-10-29T00:04:00.000Z",
           "decision": "task を絞り込みでまとめて cancelled にした（1/1 塊目、この塊は 1 件）: **強調** `code` [x](y)\n絞り込み: origin=[external]\n変えた id: r-4",
+          "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
+          "target": {
+            "kind": "task"
+          }
+        }
+      ]
+    },
+    "reason-lone-surrogate#1": {
+      "output": {
+        "length": 174,
+        "text": "**1 件を done にした**（理由: 前�後）。\n開いている task 4 件 → origin=[external] で 4 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: s-1\n1回の上限（1 件）に当たったので、残り 3 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "s-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-01T00:02:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-2",
+          "body": "本文 s-2"
+        },
+        {
+          "id": "s-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-3",
+          "body": "本文 s-3"
+        },
+        {
+          "id": "s-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-4",
+          "body": "本文 s-4"
+        },
+        {
+          "id": "s-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-1",
+          "body": "本文 s-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-1",
+          "at": "2026-10-29T00:01:00.000Z",
+          "decision": "task を絞り込みでまとめて done にした（1/1 塊目、この塊は 1 件）: 前�後\n絞り込み: origin=[external]\n変えた id: s-1",
+          "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
+          "target": {
+            "kind": "task"
+          }
+        }
+      ]
+    },
+    "reason-lone-surrogate#2": {
+      "output": {
+        "length": 174,
+        "text": "**1 件を done にした**（理由: 前�後）。\n開いている task 3 件 → origin=[external] で 3 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: s-2\n1回の上限（1 件）に当たったので、残り 2 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "s-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-01T00:03:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-3",
+          "body": "本文 s-3"
+        },
+        {
+          "id": "s-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-4",
+          "body": "本文 s-4"
+        },
+        {
+          "id": "s-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-2",
+          "body": "本文 s-2",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        },
+        {
+          "id": "s-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-1",
+          "body": "本文 s-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-2",
+          "at": "2026-10-29T00:02:00.000Z",
+          "decision": "task を絞り込みでまとめて done にした（1/1 塊目、この塊は 1 件）: 前�後\n絞り込み: origin=[external]\n変えた id: s-2",
+          "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
+          "target": {
+            "kind": "task"
+          }
+        }
+      ]
+    },
+    "reason-lone-surrogate#3": {
+      "output": {
+        "length": 176,
+        "text": "**1 件を done にした**（理由: 対😀と�）。\n開いている task 2 件 → origin=[external] で 2 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: s-3\n1回の上限（1 件）に当たったので、残り 1 件は対象にしていない。**同じ絞り込みでもう一度呼べば続きを閉じられる。**",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "s-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-01T00:04:00.000Z",
+          "status": "queued",
+          "origin": "external",
+          "title": "仕事 s-4",
+          "body": "本文 s-4"
+        },
+        {
+          "id": "s-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-3",
+          "body": "本文 s-3",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "対😀と�"
+        },
+        {
+          "id": "s-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-2",
+          "body": "本文 s-2",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        },
+        {
+          "id": "s-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-1",
+          "body": "本文 s-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-3",
+          "at": "2026-10-29T00:03:00.000Z",
+          "decision": "task を絞り込みでまとめて done にした（1/1 塊目、この塊は 1 件）: 対😀と�\n絞り込み: origin=[external]\n変えた id: s-3",
+          "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
+          "target": {
+            "kind": "task"
+          }
+        }
+      ]
+    },
+    "reason-lone-surrogate#4": {
+      "output": {
+        "length": 110,
+        "text": "**1 件を done にした**（理由: �）。\n開いている task 1 件 → origin=[external] で 1 件\n絞り込み: origin=[external]\n変えた id（先頭 1 件）: s-4",
+        "isError": false,
+        "thrown": false
+      },
+      "wrote": true,
+      "tasks": [
+        {
+          "id": "s-4",
+          "createdAt": "2026-10-01T00:04:00.000Z",
+          "updatedAt": "2026-10-29T00:04:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-4",
+          "body": "本文 s-4",
+          "closedAt": "2026-10-29T00:04:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "�"
+        },
+        {
+          "id": "s-3",
+          "createdAt": "2026-10-01T00:03:00.000Z",
+          "updatedAt": "2026-10-29T00:03:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-3",
+          "body": "本文 s-3",
+          "closedAt": "2026-10-29T00:03:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "対😀と�"
+        },
+        {
+          "id": "s-2",
+          "createdAt": "2026-10-01T00:02:00.000Z",
+          "updatedAt": "2026-10-29T00:02:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-2",
+          "body": "本文 s-2",
+          "closedAt": "2026-10-29T00:02:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        },
+        {
+          "id": "s-1",
+          "createdAt": "2026-10-01T00:01:00.000Z",
+          "updatedAt": "2026-10-29T00:01:00.000Z",
+          "status": "done",
+          "origin": "external",
+          "title": "仕事 s-1",
+          "body": "本文 s-1",
+          "closedAt": "2026-10-29T00:01:00.000Z",
+          "closedBy": "clone",
+          "closedReason": "前�後"
+        }
+      ],
+      "journal": [
+        {
+          "type": "decision",
+          "id": "id-4",
+          "at": "2026-10-29T00:04:00.000Z",
+          "decision": "task を絞り込みでまとめて done にした（1/1 塊目、この塊は 1 件）: �\n絞り込み: origin=[external]\n変えた id: s-4",
           "grounds": "自分で task_set_status_many して絞り込みで閉じた（人間はこれを読んで後から否定する）",
           "target": {
             "kind": "task"
