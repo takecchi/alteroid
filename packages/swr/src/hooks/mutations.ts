@@ -34,6 +34,7 @@ import type {
   Task,
   TaskPlacementInput,
   TokenRotationSettings,
+  WorkspaceResetSummary,
 } from '@alteroid/logic';
 import { saveChatDraft, saveChatDraftMark } from '@alteroid/logic';
 
@@ -558,26 +559,7 @@ export function usePostEvent() {
   );
 }
 
-export interface WorkspaceResetSummary {
-  memory: number;
-  journal: number;
-  jobs: number;
-  approvals: number;
-  schedules: number;
-  schedulePhases: number;
-  inbox: number;
-  tasks: number;
-  practices: number;
-  archive: number;
-  sessions: number;
-  profile: number;
-  usageDaily: number;
-  usageBaseline: number;
-  usageLedger: number;
-  usageTurns: number;
-  attachments: number;
-  sessionLog?: number;
-}
+export type { WorkspaceResetSummary };
 
 // 全キャッシュを引き直す: 種類を選んで落とすと、選び漏れが「消えたのに画面には残る」になるため
 export function useResetWorkspace() {
