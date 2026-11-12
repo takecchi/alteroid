@@ -1,8 +1,10 @@
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
+import type { InferResponseType } from 'hono/client';
+import type { DaemonClient } from './client.js';
 
 import { redactedExcerpt } from '@alteroid/core/redact';
-import { hasRunnerPushFailure, type ProfileState } from '@alteroid/logic';
+import { hasRunnerPushFailure } from '@alteroid/logic';
 
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
@@ -32,33 +34,15 @@ const EMPTY_BODY_MESSAGE =
 
 const DEFAULT_ENTRY = 'default';
 
-type ProfileScope = 'all' | 'app' | 'runner';
-
-interface ProfileEntryView {
-  name: string;
-  script: string;
-  scope: ProfileScope;
-  updatedAt: string;
-  sha256: string;
-  bytes: number;
-  // 行の版。書き込みの `ifMatch` に返す
-  version: string;
-}
-
-interface ApplyResult {
-  ok: boolean;
-  error?: string;
-  output?: string;
-  names?: string[];
-}
-
-interface UpdateView {
-  updatedAt: string;
-  entries?: ProfileEntryView[];
-  composed?: { clone: ProfileState['clone']; runner: ProfileState['runner'] };
-  clone: ApplyResult;
-  runners: (ApplyResult & { runnerId: string })[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 型だけ: 実行時は従来どおり `fetchDaemon` で撃つ（`createClient` は呼ばない）
+type ProfileState = InferResponseType<DaemonClient['profile']['$get'], 200>;
+// 行の版（`version`）は書き込みの `ifMatch` に返す
+type ProfileEntryView = ProfileState['entries'][number];
+type ProfileScope = ProfileEntryView['scope'];
+type UpdateView = InferResponseType<DaemonClient['profile'][':name']['$put'], 200>;
+type ApplyResult = UpdateView['clone'];
+type RunnersView = InferResponseType<DaemonClient['runners']['$get'], 200>;
 
 function parseScope(raw: string | undefined): ProfileScope | undefined {
   if (raw === undefined) return undefined;
@@ -155,14 +139,7 @@ export async function profileStatusCommand(): Promise<void> {
   }
 
   // どの runner に何が届いているかを見せる: 見えないと「置いた」「効いていない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も切り分けられない。
-  const { runners } = (await request(target, '/runners')) as {
-    runners: {
-      label: string;
-      state: string;
-      runnerId?: string;
-      profile?: { sha256: string; updatedAt: string };
-    }[];
-  };
+  const { runners } = (await request(target, '/runners')) as RunnersView;
   const expected = profile.runner.sha256;
   for (const runner of runners) {
     // 繋がるまで runner_id は分からない。宛先（label）なら登録した時点で言える。
