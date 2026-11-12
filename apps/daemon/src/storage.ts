@@ -92,6 +92,9 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
 
 // 判定基準の実装を持たず core の `deriveMemoryBootBackfillFromJournal` を呼ぶだけにする: 基準が散ると、片方だけ直して残りが古い基準のままになるため。
 // 日誌は1周だけ読む（人間の印と作った時刻の2つを同じ走査で組む）。書き戻しは2つの try に分けたまま: 片方が落ちても、もう片方は従来どおり起動を止めず続けるため。
+// 「unknown が 0 件なら日誌を読まずに飛ばす」は成り立たないので、毎起動で走らせる（検討して見送った）:
+// 保護状態の unknown は「humanTouchedAt が空」ではなく「派生値が信用できない」（索引のハッシュ欠け・文書なし・本文と不一致）で、記憶の meta の欄だけでは数えられない。
+// この処理の役目は日誌から humanTouchedAt を復元することで、unknown を直すことではない（`markHumanTouched` はハッシュを直さない）。
 export async function runBootBackfills(stores: Stores): Promise<void> {
   let derived: Awaited<ReturnType<typeof deriveMemoryBootBackfillFromJournal>> | undefined;
   let scanError: unknown;
