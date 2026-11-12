@@ -19,7 +19,6 @@ import {
   type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
 import { chunkIdsByChars } from './chunk-ids.js';
-import { CLOSE_MANY_SOURCES_SHOWN } from './task-set-status-many.js';
 import {
   describeArrayLengthViolation,
   describeBlankViolation,
@@ -30,13 +29,18 @@ import {
   formatIntRangeJa,
   formatStringLengthJa,
 } from './tool-arg-checks.js';
-import { REMOVE_MANY_LIMIT_DEFAULT, REMOVE_MANY_LIMIT_MAX } from './remove-many-limit.js';
+import {
+  REMOVE_MANY_IDS_SHOWN,
+  REMOVE_MANY_JOURNAL_ID_CHARS,
+  REMOVE_MANY_LIMIT_DEFAULT,
+  REMOVE_MANY_LIMIT_MAX,
+  REMOVE_MANY_SOURCES_SHOWN,
+} from './remove-many-limit.js';
 import { tool, text, JournalNotRecordedError } from './clone-tools-common.js';
 import type { ToolContext, CloneToolsShared } from './clone-tools-context.js';
 
-export const REMOVE_MANY_JOURNAL_ID_CHARS = 3_600;
-
-const REMOVE_MANY_IDS_SHOWN = 20;
+// 定義は `remove-many-limit.ts`（3 道具で共有）。外へ出していた名前はここから変えない
+export { REMOVE_MANY_JOURNAL_ID_CHARS };
 
 // `.min(1)` を入力スキーマ側に置かない: SDK の `tool()` がハンドラより前に検証するため、件数の検査はハンドラの先頭の `safeParse` へ渡す
 const inboxRemoveManyTypesToolInputSchema = z.array(z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES));
@@ -156,10 +160,10 @@ function describeInboxRemoveManySourcesMiss(
   }
   const top = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, CLOSE_MANY_SOURCES_SHOWN)
+    .slice(0, REMOVE_MANY_SOURCES_SHOWN)
     .map(([name, count]) => `${name} ${count}`)
     .join(' / ');
-  const rest = counts.size - Math.min(counts.size, CLOSE_MANY_SOURCES_SHOWN);
+  const rest = counts.size - Math.min(counts.size, REMOVE_MANY_SOURCES_SHOWN);
   return (
     `types では ${afterTypes.length} 件当たったが sources=[${sources.join(', ')}] の完全一致で0件——` +
     `**この送信元は未読に無い。** 当たった行に実在する送信元（多い順）: ` +

@@ -32,6 +32,7 @@ import {
   type ArchiveRemovalSelection,
   type ArchiveRemoveManyFilter,
 } from './archive-prune.js';
+import { REMOVE_MANY_IDS_SHOWN } from './remove-many-limit.js';
 import type { JournalEntryInput } from './schema.js';
 import {
   guardArchiveRemoval,
@@ -102,9 +103,6 @@ async function describeTranscriptMissingLeg(pool: ManagerPool, managerId: string
     `不明——archive が含まれていたかもここからは言えない）。${describeRunnerLegState(snapshot)}`
   );
 }
-
-// 道具の応答だけの関心事: 一括削除の口は道具だけ（HTTP の口は無い）なので、`removedIds` の間引きはテキスト応答の側で持つ
-const ARCHIVE_REMOVE_MANY_IDS_SHOWN = 20;
 
 // `LIST_BUDGET` を使い回さない: 値が同じでも、片方だけ直したくなったときに一緒に動くため
 const RUNNER_LIST_BUDGET = 8_000;
@@ -731,7 +729,7 @@ function renderArchiveRemoveManyInUseNote(skippedInUse: number): string[] {
 }
 
 function renderArchiveRemoveManyDryRunIds(removableTargets: readonly ArchiveEntry[]): string {
-  const shown = removableTargets.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN).map((row) => row.id);
+  const shown = removableTargets.slice(0, REMOVE_MANY_IDS_SHOWN).map((row) => row.id);
   const hidden = removableTargets.length - shown.length;
   return `対象の id（先頭 ${shown.length} 件）: ${shown.join(', ')}${
     hidden > 0 ? ` …ほか ${hidden} 件は省略` : ''
@@ -885,7 +883,7 @@ function renderArchiveRemoveManyRemovedIds(
   removedIds: readonly string[],
   journaledChunks: number,
 ): string {
-  const shownRemoved = removedIds.slice(0, ARCHIVE_REMOVE_MANY_IDS_SHOWN);
+  const shownRemoved = removedIds.slice(0, REMOVE_MANY_IDS_SHOWN);
   const hiddenRemoved = removedIds.length - shownRemoved.length;
   return `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
     hiddenRemoved > 0

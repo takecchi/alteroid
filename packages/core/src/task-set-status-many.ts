@@ -3,6 +3,13 @@ import {
   describeOffsetRequiredTimeBoundary,
   isOffsetQualifiedTimeBoundary,
 } from './journal-time.js';
+import {
+  REMOVE_MANY_IDS_SHOWN as CLOSE_MANY_IDS_SHOWN,
+  REMOVE_MANY_JOURNAL_ID_CHARS as CLOSE_MANY_JOURNAL_ID_CHARS,
+  REMOVE_MANY_LIMIT_DEFAULT as CLOSE_MANY_LIMIT_DEFAULT,
+  REMOVE_MANY_LIMIT_MAX as CLOSE_MANY_LIMIT_MAX,
+  REMOVE_MANY_SOURCES_SHOWN as CLOSE_MANY_SOURCES_SHOWN,
+} from './remove-many-limit.js';
 import { taskOriginSchema } from './schema.js';
 import type { Task, TaskClosedBy, TaskOrigin } from './schema.js';
 import type { TaskStore } from './store.js';
@@ -20,13 +27,14 @@ import {
 // Task の一括の口は TaskStore に足さない: 1件ずつの `setStatus` が遷移の規則と排他を持っており、
 // 一括用の別経路を3実装に足すと、遷移の規則が2か所に割れるため。Task は数千件溜める前提ではないので、1件ずつの書き直しの重さは許す
 
-export const CLOSE_MANY_LIMIT_DEFAULT = 500;
-// store 側に同じ上限を置いて二重にしない: どちらが効いたのか呼び出し側から読めなくなるため
-export const CLOSE_MANY_LIMIT_MAX = 2_000;
-// id 列は件数ではなく文字数の予算で塊に割り、塊ごとに1件の日誌を書く: 全件を1行へ詰めると予算が文字数という面の規約に反するため
-export const CLOSE_MANY_JOURNAL_ID_CHARS = 3_600;
-export const CLOSE_MANY_IDS_SHOWN = 20;
-export const CLOSE_MANY_SOURCES_SHOWN = 8;
+// 定義は `remove-many-limit.ts`（3 道具で共有）。外へ出していた名前はここから変えない
+export {
+  CLOSE_MANY_IDS_SHOWN,
+  CLOSE_MANY_JOURNAL_ID_CHARS,
+  CLOSE_MANY_LIMIT_DEFAULT,
+  CLOSE_MANY_LIMIT_MAX,
+  CLOSE_MANY_SOURCES_SHOWN,
+};
 
 /** まとめて移せる先。閉じる状態だけ（開き直し・開いている状態どうしの移動は1件ずつの `task_set_status`）。 */
 export const TASK_STATUS_MANY_TARGETS = ['done', 'cancelled'] as const;
