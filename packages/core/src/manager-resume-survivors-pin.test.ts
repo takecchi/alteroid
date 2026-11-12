@@ -358,6 +358,8 @@ async function summaryOf(pool: ManagerPool) {
   return {
     status: found?.status,
     live: found?.live,
+    // `live: false` の理由（名簿が宛先の runner を lost と見ている）を名指す欄。#6723
+    runnerLostSince: found?.runnerLostSince === undefined ? 'なし' : 'あり',
     sessionMissingSince: found?.sessionMissingSince === undefined ? 'なし' : 'あり',
     sessionMissingKind: found?.sessionMissingKind,
     waiting: found?.waiting.map((w) => w.requestId),
@@ -423,6 +425,7 @@ describe('M18: 移送は、貸し出しの関門を通った時点で像を「�
     expect(await summaryOf(pool)).toMatchInlineSnapshot(`
       {
         "live": true,
+        "runnerLostSince": "なし",
         "sessionMissingKind": undefined,
         "sessionMissingSince": "なし",
         "status": "waiting_human",
@@ -445,6 +448,7 @@ describe('M18: 移送は、貸し出しの関門を通った時点で像を「�
     expect(await summaryOf(setup.pool)).toMatchInlineSnapshot(`
       {
         "live": true,
+        "runnerLostSince": "なし",
         "sessionMissingKind": undefined,
         "sessionMissingSince": "なし",
         "status": "running",
@@ -472,6 +476,7 @@ describe('M18: 移送は、貸し出しの関門を通った時点で像を「�
     expect(await summaryOf(setup.pool)).toMatchInlineSnapshot(`
       {
         "live": false,
+        "runnerLostSince": "あり",
         "sessionMissingKind": "resume-failed",
         "sessionMissingSince": "あり",
         "status": "waiting_human",
@@ -487,9 +492,35 @@ describe('M18: 移送は、貸し出しの関門を通った時点で像を「�
     setup.pool.relocateFrom('runner-x');
     await settle();
     expect(setup.y.resumes).toHaveLength(0);
+    // この `live: false` は、名簿が移送元の器（X）を lost と見ている間の観測（`isLive` の宛先 runner の silent 判定）。
+    // 確認（waiting）・status・セッションは保たれ、`runnerLostSince` が理由を名指す。
+    // 名簿が connected に戻れば `live` は true に戻る。#6723 は仕様。
     expect(await summaryOf(setup.pool)).toMatchInlineSnapshot(`
       {
         "live": false,
+        "runnerLostSince": "あり",
+        "sessionMissingKind": undefined,
+        "sessionMissingSince": "なし",
+        "status": "waiting_human",
+        "waiting": [
+          "req-1",
+        ],
+      }
+    `);
+    await setup.pool.stop();
+  });
+
+  it('対照: 名簿が X を connected に戻したら、同じ委譲の live は true に戻り、runnerLostSince は消える', async () => {
+    const setup = await askingSetup(1_000, 1_000);
+    setup.setState('runner-x', 'lost');
+    setup.pool.relocateFrom('runner-x');
+    await settle();
+    expect((await summaryOf(setup.pool)).live).toBe(false);
+    setup.setState('runner-x', 'connected');
+    expect(await summaryOf(setup.pool)).toMatchInlineSnapshot(`
+      {
+        "live": true,
+        "runnerLostSince": "なし",
         "sessionMissingKind": undefined,
         "sessionMissingSince": "なし",
         "status": "waiting_human",
