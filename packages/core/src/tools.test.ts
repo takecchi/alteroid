@@ -6355,6 +6355,49 @@ describe('クローンの道具', () => {
     expect(reply).toContain('この runner はこの口を持たない（古い版、またはテストの偽物）。');
   });
 
+  it('manager_list は unavailable な未push観測の reason を、cli・web と同じく伏せ字に通す（3つの分岐のどれでも鍵形式の文字列は出ない）', async () => {
+    // git の stderr に URL の資格が混じる形（runner の `reasonOf(error)` が運ぶ文）。偽の値だけを使う
+    const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
+    const reason = `確かめようとして例外が飛んだ: fatal: unable to access 'https://x-access-token:${token}@github.com/o/r.git/'`;
+    const base = { kind: 'unavailable' as const, at: '2026-09-27T00:00:09.000Z', reason };
+    const cases: {
+      name: string;
+      swap: boolean;
+      arrived?: boolean;
+      obs: NonNullable<ManagerSummary['lastUnpushedWorkObservation']>;
+    }[] = [
+      { name: '通常', swap: false, obs: { ...base, source: 'report' } },
+      {
+        name: '器の入れ替え・届いた',
+        swap: true,
+        arrived: true,
+        obs: { ...base, source: 'shutdown' },
+      },
+      {
+        name: '器の入れ替え・届いていない',
+        swap: true,
+        arrived: false,
+        obs: { ...base, source: 'report' },
+      },
+    ];
+    for (const c of cases) {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      if (c.swap) target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+      if (c.arrived !== undefined) target.shutdownObservationArrivedAfterSwap = c.arrived;
+      target.lastUnpushedWorkObservation = c.obs;
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply, c.name).toContain('未push観測');
+      expect(reply, c.name).toContain('確かめようとして例外が飛んだ: fatal: unable to access');
+      expect(reply, c.name).toContain('[REDACTED]');
+      expect(reply, c.name).not.toContain(token);
+    }
+  });
+
   it('manager_list は未push観測が無い委譲では1文字も足さない（Issue #1266。予算を食わない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

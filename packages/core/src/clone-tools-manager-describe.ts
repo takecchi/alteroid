@@ -29,6 +29,7 @@ import {
   isEmptyCompleteUnpushedWorkObservation,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
+import { redactSecretsInBody } from './redact.js';
 import { formatElapsedAgo } from './format-elapsed.js';
 import { RESCUE_NOT_PUSHED_TEXT, rescueNotPushedDetail } from './workspace-swap-hints.js';
 
@@ -527,6 +528,11 @@ export function describeRescue(
   return lines.join('\n');
 }
 
+// 取れなかった理由は runner の例外の文（git の stderr など）をそのまま運ぶので、URL の資格や鍵がクローンの文脈と日誌に残らないよう伏せ字に通す。cli・web も同じ関数（本文用の狭い網。env は渡さない）を通す
+function redactUnpushedWorkReason(reason: string): string {
+  return redactSecretsInBody(reason, undefined);
+}
+
 // `cwd`（探索の起点の絶対パス）は載せない: 絶対パスそのものは出さない線を、この欄の写しにも適用するため
 // 時刻だけを出さず、観測自身の `source` から出どころを行の中に書く: 読み手が「いまの状態」と誤読するため
 // 観測が `undefined` でも器の入れ替えで応答不能な分岐では `null` を返さない: 「0件」と「沈黙」が読み手から区別できなくなるため
@@ -541,7 +547,7 @@ function describeUnpushedWorkObservationOnly(
       if (observation.kind === 'unavailable') {
         return (
           `  未push観測: 器が止まる直前（${observation.at}）に取ろうとしたが取れなかった: ` +
-          observation.reason
+          redactUnpushedWorkReason(observation.reason)
         );
       }
       if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
@@ -555,7 +561,7 @@ function describeUnpushedWorkObservationOnly(
       observation === undefined
         ? '表示中の観測は無い（一度も取れていない）'
         : observation.kind === 'unavailable'
-          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
+          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${redactUnpushedWorkReason(observation.reason)}）`
           : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
             unpushedWorkObservationIncompleteSuffix(observation);
     return `  ${UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE}` + shown;
@@ -566,7 +572,8 @@ function describeUnpushedWorkObservationOnly(
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, reader);
   if (observation.kind === 'unavailable') {
     return (
-      `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
+      `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` +
+      redactUnpushedWorkReason(observation.reason)
     );
   }
   return (
