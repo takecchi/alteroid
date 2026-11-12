@@ -91,9 +91,6 @@ function describeTurnTimingReason(entry: TurnTimingEntry, phase: string): string
     if (entry.sdk?.durationApiMs !== undefined) {
       parts.push(`API の時間 ${formatSeconds(entry.sdk.durationApiMs)}`);
     }
-    if (entry.contextTokens !== undefined) {
-      parts.push(`文脈 ${entry.contextTokens.toLocaleString('en-US')} トークン`);
-    }
     const input = turnInputTokens(entry);
     if (input !== undefined) parts.push(`入力 ${formatTokens(input)} トークン`);
     return parts.join('・');

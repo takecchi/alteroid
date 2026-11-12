@@ -373,7 +373,6 @@ const KINDS: Append[] = [
     },
     compactions: { count: 1, totalMs: 2000 },
     sdk: { durationMs: 12_000, durationApiMs: 9000, numTurns: 3 },
-    contextTokens: 90_000,
     tokens: { input: 100, cacheRead: 80_000, cacheCreation: 5000, output: 400 },
   } as Append,
   /* 31 */ {

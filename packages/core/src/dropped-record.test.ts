@@ -1589,7 +1589,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       firstResponseMs: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
       compactions: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
       sdk: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
-      contextTokens: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
       tokens: { emit: 'never', why: '`firstTextMs` と同じ判断。' },
     },
     http_timing: {
@@ -2029,7 +2028,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       },
       compactions: { count: 1, totalMs: 100 },
       sdk: { durationMs: 1000, durationApiMs: 700, numTurns: 2 },
-      contextTokens: 12000,
       tokens: { input: 10, cacheRead: 9000, cacheCreation: 500, output: 200 },
     },
     http_timing: {

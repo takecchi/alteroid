@@ -5248,7 +5248,6 @@ class Clone implements CloneHost {
     const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
       timer === null ? fn() : timer.time(`finalize.${name}`, fn);
     const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
-    if (contextUsage?.totalTokens !== undefined) timer?.contextObserved(contextUsage.totalTokens);
     // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
     this.#lastContextUsage = contextUsage ?? null;
 

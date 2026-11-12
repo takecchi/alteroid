@@ -7,7 +7,6 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "timer?.turnEnded({succeeded: event.succeeded, ...(mainLoop === undefined ? {} : {tokens: {input: mainLoop.inputTokens, cacheRead: mainLoop.cacheReadInputTokens, cacheCreation: mainLoop.cacheCreationInputTokens, output: mainLoop.outputTokens}}), ...(event.timing === undefined && event.usage?.numTurns === undefined ? {} : {sdk: {...event.timing, ...(event.usage?.numTurns === undefined ? {} : {numTurns: event.usage.numTurns})}})});",
   "const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> => timer === null ? fn() : timer.time(\`finalize.\${name}\`, fn);",
   "const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());",
-  "if (contextUsage?.totalTokens !== undefined) timer?.contextObserved(contextUsage.totalTokens);",
   "this.#lastContextUsage = contextUsage ?? null;",
   "if (contextUsage !== undefined) {await this.#journal({type: 'context_usage', layer: 'clone', site: 'session', managerId: CLONE_ACTOR_ID, ...(this.#sdkSession.sdkSessionId === null ? {} : {sessionId: this.#sdkSession.sdkSessionId}), turnSucceeded: event.succeeded, contextUsage});} await finalizeStep('inboxFlow', () => this.#writeInboxFlow());",
   "const compactions = this.#sdkSession.turn?.compactions ?? [];",

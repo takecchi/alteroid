@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { heuristicChars } from './quantity.js';
 import type { CloneRuntimeFacts } from './self.js';
+import { journalEntrySchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 import {
@@ -62,7 +63,6 @@ function entry(overrides: Partial<TurnTimingEntry> = {}): TurnTimingEntry {
       ],
     },
     sdk: { durationMs: 58_000, durationApiMs: 45_000, numTurns: 4 },
-    contextTokens: 540_000,
     tokens: { input: 10, cacheRead: 530_000, cacheCreation: 9_000, output: 800 },
     ...overrides,
   };
@@ -82,7 +82,7 @@ describe('turn_timing の描き方', () => {
     expect(lines[0]).toContain('最初の応答まで 40秒');
     expect(lines[0]).toContain('道具 3 回で 12秒（最も長いのは Bash 2 回 10秒、1回の最長 9.0秒）');
     expect(lines[0]).toContain('要求 4 本');
-    expect(lines[0]).toContain('文脈 540,000 トークン');
+    expect(lines[0]).not.toContain('文脈 ');
     expect(lines[0]).toContain('入力 539,010 トークン');
     expect(lines[1]).toContain('ターンの前の組み立て: 1.5秒（situation 1.2秒）');
     // 内訳（`.` 付き）は親と二重に並べない
@@ -174,6 +174,30 @@ describe('turn_timing の描き方', () => {
 
   it('その2種のターンが無ければ、道具の行は出さない', () => {
     expect(renderTurnTimingSummary([entry()])).not.toContain('道具を1回も呼ばなかった');
+  });
+});
+
+describe('古い turn_timing の行（contextTokens を持つ）', () => {
+  it('⭐ 読み込みが落ちず、整形も落ちない（contextTokens は context_usage の行で見る）', () => {
+    const old = {
+      type: 'turn_timing',
+      id: 'tt-old',
+      at: '2026-10-20T00:00:00.000Z',
+      triggers: ['human_message'],
+      batchSize: 1,
+      kinds: ['normal'],
+      succeeded: true,
+      totalMs: 61_000,
+      phases: { queue: 500, model: 58_000 },
+      contextTokens: 540_000,
+      tokens: { input: 10, cacheRead: 530_000, cacheCreation: 9_000, output: 800 },
+    };
+    const parsed = journalEntrySchema.safeParse(old);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success || parsed.data.type !== 'turn_timing') throw new Error('unreachable');
+    expect(describeTurnTimingBody(parsed.data)).toContain('入力 539,010 トークン');
+    expect(describeTurnTimingBody(parsed.data)).not.toContain('文脈 ');
+    expect('contextTokens' in parsed.data).toBe(false);
   });
 });
 

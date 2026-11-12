@@ -45,7 +45,6 @@ interface TurnTimingRecord {
   tools?: { count: number; totalMs: number; top: TurnTimingToolSummary[] };
   compactions?: { count: number; totalMs: number };
   sdk?: { durationMs?: number; durationApiMs?: number; numTurns?: number };
-  contextTokens?: number;
   /** そのターンのメインループの消費（SDK の `result.usage`。作業者・要約などの内部呼び出しは含まない）。入力の重さと費用の材料 */
   tokens?: { input: number; cacheRead: number; cacheCreation: number; output: number };
 }
@@ -75,7 +74,6 @@ export class TurnTimer {
   #compactionCount = 0;
   #compactionTotalMs = 0;
   #sdk: TurnTimingRecord['sdk'];
-  #contextTokens: number | undefined;
   #tokens: TurnTimingRecord['tokens'];
   #succeeded = true;
 
@@ -159,7 +157,6 @@ export class TurnTimer {
   turnEnded(facts: {
     succeeded: boolean;
     sdk?: TurnTimingRecord['sdk'];
-    contextTokens?: number;
     tokens?: TurnTimingRecord['tokens'];
   }): void {
     const now = this.#now();
@@ -170,7 +167,6 @@ export class TurnTimer {
     this.#turnEndedAt ??= now;
     if (!facts.succeeded) this.#succeeded = false;
     if (facts.sdk !== undefined) this.#sdk = facts.sdk;
-    if (facts.contextTokens !== undefined) this.#contextTokens = facts.contextTokens;
     // 1回分の束で複数ターンが回った回は足し合わせる
     if (facts.tokens !== undefined) {
       const before = this.#tokens;
@@ -184,11 +180,6 @@ export class TurnTimer {
               output: before.output + facts.tokens.output,
             };
     }
-  }
-
-  /** ターンの終わりに観測した文脈の大きさ（トークン）。「最初の応答が遅い」の材料 */
-  contextObserved(tokens: number): void {
-    this.#contextTokens = tokens;
   }
 
   /** ターンが入らずに失敗した回（入力を投げる前に落ちた）も失敗として残す */
@@ -254,7 +245,6 @@ export class TurnTimer {
             compactions: { count: this.#compactionCount, totalMs: round(this.#compactionTotalMs) },
           }),
       ...(this.#sdk === undefined ? {} : { sdk: this.#sdk }),
-      ...(this.#contextTokens === undefined ? {} : { contextTokens: this.#contextTokens }),
       ...(this.#tokens === undefined ? {} : { tokens: this.#tokens }),
     };
   }
