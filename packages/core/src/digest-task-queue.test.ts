@@ -345,8 +345,15 @@ describe('発意 tick の固定の指示（SELF_INITIATIVE_INSTRUCTIONS）', () 
     expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('もう一本委譲しうる');
   });
 
+  it('⭐ 先頭が古い・重複している自分の task は、理由を書いて閉じ、溜まっていれば task_set_status_many でまとめて閉じる', () => {
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('重複している');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('cancelled');
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('`task_set_status_many`');
+  });
+
   it('長さは前の版（約 400 字）と同程度に保つ', () => {
-    // 離れた task の添え書き・taskId を渡す指示（各1行）を足したぶん広げた
-    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(900);
+    // 離れた task の添え書き・taskId を渡す指示（各1行）を足したぶん広げた。
+    // さらに、溜まった自分の task を閉じる促し（1行・約 165 字、計 920 字）を足したので 1000 にした
+    expect(SELF_INITIATIVE_INSTRUCTIONS.length).toBeLessThan(1000);
   });
 });

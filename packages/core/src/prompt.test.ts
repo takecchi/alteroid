@@ -127,6 +127,11 @@ describe('クローンのシステムプロンプト — 道具と委譲', () =>
     expect(prompt).toContain('自分で手を動かしたなら');
     expect(prompt).toContain('記憶の更新は');
   });
+
+  it('自分から task_add する前に task_list で同じ題を確かめ、承認待ちの問いの控えは載せないと言う', () => {
+    expect(prompt).toContain('載せる前に `task_list` で同じ題が無いか確かめる');
+    expect(prompt).toContain('承認待ちの問いの控えは載せない');
+  });
 });
 
 describe('人間に直された判断を基準として記憶へ移す（#5125 c30-2）', () => {
