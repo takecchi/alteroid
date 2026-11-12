@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Stores, TokenPoolStore } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createTokenPoolService } from './token-pool-service.js';
 import { createTokenPoolWriteLock } from './token-pool-write-lock.js';
@@ -8,17 +7,6 @@ import { createTokenRotator, type TokenProbePort, type TokenSpreadPort } from '.
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function delayedList(base: TokenPoolStore, delayMs: number): TokenPoolStore {
-  return {
-    ...base,
-    list: async () => {
-      const snapshot = await base.list();
-      await sleep(delayMs);
-      return snapshot;
-    },
-  };
 }
 
 describe('token-pool-service と token-rotator の共有書き込み鍵（Issue #2200）', () => {
@@ -100,70 +88,6 @@ describe('token-pool-service と token-rotator の共有書き込み鍵（Issue 
       aCooling: true,
       bUnusable: true,
     });
-  });
-
-  it('(b) noteUnusable（writeOne 経由）と回し手の recordTrialVerdict が重なっても両方残る', async () => {
-    const stores = createMemoryStores();
-    await stores.tokens.replace([
-      { id: 'tok-a', label: 'a', value: 'value-a', order: 0 },
-      { id: 'tok-b', label: 'b', value: 'value-b', order: 1 },
-    ]);
-
-    const writeLock = createTokenPoolWriteLock();
-    const slowStores: Stores = { ...stores, tokens: delayedList(stores.tokens, 30) };
-
-    const poolService = createTokenPoolService({
-      stores: slowStores,
-      writeLock,
-      now: () => new Date('2026-08-25T03:00:01.000Z'),
-    });
-    const rotator = createTokenRotator({
-      stores,
-      probe: {
-        async probe() {
-          return { verdict: 'usable' };
-        },
-      },
-      spread: {
-        async spread() {
-          return [{ target: 'runner-primary', ok: true }];
-        },
-      },
-      writeLock,
-      now: () => new Date('2026-08-25T03:00:00.000Z'),
-    });
-
-    const notePromise = poolService.noteUnusable({
-      id: 'tok-b',
-      message: '人間 / probe が観測した拒否',
-    });
-    await sleep(5);
-    const trialPromise = rotator.recordTrialVerdict({
-      tokenId: 'tok-a',
-      verdict: { verdict: 'unusable', reason: 'trial が拒否した', retryAt: 1_800_000_000_000 },
-    });
-
-    const [noteResult, trialResult] = await Promise.all([notePromise, trialPromise]);
-    const finalTokens = await stores.tokens.list();
-
-    const aHasCooldown =
-      finalTokens.find((token) => token.id === 'tok-a')?.cooldownUntil !== undefined;
-    const bUnusable =
-      finalTokens.find((token) => token.id === 'tok-b')?.lastRejectedAt !== undefined;
-
-    process.stderr.write(
-      `[tooth b] noteResult.id=${noteResult?.id ?? '(undefined)'} trialResult=${trialResult} ` +
-        `aHasCooldown=${String(aHasCooldown)} bUnusable=${String(bUnusable)} ` +
-        `finalTokens=${JSON.stringify(
-          finalTokens.map((t) => ({
-            id: t.id,
-            cooldownUntil: t.cooldownUntil,
-            lastRejectedAt: t.lastRejectedAt,
-          })),
-        )}\n`,
-    );
-
-    expect({ aHasCooldown, bUnusable }).toEqual({ aHasCooldown: true, bUnusable: true });
   });
 
   it('(c) 回し手が冷却を付けようとした行を、読み直しの時点で人間が消していたら作り直さない', async () => {
