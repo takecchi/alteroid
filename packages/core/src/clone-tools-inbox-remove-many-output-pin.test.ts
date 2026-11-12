@@ -9,7 +9,7 @@ import { createCloneTools } from './tools.js';
 
 // `inbox_remove_many` の出力（全文と字数）と、呼んだあとの状態（受信箱の行・日誌へ足された行・配達を止めた id）を、
 // 場面ごとにコミットした固定値（clone-tools-inbox-remove-many-output-pin.json）と丸ごと比べる。
-// `clone-tools-task.ts` の `tool('inbox_remove_many', …)`（約 270 行・入れ子 8 段の式）を段ごと・部分ごとの小さな関数へ分けるとき、
+// `clone-tools-inbox-remove-many.ts` の `tool('inbox_remove_many', …)`（約 270 行・入れ子 8 段の式）を段ごと・部分ごとの小さな関数へ分けるとき、
 // 振る舞いが1文字も変わらないことを機械で確かめる歯。固定値の側で値を伏せず、入力（時計・id・時刻・本文）を固定して毎回同じにする。
 // この道具は受信箱の行を消すので、出力だけでなく「呼んだあとの状態」も固定する:
 //   - output: 道具の出力の全文と字数（isError・例外で返ったか）
@@ -912,6 +912,20 @@ const SCENARIOS: Scenario[] = [
       { args: call({ types: ['external'] }), writes: 'none', hooks: { peekFails: true } },
     ],
   },
+  // ---- 競合の境（1 件だけが全件競合） ----
+  {
+    name: 'race-all-one',
+    covers:
+      '対象が 1 件で、その 1 件を別の経路が先に消した（全件の競合のうち最小の 1 件）: 「1 件も消せなかった」と言い、「0 件を畳んだ」と空の消した id は出さない',
+    seed: [r('e-1', 'external', 1)],
+    steps: [
+      {
+        args: call({ types: ['external'], reason: '1件だけ競合' }),
+        writes: 'some',
+        hooks: { raceFirst: ['e-1'] },
+      },
+    ],
+  },
 ];
 
 function stepKey(scenario: Scenario, index: number): string {
@@ -1388,6 +1402,9 @@ describe('inbox_remove_many の出力と呼んだあとの状態の固定（場�
     expect(text('race#2')).not.toContain('0 件を畳んだ');
     expect(text('race#2')).not.toContain('消した id');
     expect(text('race#2')).toContain('**1 件も消せなかった**');
+    expect(text('race-all-one')).not.toContain('0 件を畳んだ');
+    expect(text('race-all-one')).toContain('**1 件も消せなかった**');
+    expect(text('race-all-one')).toContain('⚠ 対象 1 件のうち 1 件は消せなかった');
     expect(text('race#2')).toContain('⚠ 対象 2 件のうち 2 件は消せなかった');
     // 一覧が落ちる
     expect(text('peek-fails#1')).toBe('受信箱の一覧が読めない');
