@@ -5,6 +5,7 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { useAction } from '~/lib/use-action';
 import { useLogout } from '~/lib/use-logout';
 import { describeRevisionStatus } from '@alteroid/core/revision';
+import { RESET_CONFIRM_GROUPS } from '@alteroid/core/workspace-reset';
 import { Fragment, useState } from 'react';
 
 import { ConnectionCard } from '~/components/connection';
@@ -528,26 +529,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['sessionLog', 'セッションの生ログ'],
 ];
 
-// 確認の文は RESET_SUMMARY_LABELS から組み立てる: 1つの日本語ラベルが複数の WorkspaceResetSummary キーをまとめて指すことがあるため
-export const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
-  { label: '記憶', keys: ['memory'] },
-  { label: '日誌', keys: ['journal'] },
-  { label: 'ジョブ', keys: ['jobs'] },
-  { label: '承認待ち', keys: ['approvals'] },
-  { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
-  { label: '受信箱', keys: ['inbox'] },
-  { label: 'task（順序と状態を持つ待ち行列）', keys: ['tasks'] },
-  { label: '仕事のやり方', keys: ['practices'] },
-  { label: 'アーカイブ', keys: ['archive'] },
-  { label: 'セッション', keys: ['sessions'] },
-  { label: '実行環境プロファイル', keys: ['profile'] },
-  { label: '添付（保存したファイルを含む）', keys: ['attachments'] },
-  {
-    label: '利用状況の台帳',
-    keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
-  },
-];
-
+// 確認の文は core の RESET_CONFIRM_GROUPS から組み立てる: 1つの日本語ラベルが複数の WorkspaceResetSummary キーをまとめて指すことがあるため
 const RESET_CONFIRM_SUMMARY = RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
 
 function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
