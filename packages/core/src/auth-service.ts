@@ -74,7 +74,6 @@ export interface AuthService {
     options?: RemoveUnreadableRowsOptions,
   ): Promise<RemoveUnreadableRowsResult>;
   listAccounts(): Promise<AuthAccount[]>;
-  grantedAccounts(): Promise<AuthAccount[]>;
 }
 
 const DEFAULT_LOGIN_TTL_SECONDS = 600;
@@ -366,13 +365,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
     removeUnreadableAccounts: (ids, options) => store.removeUnreadableAccounts(ids, options),
 
     listAccounts: () => store.listAccounts(),
-    grantedAccounts: () => findGrantedAccounts(store),
   };
-}
-
-async function findGrantedAccounts(store: AuthStore): Promise<AuthAccount[]> {
-  const accounts = await store.listAccounts();
-  return accounts.filter((account) => account.grantedAt !== null);
 }
 
 // 行を丸ごと書き戻さない: 読んでから書くまでに完了した access grant / revoke を古い写しで上書きするため。戻り値の `account` は書き込み後に読み直す

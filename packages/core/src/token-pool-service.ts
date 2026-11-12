@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import {
-  markTokenUnusable,
-  markTokenUsable,
   normalizeTokenPool,
   toAgentTokenView,
   tokenPoolVersionOf,
@@ -11,7 +9,6 @@ import {
   type AgentTokenInput,
   type AgentTokenView,
   type TokenDistribution,
-  type TokenFailureObservation,
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
@@ -90,12 +87,6 @@ export interface TokenPoolService {
     },
     options?: SetSettingsOptions,
   ): Promise<TokenRotationSettings>;
-  // 設定を呼び出し側で読んで渡さない: 読んでから渡すまでの隙間に設定が変わると、古い既定で冷やすため。
-  // 引数の形を書き写さず Pick する: 自前で宣言すると TokenFailureObservation の変更が型検査を素通りし、期限が黙って捨てられるため
-  noteUnusable(
-    input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>,
-  ): Promise<AgentTokenView | undefined>;
-  noteUsable(id: string): Promise<AgentTokenView | undefined>;
 }
 
 interface TokenPoolServiceOptions {
@@ -177,29 +168,6 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     return viewOf(tokens, settingsResult, unreadableRows);
   }
 
-  // 器に「1行だけ更新する」口を足さずこの形にする: read-modify-write の原子性を fs と pg にもう1つ実装することになり、replace と二重になるため。
-  // existing を呼び出し側から受け取らない: 読んだ時点で古くなりうるため。
-  // 書いた後に読み直せないときは undefined へ潰さず投げる: 「元から無かった」と見分けが付かなくなるため
-  async function writeOne(
-    id: string,
-    mutate: (token: AgentToken) => AgentToken,
-  ): Promise<AgentTokenView | undefined> {
-    const stored = await writeLock.run(async () => {
-      const existing = await stores.tokens.list();
-      if (!existing.some((token) => token.id === id)) return undefined;
-      return stores.tokens.replace(
-        existing.map((token) => (token.id === id ? mutate(token) : token)),
-      );
-    });
-    if (stored === undefined) return undefined;
-    const written = stored.find((token) => token.id === id);
-    if (written === undefined) {
-      // id だけを含める: この例外は上の層でログに出るため
-      throw new Error(`トークン（id ${id}）を書いた直後に読み直せなかった`);
-    }
-    return toAgentTokenView(written);
-  }
-
   return {
     // 読みは直列化の列を通さない: 読みを待たせる理由が無いため
     list: () => currentView(),
@@ -271,23 +239,6 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         announceChange('pool');
         return { kind: 'removed', ids: removed, view };
       }),
-
-    noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>
-      serial(async () => {
-        // 一覧を先読みしない: writeOne が writeLock の中で読み直すので、ここで読むと古くなりうるため
-        const settings = await stores.tokens.readSettings();
-        return writeOne(input.id, (token) =>
-          markTokenUnusable(token, {
-            at: now().toISOString(),
-            message: input.message,
-            ...(input.resets === undefined ? {} : { resets: input.resets }),
-            fallbackCooldownMs: settings.cooldownMs,
-          }),
-        );
-      }),
-
-    noteUsable: (id: string) =>
-      serial(async () => writeOne(id, (token) => markTokenUsable(token, now().toISOString()))),
 
     setSettings: (
       patch: {

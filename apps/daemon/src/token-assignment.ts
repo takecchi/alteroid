@@ -73,7 +73,6 @@ export interface TokenAssignmentBook {
    * 枠の知らせの身元がいまの割り当てか。この帳面が出した世代でなければ `unknown`（現役の回し手の側で判断する）。
    */
   freshnessOf(observedBy: { tokenId: string; generation: number }): 'current' | 'stale' | 'unknown';
-  units(): string[];
 }
 
 export function createTokenAssignmentBook(
@@ -320,9 +319,6 @@ export function createTokenAssignmentBook(
         }
       }
       return 'stale';
-    },
-    units() {
-      return [...assignments.keys()];
     },
   };
 }

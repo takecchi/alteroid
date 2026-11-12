@@ -154,9 +154,12 @@ describe('createAuthService', () => {
       service.grant(bob.account.id, 'operator'),
     ]);
     expect(separate.filter((result) => result.status === 'granted')).toHaveLength(2);
-    expect((await service.grantedAccounts()).map((account) => account.id).sort()).toEqual(
-      [alice.account.id, bob.account.id].sort(),
-    );
+    expect(
+      (await service.listAccounts())
+        .filter((account) => account.grantedAt !== null)
+        .map((account) => account.id)
+        .sort(),
+    ).toEqual([alice.account.id, bob.account.id].sort());
 
     const carol = await service.claim(await login('code-carol'));
     if (carol.status !== 'ready') throw new Error('ログインできていない');
@@ -197,28 +200,6 @@ describe('createAuthService', () => {
       claimSecret: started.claimSecret,
     });
     expect(recovered.status).toBe('ready');
-  });
-
-  it('grantedAccounts() は許可されているアカウントを全部返す', async () => {
-    expect(await service.grantedAccounts()).toEqual([]);
-    const alice = await service.claim(await login('code-alice'));
-    const bob = await service.claim(await login('code-bob'));
-    if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
-
-    await service.grant(alice.account.id, 'operator');
-    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
-      alice.account.id,
-    ]);
-
-    await service.grant(bob.account.id, 'operator');
-    expect((await service.grantedAccounts()).map((account) => account.id).sort()).toEqual(
-      [alice.account.id, bob.account.id].sort(),
-    );
-
-    await service.revoke(alice.account.id);
-    expect((await service.grantedAccounts()).map((account) => account.id)).toEqual([
-      bob.account.id,
-    ]);
   });
 
   it('検証済みメールが一致しても既存アカウントへ相乗りさせない', async () => {

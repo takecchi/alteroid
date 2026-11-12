@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { TokenPoolVersionMismatchError } from './token-pool.js';
+import { markTokenUnusable, markTokenUsable, TokenPoolVersionMismatchError } from './token-pool.js';
 import { createTokenPoolService } from './token-pool-service.js';
 import { createMemoryStores } from './testing.js';
 
@@ -103,13 +103,29 @@ describe('プールの版（ifMatch）で、読んだ後の変更を黙って消
   });
 
   it('回し手が書く冷却・拒否の記録では版が変わらない（人の操作が回し手の書き戻しで断られない）', async () => {
-    const { service } = serviceOf();
+    const { stores, service } = serviceOf();
     await service.replace([{ label: 'a', value: 'fake-a' }]);
     const before = await versionOf(service);
 
-    await service.noteUnusable({ id: 'tok-a', message: 'rate limited' });
-    await service.noteUsable('tok-a');
-    await service.noteUnusable({ id: 'tok-a', message: 'rate limited again' });
+    // 回し手と同じく、行の変換（markTokenUnusable / markTokenUsable）を器へ直に書き戻す
+    const unusable = async (message: string) => {
+      const rows = await stores.tokens.list();
+      await stores.tokens.replace(
+        rows.map((row) =>
+          markTokenUnusable(row, {
+            at: '2026-10-12T00:00:00.000Z',
+            message,
+            fallbackCooldownMs: 60_000,
+          }),
+        ),
+      );
+    };
+    await unusable('rate limited');
+    const rows = await stores.tokens.list();
+    await stores.tokens.replace(
+      rows.map((row) => markTokenUsable(row, '2026-10-12T00:00:01.000Z')),
+    );
+    await unusable('rate limited again');
 
     expect(await versionOf(service)).toBe(before);
   });
