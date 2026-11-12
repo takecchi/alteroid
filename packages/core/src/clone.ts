@@ -87,11 +87,7 @@ import {
   type MixableSignal,
   type MixedBatchItem,
 } from './clone-batch-prompts.js';
-import {
-  CloneBatchMerge,
-  externalMergeKey,
-  resolveMergedBatchSizeLimit,
-} from './clone-batch-merge.js';
+import { CloneBatchMerge, externalMergeKey, MERGED_BATCH_SIZE_LIMIT } from './clone-batch-merge.js';
 import { CloneDailyReport } from './clone-daily-report.js';
 import { CloneDenialJournal } from './clone-denial-journal.js';
 import { CloneDigest } from './clone-digest.js';
@@ -1101,7 +1097,7 @@ class Clone implements CloneHost {
     this.#modelOverridden = placedCloneModel(envSource) !== null;
     this.#permissionMode = permissionMode ?? resolveClonePermissionMode(envSource);
     this.#humanPriority = humanPriority ?? resolveCloneHumanPriority(envSource);
-    this.#mergedBatchLimit = mergedBatchLimit ?? resolveMergedBatchSizeLimit(envSource);
+    this.#mergedBatchLimit = mergedBatchLimit ?? MERGED_BATCH_SIZE_LIMIT;
     this.#inboxSettleMs = inboxSettleMs ?? resolveInboxSettleMs(envSource);
     this.#reportSettleMs = reportSettleMs ?? resolveReportSettleMs(envSource);
     this.#tokenSavingExcerpt = resolveTokenSavingExcerpt(envSource);

@@ -468,14 +468,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it('束の上限に当たっても、外れた分は次の反復でそのまま処理される（1件も失われない。issue #783）', async () => {
-    const s = setup(
-      undefined,
-      createMemoryStores(),
-      {},
-      {
-        ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2',
-      },
-    );
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -532,7 +525,7 @@ describe('クローン — 同じマネージャーの連続する report をま
       );
     }
 
-    const s = setup(undefined, stores, {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, stores, {}, {}, { mergedBatchLimit: 2 });
 
     await waitFor(
       () => (s.calls[0]?.inputs ?? []).join('\n').includes('配り直しテスト5'),
@@ -638,7 +631,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it('上限ちょうど（切らない）: 断り書きが1文字も載らない', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -662,7 +655,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it('上限+1（切る・残り1件）: 断り書きが1行、値は限度2・束2・残り1', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -699,7 +692,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it('上限+2（切る・残り2件）: 続く束はちょうど上限で切っていない', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -734,7 +727,7 @@ describe('クローン — 同じマネージャーの連続する report をま
   }, 15_000);
 
   it('人間の発言でも同じ断り書きが載る（`#mergedHumanBatch` 経由でも共有の実装を通る）', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -955,7 +948,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
   }, 15_000);
 
   it('束の上限に当たっても、外れた分は次の反復でそのまま処理される（1件も失われない。issue #783 と同じ機構）', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -992,7 +985,7 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
   }, 15_000);
 
   it('external の束が上限で切れたときも、まとめ読みの断り書き（`CloneNotices` の `mergedBatchTruncation`）が載る', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
@@ -1482,7 +1475,7 @@ describe('クローン — 起点の違う合図をまとめて読む', () => {
   }, 15_000);
 
   it('広げた束も件数の上限を超えない（上限2: [A,A] は2件で止まり、続きは次のターン）', async () => {
-    const s = setup(undefined, createMemoryStores(), {}, { ALTEROID_MERGED_BATCH_SIZE_LIMIT: '2' });
+    const s = setup(undefined, createMemoryStores(), {}, {}, { mergedBatchLimit: 2 });
 
     s.clone.post(humanMessage('先客'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');

@@ -14,34 +14,14 @@ import {
 import type { CloneNotices } from './clone-notices.js';
 import type { CloneRedeliveryState } from './clone-redelivery-state.js';
 import { inboxEventShape, noteDroppedRecord } from './dropped-record.js';
-import { readNumberEnv, unreadableEnvRecordNote } from './env-value-not-used.js';
 import { inboxBacklogDedupeKey } from './inbox-backlog.js';
 import type { Inbox } from './inbox.js';
 import type { InboxEvent } from './schema.js';
 import { describeMergedBatchTruncation } from './clone-turn-input-text.js';
 
 // 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
-const MERGED_BATCH_SIZE_LIMIT = 50;
-
-export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT';
-
-const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
-
-export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
-  return readNumberEnv(env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY], {
-    fallback: MERGED_BATCH_SIZE_LIMIT,
-    positive: true,
-    floor: true,
-    onProblem: unreadableEnvRecordNote(
-      MERGED_BATCH_SIZE_LIMIT_ENV_KEY,
-      MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT,
-      {
-        'not-number': `数値として読めない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
-        'non-positive': `0 以下は上限にならない。既定の ${String(MERGED_BATCH_SIZE_LIMIT)} 件で走る`,
-      },
-    ),
-  });
-}
+// 環境変数では差し替えない。試験は `createClone` の `mergedBatchLimit` で小さくする
+export const MERGED_BATCH_SIZE_LIMIT = 50;
 
 /**
  * `Clone` が協力者へ渡す口。読むものは「呼ばれるまで読まない関数」で渡す（`#mergedBatchLimit` は constructor の中で入る）。

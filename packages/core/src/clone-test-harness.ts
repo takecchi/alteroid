@@ -259,6 +259,8 @@ export function setup(
     managers?: ManagerPool;
     inboxSettleMs?: number;
     reportSettleMs?: number;
+    /** 1ターンへ束ねる合図の上限（`createClone` の `mergedBatchLimit`）。省略は既定の 50 件 */
+    mergedBatchLimit?: number;
   } = {},
 ): Setup {
   const { fn, calls } = fakeSdk(reply, sdkOptions);
