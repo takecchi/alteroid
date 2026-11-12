@@ -736,3 +736,40 @@ export function resumeFallbackBody(
     .filter((line) => line !== '')
     .join('\n');
 }
+
+/**
+ * running の担当が閾値を超えて無音のときの知らせ（A2）。**止まっていると断定しない**: 長いビルド・道具を呼ばない長い推論・出力の少ない長い道具・
+ * 外部サービスの待ちは正常でも無音になる。確かめ方（生ログの末尾）と動かし方（問い合わせ・止める）を渡して、判断はクローンに任せる。
+ */
+export function describeSilenceNotice(input: {
+  managerId: string;
+  elapsedMs: number;
+  lastEventType: string | undefined;
+  lastEventAt: string | undefined;
+  /** 最後の出来事が `tool_running` のときだけ載る、実行中の道具の名前 */
+  runningTool: string | undefined;
+}): string {
+  const last =
+    input.lastEventType === undefined || input.lastEventAt === undefined
+      ? 'このデーモンが見てから届いた出来事は無い'
+      : `最後に届いた出来事: ${input.lastEventType}（${input.lastEventAt}）`;
+  const tool = input.runningTool === undefined ? '' : `実行中の道具: ${input.runningTool}。`;
+  return (
+    `[${input.managerId}] は running のまま ${formatDurationMinutes(input.elapsedMs)}、runner から進捗の出来事が無い（無音）。` +
+    `${last}。${tool}` +
+    '止まっていると断定はできない: 長いビルド・道具を呼ばない長い推論・出力の少ない長い道具・外部サービスの待ちなど、正常な長い無音もある。' +
+    '`manager_transcript` で生ログの末尾を読んで確かめ、必要なら `manager_send` で状況を聞くか、止めること。デーモンは何も止めていない。'
+  );
+}
+
+/** 無音を知らせた episode の後に、出来事が戻ったときの日誌の本文（受信箱へは出さない）。 */
+export function describeSilenceRecovered(input: {
+  managerId: string;
+  lastEventType: string;
+  lastEventAt: string;
+}): string {
+  return (
+    `[${input.managerId}] の無音が解けた（出来事が戻った: ${input.lastEventType}・${input.lastEventAt}）。` +
+    '受信箱には出さない。'
+  );
+}
