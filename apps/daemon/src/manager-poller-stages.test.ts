@@ -22,6 +22,7 @@ const STAGES = [
   { label: 'withheld-reports', method: 'flushWithheldReports', chained: true },
   { label: 'usage-wakes', method: 'settleStalledUsageWakes', chained: true },
   { label: 'denials', method: 'renotifyStalledDenials', chained: true },
+  { label: 'silence', method: 'noteSilentManagers', chained: true },
   { label: 'held-messages', method: 'deliverHeldMessages', chained: true },
   { label: 'task-follow', method: 'repairStrandedTasks', chained: true },
 ] as const;
@@ -62,7 +63,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     setStderrSinkForTesting(null);
   });
 
-  it('呼ばれる段の集合と順序: 8 段だけが、この順で1回ずつ呼ばれる', async () => {
+  it('呼ばれる段の集合と順序: 9 段だけが、この順で1回ずつ呼ばれる', async () => {
     const { managers, calls } = recordingPool();
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
     await poller.refresh();
@@ -75,6 +76,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       'flushWithheldReports',
       'settleStalledUsageWakes',
       'renotifyStalledDenials',
+      'noteSilentManagers',
       'deliverHeldMessages',
       'repairStrandedTasks',
     ]);
@@ -121,7 +123,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
 
   describe.each(STAGES)('段 $label が落ちても', ({ label, method }) => {
     for (const mode of ['同期で投げる', '拒否で落ちる'] as const) {
-      it(`${mode}: 他の 7 段は同じ順で走り、印は同じ並びで、stderr に段の名前と理由を 1 行残す`, async () => {
+      it(`${mode}: 他の 8 段は同じ順で走り、印は同じ並びで、stderr に段の名前と理由を 1 行残す`, async () => {
         const failure: Behavior =
           mode === '同期で投げる'
             ? () => {
@@ -142,7 +144,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     }
   });
 
-  it('失敗の間引きは段ごと: 全段が同じ理由で落ちても 8 段それぞれ 1 行、2 周目は書かない。成功で戻ればまた書く', async () => {
+  it('失敗の間引きは段ごと: 全段が同じ理由で落ちても 9 段それぞれ 1 行、2 周目は書かない。成功で戻ればまた書く', async () => {
     let failing = true;
     const behaviors: Record<string, Behavior> = {};
     for (const method of ALL_METHODS) {
@@ -155,20 +157,20 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
     await poller.refresh();
-    expect(lines).toHaveLength(8);
+    expect(lines).toHaveLength(9);
     for (const { label } of STAGES) {
       expect(lines.filter((line) => line.includes(`見回りの段 ${label} `))).toHaveLength(1);
     }
 
     await poller.refresh();
-    expect(lines).toHaveLength(8);
+    expect(lines).toHaveLength(9);
 
     failing = false;
     await poller.refresh();
     failing = true;
     await poller.refresh();
     poller.stop();
-    expect(lines).toHaveLength(16);
+    expect(lines).toHaveLength(18);
   });
 
   it('印は周回ごとに同じ並びで打つ（段に入る前に印、最後に poller:done）', async () => {
@@ -195,14 +197,14 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       poller.stop();
     });
 
-    it('intervalMs を渡せばその間隔で、周回ごとに 8 段すべてを呼ぶ', async () => {
+    it('intervalMs を渡せばその間隔で、周回ごとに 9 段すべてを呼ぶ', async () => {
       const { managers, calls } = recordingPool();
       const poller = startManagerPolling({ managers, intervalMs: 5_000 });
       await vi.advanceTimersByTimeAsync(0);
       expect(calls).toEqual(ALL_METHODS);
 
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(calls).toHaveLength(8);
+      expect(calls).toHaveLength(9);
       await vi.advanceTimersByTimeAsync(1);
       expect(calls).toEqual([...ALL_METHODS, ...ALL_METHODS]);
       poller.stop();

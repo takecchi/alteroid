@@ -74,6 +74,8 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     // `probeTurnEnds()` より後に置く: 読む `record.turnEndedAt` が同じ回に計算し直した値でないと古い助言で判定するため。
     { label: 'usage-wakes', run: () => options.managers.settleStalledUsageWakes() },
     { label: 'denials', run: () => options.managers.renotifyStalledDenials() },
+    // running のまま 30 分、進捗の出来事が無い担当をクローンへ 1 回知らせる。台帳を読まず像だけを見る
+    { label: 'silence', run: () => options.managers.noteSilentManagers() },
     { label: 'held-messages', run: () => options.managers.deliverHeldMessages() },
     // 報告由来の `done` で waiting のまま残した task を、猶予（30 分）を過ぎてから倒す。冪等で、台帳を数えるだけなので連鎖の末尾に置く
     { label: 'task-follow', run: () => options.managers.repairStrandedTasks() },

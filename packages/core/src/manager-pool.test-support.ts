@@ -46,6 +46,7 @@ export function fakeManagerPool(overrides: Partial<ManagerPool> = {}): ManagerPo
     flushWithheldReports: () => Promise.resolve(),
     settleStalledUsageWakes: () => Promise.resolve([]),
     renotifyStalledDenials: () => Promise.resolve(),
+    noteSilentManagers: () => Promise.resolve(),
     sweepRescueRefs: () => Promise.resolve(),
     deliverHeldMessages: () => Promise.resolve(),
     stop: () => Promise.resolve(),

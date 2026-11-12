@@ -164,6 +164,7 @@ import { createWindows } from './manager-pool-windows.js';
 import type { ManagerReportApply } from './manager-report-apply.js';
 import { ManagerReattach } from './manager-reattach.js';
 import { ManagerResume } from './manager-resume.js';
+import { noteProgressEvent, SilenceWatch } from './manager-silence-watch.js';
 import {
   bucketManagersByRunner,
   buildRunnerBacklog,
@@ -1129,6 +1130,12 @@ export interface ManagerPool {
    */
   renotifyStalledDenials(): Promise<void>;
   /**
+   * running のまま `MANAGER_SILENCE_NOTICE_MS`（30 分）進捗の出来事（`ManagerRecord.lastEventAt`）が無い担当を、1 episode につき 1 通だけクローンの受信箱へ知らせる（A2）。
+   * 止まっていると断定しない（長い正常な無音もある）。何も止めず、台帳にも書かない。出来事が戻ったら日誌に `[復旧]` を残すだけ（受信箱へは出さない）。
+   * 帳面はプロセス内。1件の失敗で残りを止めない。
+   */
+  noteSilentManagers(): Promise<void>;
+  /**
    * 退避 ref（`refs/alteroid-rescue/…`）の後始末を1周する。
    * 台帳（`Job.lastRescue`）に無い ref は触らない（孤児を消さない）。消した印は `pushed.removal` に残し、
    * `pushed` は消さない。走査の間隔はここで空ける（全委譲の台帳を読むので毎分は撃たない）。
@@ -1477,6 +1484,14 @@ export interface ManagerRecord {
    */
   lastToolSettledAt?: string;
   /**
+   * 進捗として数える最後の出来事の時刻・種類（`manager-silence-watch.ts` の `noteProgressEvent` が `#handleEvent` の入口で書く）。
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。読み手は `SilenceWatch`（running のまま無音の担当への知らせ）だけ。
+   * `lastEventTool` は最後の出来事が `tool_running` のときだけ載る、実行中の道具の名前。
+   */
+  lastEventAt?: string;
+  lastEventType?: string;
+  lastEventTool?: string;
+  /**
    * **同じ鍵に新しい拒否が来て `deniedLastAt` が進んだら、これは古いエピソードの記録になる**
    * （`deniedAt` の不一致を見て数え直す）。デーモンを作り直したら「まだ知らせていない」から始まる。
    */
@@ -1737,6 +1752,8 @@ class Pool implements ManagerPool {
   readonly #usageReceiver: UsageReceiver;
   readonly #autoFold: AutoFold;
   readonly #denialRenotifier: DenialRenotifier;
+  /** running のまま無音の担当への知らせ（A2）。`createFoldHeld` の外で作る: 6 協力者の束の口を動かさないため。 */
+  readonly #silenceWatch: SilenceWatch;
   readonly #rescueSweeper: RescueSweeper;
   readonly #rescueStash: ManagerRescueStash;
   /** 枠で止まった担当の起こし直し（`UsageWake`。周回の掃き・鍵の回転の起こし・印の解除）。欄は上の `#usageStopped` などをこの `Pool` が持ち、参照を渡している。 */
@@ -1963,6 +1980,17 @@ class Pool implements ManagerPool {
     });
     this.#autoFold = e.autoFold;
     this.#denialRenotifier = e.denialRenotifier;
+    this.#silenceWatch = new SilenceWatch({
+      records: this.#records,
+      now: () => this.#now(),
+      stopped: () => this.#stopped,
+      heldElsewhere: (record) => this.#heldElsewhereOfSilence(record),
+      emitReport: (managerId, text) => {
+        this.#emit(managerId, 'report', text);
+      },
+      // 呼び出しの形は `exchange-kind-coverage.test.ts` が `manager-silence-watch.ts` の中で数える
+      journalExchange: this.#journalExchange.bind(this),
+    });
     this.#rescueSweeper = e.rescueSweeper;
     this.#attachmentStager = e.attachmentStager;
     this.#rescueStash = e.rescueStash;
@@ -3058,6 +3086,20 @@ class Pool implements ManagerPool {
     return runnerSessionsOf(this.#runners.entries());
   }
 
+  /** `SilenceWatch` が「無音」と読まない理由のうち、`Pool` の持つ材料でしか決められないもの: 枠停止・runner lost・名簿から消えた・peer の承認待ち。 */
+  #heldElsewhereOfSilence(record: ManagerRecord): boolean {
+    const managerId = record.job.id;
+    if (this.#usageStopped.has(managerId) || this.#workerLimitStopped.has(managerId)) return true;
+    if (lostSinceOf(record, this.#silentRunners()) !== undefined) return true;
+    if (vanishedOf(record, this.#registeredRunnerIds()) !== undefined) return true;
+    const approvals = this.#observedSessionField(
+      'sessionPeerApprovals',
+      record.job.runnerId,
+      managerId,
+    );
+    return approvals !== undefined && approvals.count > 0;
+  }
+
   /**
    * 観測しかしない: `attached` も `status` も動かさず、resume も挑まない（挑めば10秒ごとに全台へ resume を撃つことになる）。
    * `running` / `waiting_human` だけを見る: `done` は待機で runner がセッションを畳んでいるのが正常な回もあり、
@@ -3752,6 +3794,10 @@ class Pool implements ManagerPool {
 
   async renotifyStalledDenials(): Promise<void> {
     this.#denialRenotifier.renotifyStalled();
+  }
+
+  async noteSilentManagers(): Promise<void> {
+    this.#silenceWatch.sweep();
   }
 
   /**
@@ -4918,6 +4964,10 @@ class Pool implements ManagerPool {
     ) {
       return;
     }
+
+    // 古い世代・移った後の出来事を捨てた後に数える: 捨てた出来事は、いまの担当の進捗ではない。
+    // 数える種類は `manager-silence-watch.ts` が持つ（`mirror`・`usage` などは数えない。理由もそこ）。
+    noteProgressEvent(record, event, this.#nowIso());
 
     switch (event.type) {
       case 'session': {
