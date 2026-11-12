@@ -5541,6 +5541,27 @@ class Clone implements CloneHost {
       }
     }
   }
+
+  /** 試験専用: 受信箱の内側の保持分の件数（日誌を経由しない）。{@link retainedSizesForTest} だけが呼ぶ。 */
+  static retainedSizes(clone: CloneHost): RetainedSizes {
+    if (!(clone instanceof Clone)) throw new Error('createClone が返した clone ではない');
+    return {
+      unread: clone.#delivery.unreadIds().length,
+      redelivered: clone.#delivery.redeliveryState.redeliveredSize,
+      pendingCollapse: clone.#delivery.collapseSize,
+    };
+  }
+}
+
+/** 受信箱の内側の保持分（`#unread`・`#redelivered`・`#pendingCollapse`）の件数。後始末漏れを試験で見るための形。 */
+export type RetainedSizes = { unread: number; redelivered: number; pendingCollapse: number };
+
+/**
+ * 試験専用の観測口: 受信箱の内側の保持分の件数をその場で返す。本番の経路は呼ばない（index.ts にも出さない）。
+ * 呼ばれたときだけ数える。
+ */
+export function retainedSizesForTest(clone: CloneHost): RetainedSizes {
+  return Clone.retainedSizes(clone);
 }
 
 /**
