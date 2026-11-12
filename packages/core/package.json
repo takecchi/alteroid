@@ -68,6 +68,10 @@
       "types": "./dist/excerpt.d.ts",
       "import": "./dist/excerpt.js"
     },
+    "./workspace-reset": {
+      "types": "./dist/workspace-reset.d.ts",
+      "import": "./dist/workspace-reset.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"

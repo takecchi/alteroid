@@ -18,6 +18,7 @@ export default defineConfig({
     'src/trace-action.ts',
     'src/mask-url.ts',
     'src/excerpt.ts',
+    'src/workspace-reset.ts',
     'src/attachment-wording.ts',
     'src/attachment-usage-keys.ts',
     'src/redact.ts',

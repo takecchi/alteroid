@@ -14,7 +14,9 @@ import {
   TEST_BASE_URL,
 } from '~/test-support';
 
-import Settings, { RESET_CONFIRM_GROUPS, RESET_SUMMARY_LABELS } from './settings';
+import { RESET_CONFIRM_GROUPS } from '@alteroid/core/workspace-reset';
+
+import Settings, { RESET_SUMMARY_LABELS } from './settings';
 
 const BASE: RunnerSummary = {
   label: 'http://runner:4518',
@@ -840,6 +842,19 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
 
     const matches = await screen.findAllByText(/仕事のやり方/);
     expect(matches.length).toBeGreaterThan(0);
+  });
+
+  it('ダイアログの確認の文が、項目・ラベル・順序まで字面で固定されている', async () => {
+    renderWithReset();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'リセットする' }));
+    await screen.findByPlaceholderText('reset');
+
+    const sentence =
+      '記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・task（順序と状態を持つ待ち行列）・仕事のやり方・アーカイブ・セッション・実行環境プロファイル・添付（保存したファイルを含む）・利用状況の台帳';
+    // 先頭一致＋直後の「を全部消」まで見る: 前後に項目が足されたり抜けたりしても気付けるため。カード本体とダイアログの2か所に出る
+    const matches = await screen.findAllByText((text) => text.startsWith(`${sentence}を全部消`));
+    expect(matches.length).toBe(2);
   });
 
   it('消した後の報告の見出し（RESET_SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
