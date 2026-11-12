@@ -833,6 +833,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       }),
     ),
   }),
+  // 新しくは書かない（デーモンは毎ターンの1行を止めた）。古い行を読み込みで落とさないために variant だけ残す: 外すと storage の読み出しが未知の type の行を「読めない行」として落とし、`get` は `UnreadableJournalEntryError` を投げる
   // `Inbox#unshift` は `delivered` に数えない: 戻される合図は保持される前に `push` で数えられていて、数え直すと二重に計上されるため
   // `InboxStore.pending()` が読めなければこの窓は書かず、カウンタも戻さない: 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みを失わずに済むため
   z.object({

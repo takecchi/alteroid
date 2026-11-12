@@ -15,8 +15,4 @@ export class CloneRedeliveryState {
   drop(id: string): void {
     this.#redelivered.delete(id);
   }
-
-  get redeliveredSize(): number {
-    return this.#redelivered.size;
-  }
 }

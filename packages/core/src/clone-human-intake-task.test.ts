@@ -400,8 +400,8 @@ describe('起点の会話へ返答したターンの終わりに、queued の ta
 
     s.clone.post(managerReport('rep-quiet', 'QUIET-REPORT'));
     await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length > 0,
-      '1つ目の報告のターンが終わる',
+      async () => (await stores.inbox.pending()).count === 0,
+      '1つ目の報告のターンが終わる（受信箱から消し込まれる）',
     );
     expect(await statusOf(stores, 't9')).toBe('queued');
 

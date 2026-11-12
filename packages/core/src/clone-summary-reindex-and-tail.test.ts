@@ -2,23 +2,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
-import { EXCHANGE_KIND_THINNING_PREFIX } from './exchange-kind.js';
+import { createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import type { ChatStreamEvent, InboxEvent } from './schema.js';
+import type { ChatStreamEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage, seedFingerprintlessArchiveRow } from './testing.js';
 import {
-  fakeGatedSdk,
   fakeSdk,
   setup,
   wireEvents,
   lastSessionCall,
   waitFor,
   waitForDone,
-  withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
@@ -385,165 +382,5 @@ describe('待ちの経路に壁時計が無い（#1220）', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）', () => {
-  it('拾い直した合図を待ち行列から消すと、その合図の3つの索引が外れる（`dropQueuedInboxEvents` の中の3行の固定）', async () => {
-    const stores = createMemoryStores();
-
-    const live = humanMessage('生きている拾い直し', 'conv-live');
-    const queued = humanMessage('待ち行列で消される拾い直し', 'conv-queued');
-    await stores.inbox.put(live, '2026-09-01T00:00:00.000Z');
-    await stores.inbox.put(queued, '2026-09-01T00:00:01.000Z');
-
-    const { fn, calls, release } = fakeGatedSdk();
-    const clone = createClone({
-      stores,
-      queryFn: fn,
-      env: {},
-      runners: createRunnerRegistry([
-        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
-      ]),
-    });
-
-    await waitFor(
-      () => calls.some((call) => call.inputs.some((text) => text.includes('生きている拾い直し'))),
-      'live のターンが始まる',
-    );
-
-    expect(await clone.dropQueuedInboxEvents([queued.id])).toBe(1);
-
-    release();
-
-    await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-      '1本目の inbox_flow 行',
-    );
-    const rows = await stores.journal.list({ types: ['inbox_flow'] });
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(row.retained).toEqual({
-      unread: 1,
-      redelivered: 1,
-      pendingCollapse: 0,
-    });
-
-    await clone.stop();
-  });
-
-  it('stale の拾い直しを一括で消すと、その合図の索引が外れる（`#removeStaleRedeliveryChunk` の `#unread` / `#redelivered` の固定）', async () => {
-    const stores = createMemoryStores();
-
-    const stale: InboxEvent = {
-      type: 'external',
-      id: 'evt-stale-tokenpool',
-      at: '2026-09-01T00:00:00.000Z',
-      source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-    };
-    const live = humanMessage('stale の後ろの生きている拾い直し', 'conv-live');
-    await stores.inbox.put(stale, '2026-09-01T00:00:00.000Z');
-    await stores.inbox.put(live, '2026-09-01T00:00:01.000Z');
-
-    const { fn, calls, release } = fakeGatedSdk();
-    const clone = createClone({
-      stores,
-      queryFn: fn,
-      env: {},
-      runners: createRunnerRegistry([
-        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
-      ]),
-    });
-
-    await waitFor(
-      () =>
-        calls.some((call) =>
-          call.inputs.some((text) => text.includes('stale の後ろの生きている拾い直し')),
-        ),
-      'live のターンが始まる',
-    );
-    await waitFor(async () => (await stores.inbox.pending()).count === 1, 'stale が器から消える');
-
-    release();
-
-    await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-      '1本目の inbox_flow 行',
-    );
-    const rows = await stores.journal.list({ types: ['inbox_flow'] });
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(row.retained).toEqual({
-      unread: 1,
-      redelivered: 1,
-      pendingCollapse: 0,
-    });
-
-    await clone.stop();
-  });
-
-  it('拾い直している最中に消された合図は、配らずに畳んだうえで3つの索引も外す（`#restoreUnreadPass` の `#droppedWhileRestoring` 分岐の3行の固定）', async () => {
-    const stores = createMemoryStores();
-
-    const target = humanMessage('拾い直しの最中に消される', 'conv-dropped');
-    await stores.inbox.put(target, '2026-09-01T00:00:00.000Z');
-
-    // 消し込みは Task の起票（拾い直しの途中で呼ばれる `tasks.add`）の中で差し込む: 時間で近似せず、#restoringUnread が立っている窓で必ず墓標が残るため
-    const holder: { clone?: ReturnType<typeof createClone> } = {};
-    let droppedDuringRestore: number | undefined;
-    const originalAdd = stores.tasks.add.bind(stores.tasks);
-    stores.tasks.add = async (entry, placement) => {
-      if (entry.id === target.id && droppedDuringRestore === undefined) {
-        if (holder.clone === undefined) throw new Error('clone がまだ無い');
-        droppedDuringRestore = await holder.clone.dropQueuedInboxEvents([target.id]);
-      }
-      return originalAdd(entry, placement);
-    };
-
-    const sdk = fakeSdk();
-    const clone = createClone({
-      stores,
-      queryFn: sdk.fn,
-      env: {},
-      runners: createRunnerRegistry([
-        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
-      ]),
-    });
-    holder.clone = clone;
-
-    await waitFor(
-      async () =>
-        (await stores.journal.list({ types: ['exchange'] })).some(
-          (entry) =>
-            entry.type === 'exchange' &&
-            entry.text.startsWith(
-              `${EXCHANGE_KIND_THINNING_PREFIX}拾い直している最中に器から消された合図なので`,
-            ),
-        ),
-      '拾い直しの最中に消された合図を畳んだ跡',
-    );
-    expect(droppedDuringRestore).toBe(0);
-
-    clone.post(humanMessage('後から届く合図（窓をトリガー）', 'conv-after'));
-    await waitFor(
-      async () => (await stores.journal.list({ types: ['inbox_flow'] })).length >= 1,
-      '1本目の inbox_flow 行',
-    );
-    const rows = await stores.journal.list({ types: ['inbox_flow'] });
-    const row = rows[0];
-    if (row?.type !== 'inbox_flow') throw new Error('inbox_flow が日誌に無い');
-    expect(row.retained).toEqual({
-      unread: 1,
-      redelivered: 0,
-      pendingCollapse: 0,
-    });
-    // 待ち行列の節は落としてから見る（#5469 P6c）: 起こし直しの時点で台帳と同じ id の Task が積まれており（P5）、その題は待ち行列の先頭に出る。ここで見たいのは「消された合図が配られていない」こと
-    expect(
-      sdk.calls.some((call) =>
-        call.inputs.some((text) => withoutQueueNotice(text).includes('拾い直しの最中に消される')),
-      ),
-    ).toBe(false);
-
-    await clone.stop();
   });
 });

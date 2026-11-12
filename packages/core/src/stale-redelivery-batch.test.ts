@@ -324,7 +324,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await clone.stop();
   });
 
-  it('後始末（settled と pendingCollapse）が一括経路でも起きている', async () => {
+  it('後始末（pendingCollapse）が一括経路でも起きている', async () => {
     const stores = createMemoryStores();
     const sharedPayload = 'SHARED-COLLAPSE-PAYLOAD';
     const first = staleTokenPoolEvent('evt-collapse-a', '2026-08-06T00:00:00.000Z', sharedPayload);
@@ -332,7 +332,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await stores.inbox.put(first, first.at);
     await stores.inbox.put(second, second.at);
 
-    const { clone } = bootClone(stores);
+    const { clone, inputs } = bootClone(stores);
     await waitFor(
       async () => (await stores.inbox.peekPending()).entries.length === 0,
       '両方消える',
@@ -342,17 +342,13 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       type: 'human_message',
       id: 'evt-trigger-turn',
       at: new Date().toISOString(),
-      text: 'inbox_flow を書かせるための1ターン',
+      text: '後始末のあとの1ターン',
       conversationId: 'conv-settled',
     });
-    await waitFor(async () => {
-      const entries = await stores.journal.list({ types: ['inbox_flow'] });
-      return entries.some(
-        (entry) =>
-          entry.type === 'inbox_flow' &&
-          entry.settled.byType.some((row) => row.type === 'external' && row.count >= 2),
-      );
-    }, 'inbox_flow が settled=2件以上の external を報告する');
+    await waitFor(
+      () => inputs.some((text) => text.includes('後始末のあとの1ターン')),
+      'そのあとの1ターンが始まる',
+    );
 
     const before = await stores.journal.list({ types: ['exchange'] });
     const beforeFoldedCount = before.filter(

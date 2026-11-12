@@ -244,7 +244,6 @@ import {
   describeRefusalReopened,
   resolveRefusalAutoReopen,
 } from './clone-refusal.js';
-import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import {
   CloneTurnNotices,
@@ -852,8 +851,6 @@ class Clone implements CloneHost {
   // 配送の束（`#delivery`）には入れない: あちらは受信箱の遷移で、これは `#emit` の出口の側の状態のため
   readonly #progress = new CloneProgress();
 
-  readonly #inboxFlow = new CloneInboxFlow();
-
   // タイマーを持たない: 「枠が開いたか」を無料で知る方法が無く、試行の契機は新しい合図が届いたときに限るため
   #usageBlocked: UsageLimitNotice | null = null;
   // `UsageLimitNotice` の欄にしない: 通知は日誌・`usage_limited` へ渡る形で、鍵の身元を運ぶ型ではないため。`#usageBlocked` が null の間は読まない（降ろす所で消さない: 立てる所が毎回上書きするため）
@@ -1407,7 +1404,6 @@ class Clone implements CloneHost {
 
   #enqueue(event: InboxEvent): void {
     // 走行中のターンは止めない: 止めると掛かった分が捨てられるため（できるのは次に読むものを人間にするまで）
-    this.#inboxFlow.delivered(event.type);
     this.#delivery.inbox.push(
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
@@ -1422,7 +1418,6 @@ class Clone implements CloneHost {
       noteInboxEventRefused(inboxEventShape(event), failure.error);
       return 'unavailable';
     }
-    this.#inboxFlow.arrived(event.type);
     this.#delivery.setUnread(event.id, Promise.resolve());
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
       this.#commit(event);
@@ -1442,7 +1437,6 @@ class Clone implements CloneHost {
       noteInboxEventRefused(inboxEventShape(event), failure.error);
       return 'unavailable';
     }
-    this.#inboxFlow.arrived(event.type);
     this.#delivery.setUnread(event.id, Promise.resolve());
     this.#commit(event);
     noteDroppedInboxEvent(event);
@@ -1794,7 +1788,6 @@ class Clone implements CloneHost {
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#delivery.registerCompletion(event.id, resolve);
-      this.#inboxFlow.delivered(event.type);
       this.#delivery.inbox.push(
         event,
         interrupt && this.#humanPriority
@@ -2358,7 +2351,6 @@ class Clone implements CloneHost {
           this.#dropPendingCollapse(record.event);
           // token-pool の代表もここで落とす: この経路は `#forget` を通らず、落とし忘れると消えた stale な id を代表として指したまま残り、次の通知の合流判定が偽の前提で走るため
           this.#delivery.clearPendingTokenPoolNoticeIfMatches(record.event.id);
-          this.#inboxFlow.settled(record.event.type);
         }
         return;
       } catch (error) {
@@ -2607,7 +2599,7 @@ class Clone implements CloneHost {
     this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded });
   }
 
-  // 新しい消し方を作らず `#forget` に委ねる: 器の未読・`#pendingCollapse`・`inbox_flow` を正しく後始末するので、二重に書かないため（`#heldForUsage` だけは `#deferred` 側固有なのでここで落とす）。待たない: `post()` は同期のため
+  // 新しい消し方を作らず `#forget` に委ねる: 器の未読・`#pendingCollapse` を正しく後始末するので、二重に書かないため（`#heldForUsage` だけは `#deferred` 側固有なのでここで落とす）。待たない: `post()` は同期のため
   #evictPendingTokenPoolRepresentative(id: string): InboxEvent | null {
     const fromQueue = this.#delivery.inbox.removeWhere((queued) => queued.id === id);
     const victim = fromQueue[0];
@@ -2644,9 +2636,7 @@ class Clone implements CloneHost {
 
   // 失敗しても post を落とさない: 未読を書けないことでその合図の処理まで止めると、直そうとしているものより広い穴になるため
   // 跡に本文を出さない: 合図には人間の発言・webhook の本文が入り、テスト出力に `GH_TOKEN` が全文で出た前例があるため
-  // `arrived` は書き込みの成否を問わず入口で数える: `inbox_flow.arrived` は受理した瞬間であって書けた時刻ではないため
   #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
-    this.#inboxFlow.arrived(event.type);
     this.#delivery.setUnread(event.id, this.#persistUnread(event, options));
   }
 
@@ -2760,8 +2750,6 @@ class Clone implements CloneHost {
         this.#dropPendingCollapse(event);
         // token-pool の代表も同じ理由で確定後に落とし、id が一致するときだけ落とす: 合流で差し替えられた後に古い event が来ても代表を巻き添えで消さないため
         this.#delivery.clearPendingTokenPoolNoticeIfMatches(event.id);
-        // `settled` は成功した回だけ1回数える: 失敗を再試行する `for` の中で `return` するのはここだけのため
-        this.#inboxFlow.settled(event.type);
         return;
       } catch (error) {
         last = error;
@@ -3010,7 +2998,6 @@ class Clone implements CloneHost {
         continue;
       }
 
-      this.#inboxFlow.delivered(record.event.type);
       this.#delivery.inbox.push(
         record.event,
         this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
@@ -5266,9 +5253,6 @@ class Clone implements CloneHost {
       });
     }
 
-    // 成否を見ずに毎回呼ぶ: 条件を付けると `journal_read` の推移に穴が空く。
-    await finalizeStep('inboxFlow', () => this.#writeInboxFlow());
-
     const compactions = this.#sdkSession.turn?.compactions ?? [];
 
     await finalizeStep('usage', () =>
@@ -5382,37 +5366,6 @@ class Clone implements CloneHost {
     if (turn) await this.#autoCloseRepliedTasks(turn);
     this.#emit(turn?.conversationId ?? null, { type: 'done' });
     this.#finishTurn();
-  }
-
-  /**
-   * 受信箱の流量を、ターンの境界で1行にして日誌へ残す。`pending()` が読めなければ書かず、カウンタも戻さない
-   * （次の窓へ持ち越して失わない）。追記の成否は問わず窓を空にする: 再送の仕組みは持たない。
-   */
-  async #writeInboxFlow(): Promise<void> {
-    let pending: { count: number; oldestAt?: string };
-    try {
-      pending = await this.#stores.inbox.pending();
-    } catch (error) {
-      noteDroppedRecord('受信箱の流量（inbox_flow）', '', error);
-      return;
-    }
-
-    const flow = this.#inboxFlow.snapshot();
-    await this.#journal({
-      type: 'inbox_flow',
-      windowStartedAt: flow.windowStartedAt,
-      arrived: flow.arrived,
-      delivered: flow.delivered,
-      settled: flow.settled,
-      pending,
-      retained: {
-        unread: this.#delivery.unreadSize,
-        redelivered: this.#delivery.redeliveryState.redeliveredSize,
-        pendingCollapse: this.#delivery.collapseSize,
-      },
-    });
-
-    this.#inboxFlow.reset();
   }
 
   /**

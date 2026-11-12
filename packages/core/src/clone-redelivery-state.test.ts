@@ -50,14 +50,4 @@ describe('CloneRedeliveryState — drop（Issue #1534 案2）', () => {
     const state = new CloneRedeliveryState();
     expect(() => state.drop('never-existed')).not.toThrow();
   });
-
-  it('redeliveredSize は drop で減る', () => {
-    const state = new CloneRedeliveryState();
-    state.markRedelivered('evt-1', pending());
-    expect(state.redeliveredSize).toBe(1);
-
-    state.drop('evt-1');
-
-    expect(state.redeliveredSize).toBe(0);
-  });
 });
