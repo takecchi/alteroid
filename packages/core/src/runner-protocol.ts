@@ -933,6 +933,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     files: z.array(runnerOutboxFileSchema).optional(),
     rejectedFiles: z.array(runnerOutboxRejectedFileSchema).optional(),
   }),
+  // runner はもう出さない（計測をやめた）。入れ替え中の旧 runner が出す分を daemon が日誌へ書けるよう、型だけ残す。
   // 計測の欄と、その意味（何を数えて何を数えないか）は `workerWaitMeasureShape`（`schema.ts`）に1つだけ置く: 日誌の行と同じ欄を使うため
   z.object({
     type: z.literal('worker_wait'),

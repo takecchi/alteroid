@@ -278,9 +278,8 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > runner.ts #applyTurnEnded: 出した先を差し戻した中身が変わらない 1`] = `
 [
   "const contextUsage = await this.#observeContextUsage();",
-  "if (contextUsage !== undefined) {this.#emit({type: 'context_usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, turnSucceeded: event.succeeded, contextUsage});} const {said, rejected, inputsThisTurn, notificationsThisTurn, toolsThisTurn, submitsThisTurn, sourcesThisTurn, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn} = this.#turnTally.takeAtResult();",
-  "const closedWindow = this.#workerWaitWindow.foldTurn({inputsThisTurn, notificationsThisTurn, toolsThisTurn, submitsThisTurn, sourcesThisTurn});",
-  "if (closedWindow !== null) {this.#emit({type: 'worker_wait', managerId: this.#id, ...closedWindow});} for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');",
+  "if (contextUsage !== undefined) {this.#emit({type: 'context_usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, turnSucceeded: event.succeeded, contextUsage});} const {said, rejected, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn} = this.#turnTally.takeAtResult();",
+  "for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');",
   "const failure = event.failure ?? rejected ?? undefined;",
   "if (event.succeeded) {this.#markProgressed();",
   "if (event.usage !== undefined) {this.#emit({type: 'usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, models: event.usage.models, answered: failure === undefined, ...(contextUsage === undefined ? {} : {contextUsage})});}} const noCredentialDirHint = this.#failureClassifier.classify(event, failure);",
