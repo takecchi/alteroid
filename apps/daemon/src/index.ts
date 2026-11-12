@@ -121,6 +121,7 @@ import {
 import { createRunnerLostNotice, describeRunnerLost } from './runner-lost-notice.js';
 import { clearRuntimeInfo, writeRuntimeInfo } from './runtime.js';
 import { noteRunnerSwap } from './runner-swap-notice.js';
+import { warnRetiredEnv } from './retired-env-warning.js';
 import { buildSchedule, readScheduleConfig } from './schedule.js';
 import { startDailyReportCatchup } from './report-catchup.js';
 import type { DailyReportCatchup } from './report-catchup.js';
@@ -610,6 +611,9 @@ export async function main(): Promise<void> {
         `これは実行環境の設定であって、クローンの道具を減らすものではありません\n`,
     );
   }
+
+  // 外した調整用の環境変数が置かれたままなら、効いていると思い込ませないために名前だけ言う（値は出さない）。
+  warnRetiredEnv(bootEnvSnapshot, writeStderrLine);
 
   // 正本はここではない: 実際に SDK へ渡すのは runner で、ここが読むのは自己認識に載せる宣言のため。
   const placedManagerTiers = placedManagerModels();

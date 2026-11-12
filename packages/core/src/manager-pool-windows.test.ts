@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWindows, type WindowsDeps } from './manager-pool-windows.js';
 import { QUOTA_STOP_WINDOW_MS } from './quota-stop-notice.js';
 import { RESUME_CONFIRM_TIMEOUT_MS } from './resume-confirmation.js';
-import { resolveSynthesizedNoticeWindowMs } from './synthesized-notice.js';
+import { SYNTHESIZED_NOTICE_WINDOW_MS } from './synthesized-notice.js';
 
 // `createWindows`（`Pool` の constructor で窓 4 種を作る関数）を、偽の deps で直に縛る。
 // 期待の順・欄名・同一参照は、切り出した時点の出力を目で読んで写したもの（仕様を先に書いたものではない）。
@@ -268,7 +268,7 @@ describe('createWindows', () => {
     });
     expect(portsOf('QuotaStopWindows').windowMs).toBe(QUOTA_STOP_WINDOW_MS);
     expect(portsOf('RestoredWindows').windowMs).toBe(QUOTA_STOP_WINDOW_MS);
-    expect(portsOf('SynthesizedNoticeWindows').windowMs).toBe(resolveSynthesizedNoticeWindowMs());
+    expect(portsOf('SynthesizedNoticeWindows').windowMs).toBe(SYNTHESIZED_NOTICE_WINDOW_MS);
     expect(portsOf('RestoredWindows').confirmTimeoutMs).toBe(RESUME_CONFIRM_TIMEOUT_MS);
   });
 

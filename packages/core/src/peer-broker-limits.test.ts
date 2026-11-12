@@ -9,7 +9,6 @@ import type {
 import {
   createPeerBroker,
   DEFAULT_PEER_LIMITS,
-  resolvePeerLimits,
   type PeerCallResult,
   type PeerLimits,
   type PeerTurnResult,
@@ -212,21 +211,8 @@ describe('peer-broker の上限（#4764）', () => {
     broker.closeAll();
   });
 
-  it('(e) 環境変数は、空・読めない・範囲外なら既定へ倒す', () => {
-    expect(resolvePeerLimits({})).toEqual(DEFAULT_PEER_LIMITS);
+  it('(e) 既定は 4 本・30 分（環境変数では変えない）', () => {
     expect(DEFAULT_PEER_LIMITS).toEqual({ maxLiveSessions: 4, idleMs: 30 * MINUTE });
-    expect(
-      resolvePeerLimits({ ALTEROID_PEER_MAX_SESSIONS: '8', ALTEROID_PEER_IDLE_MINUTES: '10' }),
-    ).toEqual({ maxLiveSessions: 8, idleMs: 10 * MINUTE });
-    expect(
-      resolvePeerLimits({ ALTEROID_PEER_MAX_SESSIONS: '1', ALTEROID_PEER_IDLE_MINUTES: '1440' }),
-    ).toEqual({ maxLiveSessions: 1, idleMs: 1440 * MINUTE });
-    for (const bad of ['', '  ', 'abc', '0', '-3', '65', '2.5', 'NaN', 'Infinity']) {
-      expect(resolvePeerLimits({ ALTEROID_PEER_MAX_SESSIONS: bad }).maxLiveSessions).toBe(4);
-    }
-    for (const bad of ['', 'abc', '0', '-1', '1441', '1.5']) {
-      expect(resolvePeerLimits({ ALTEROID_PEER_IDLE_MINUTES: bad }).idleMs).toBe(30 * MINUTE);
-    }
   });
 
   it('(f) 定期の見回りは idleMs 超えを閉じ、closeAll で止まる', async () => {

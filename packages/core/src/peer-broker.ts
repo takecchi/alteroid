@@ -18,7 +18,6 @@ import type { AgentProviderId } from './agent-ports.js';
 import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { reasonOf } from './dropped-record.js';
-import { noteEnvValueNotUsed } from './env-value-not-used.js';
 import { excerptLine } from './excerpt.js';
 import { InputQueue } from './input-queue.js';
 import type { PeerWorkdirScanner } from './peer-workdir-scan.js';
@@ -161,61 +160,13 @@ export interface PeerLimits {
 }
 
 const DEFAULT_PEER_MAX_SESSIONS = 4;
-const MIN_PEER_MAX_SESSIONS = 1;
-const MAX_PEER_MAX_SESSIONS = 64;
 const DEFAULT_PEER_IDLE_MINUTES = 30;
-const MIN_PEER_IDLE_MINUTES = 1;
-const MAX_PEER_IDLE_MINUTES = 1440;
-export const PEER_MAX_SESSIONS_ENV_KEY = 'ALTEROID_PEER_MAX_SESSIONS';
-export const PEER_IDLE_MINUTES_ENV_KEY = 'ALTEROID_PEER_IDLE_MINUTES';
 
+// 環境変数では差し替えない（読んでいた `ALTEROID_PEER_MAX_SESSIONS` / `ALTEROID_PEER_IDLE_MINUTES` は外した。`retired-env.ts`）
 export const DEFAULT_PEER_LIMITS: PeerLimits = {
   maxLiveSessions: DEFAULT_PEER_MAX_SESSIONS,
   idleMs: DEFAULT_PEER_IDLE_MINUTES * 60_000,
 };
-
-// 空・読めない・範囲外は既定へ倒す: 0 や負の値でセッションが溜まり続ける（または即座に閉じ続ける）ことを避けるため。
-// 置かれた値を倒したときは黙らせず stderr に1行残す（#5976）
-function readBoundedInt(
-  name: string,
-  raw: string | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const text = raw?.trim();
-  if (text === undefined || text === '') return fallback;
-  const parsed = Number(text);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    noteEnvValueNotUsed(
-      name,
-      text,
-      `${String(min)}〜${String(max)} の整数として読めないので既定 ${String(fallback)} を使う`,
-    );
-    return fallback;
-  }
-  return parsed;
-}
-
-export function resolvePeerLimits(env: NodeJS.ProcessEnv = process.env): PeerLimits {
-  return {
-    maxLiveSessions: readBoundedInt(
-      PEER_MAX_SESSIONS_ENV_KEY,
-      env[PEER_MAX_SESSIONS_ENV_KEY],
-      DEFAULT_PEER_MAX_SESSIONS,
-      MIN_PEER_MAX_SESSIONS,
-      MAX_PEER_MAX_SESSIONS,
-    ),
-    idleMs:
-      readBoundedInt(
-        PEER_IDLE_MINUTES_ENV_KEY,
-        env[PEER_IDLE_MINUTES_ENV_KEY],
-        DEFAULT_PEER_IDLE_MINUTES,
-        MIN_PEER_IDLE_MINUTES,
-        MAX_PEER_IDLE_MINUTES,
-      ) * 60_000,
-  };
-}
 
 const PEER_SWEEP_INTERVAL_MAX_MS = 60_000;
 

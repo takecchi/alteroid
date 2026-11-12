@@ -137,10 +137,7 @@ describe('1枚の上限（#3325）とターンの予算の両方', () => {
 
 describe('環境変数で上限が変わる（#3696）', () => {
   it('readAttachmentLimits の値がそのまま予算になる', async () => {
-    const { limits } = readAttachmentLimits({
-      ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '1',
-      ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES: '5000',
-    });
+    const { limits } = readAttachmentLimits({ ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '1' });
     const stores = createMemoryStores();
     const a = await putPng(stores, 'a.png', 20);
     const b = await putPng(stores, 'b.png', 20);

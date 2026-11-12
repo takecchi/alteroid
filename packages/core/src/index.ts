@@ -674,6 +674,7 @@ export {
 export { DAEMON_RESERVED_EVENT_SOURCES, isReservedEventSource } from './daemon-self-notice.js';
 export { isEnvOffSpelling } from './env-switch.js';
 export { placedEnvValue } from './placed-env.js';
+export { retiredEnvWarnings } from './retired-env.js';
 export { ANTHROPIC_ROUTE_NONE_LINE } from './anthropic-route-env.js';
 export type { AgentProviderId } from './agent-ports.js';
 export { agentProviderOf } from './agent-provider-selection.js';
