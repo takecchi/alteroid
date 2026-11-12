@@ -83,6 +83,11 @@ export interface UsagePoller {
 }
 
 export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
+  // `startPeriodicRun`（periodic-runner.ts）に載せず、周期を手で書く: 骨組みの次回は「結果から数を返す」では足りない。
+  // (1) 鍵待ち（#4737）は1本のタイマーではなく、通常の間隔ごとに `identity()` が届いたかを見て、届けば長い間隔の途中でも測り直す。
+  // (2) 投げた回は直前の保持値（`current`）を次の間隔の決定に渡す。骨組みは投げた回に結果を持たない。
+  // 骨組みを広げて両方を受けると、骨組みのほうが手書きの重複より重くなり、仕組みを簡単にする狙いに反するため、この形を残す。
+  // 停止・signal・`unref`・`inFlight` の扱いは骨組みと同じ形なので、片方を直すときはもう片方も見ること。
   const interval = options.intervalMs ?? USAGE_POLL_INTERVAL_MS;
   const unavailableInterval = options.unavailableIntervalMs ?? USAGE_POLL_UNAVAILABLE_INTERVAL_MS;
 
@@ -186,7 +191,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     schedule(nextInterval(state), waitingForKey(state), Date.now());
 
   // 投げても次を予約する: `refresh` の頭（`options.env()`・`options.identity()`）が投げると拒否で返り、`.then(scheduleAfter)` だけでは予約が途切れて枠の観測が止まるため。
-  // 直接 `refresh()` を呼んだ呼び手には拒否のまま返す（受けるのは骨組みが起こす回だけ）。
+  // 直接 `refresh()` を呼んだ呼び手には拒否のまま返す（受けるのはタイマーが起こす回だけ）。
   const runThenSchedule = () => {
     void refresh()
       .catch((error: unknown) => {
