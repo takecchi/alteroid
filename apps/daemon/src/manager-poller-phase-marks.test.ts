@@ -33,6 +33,7 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
       },
       settleStalledUsageWakes: step('usage-wakes'),
       renotifyStalledDenials: step('denials'),
+      noteSilentManagers: step('silence'),
       deliverHeldMessages: step('held-messages'),
       repairStrandedTasks: step('task-follow'),
     } as unknown as ManagerPool;
@@ -53,6 +54,8 @@ describe('委譲の見回りは段ごとに印を打つ（#4485）', () => {
       'run:usage-wakes',
       'poller:denials',
       'run:denials',
+      'poller:silence',
+      'run:silence',
       'poller:held-messages',
       'run:held-messages',
       'poller:task-follow',

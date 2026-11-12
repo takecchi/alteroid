@@ -1809,6 +1809,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     renotifyStalledDenials() {
       throw new Error('spec 生成専用のスタブ: 止まった拒否は知らせ直さない');
     },
+    noteSilentManagers() {
+      throw new Error('spec 生成専用のスタブ: 無音の担当は見張らない');
+    },
     sweepRescueRefs() {
       throw new Error('spec 生成専用のスタブ: 退避 ref は掃かない');
     },

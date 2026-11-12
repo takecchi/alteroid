@@ -8,18 +8,21 @@ function fakeManagers(
   flush: () => Promise<void> | void = () => undefined,
   settle: () => Promise<void> | void = () => undefined,
   renotify: () => Promise<void> | void = () => undefined,
+  silence: () => Promise<void> | void = () => undefined,
 ): {
   managers: ManagerPool;
   calls: () => number;
   flushCalls: () => number;
   settleCalls: () => number;
   renotifyCalls: () => number;
+  silenceCalls: () => number;
   order: () => readonly string[];
 } {
   let calls = 0;
   let flushCalls = 0;
   let settleCalls = 0;
   let renotifyCalls = 0;
+  let silenceCalls = 0;
   const order: string[] = [];
   const managers: ManagerPool = fakeManagerPool({
     list: () => {
@@ -46,6 +49,11 @@ function fakeManagers(
       order.push('renotifyStalledDenials');
       await renotify();
     },
+    async noteSilentManagers() {
+      silenceCalls += 1;
+      order.push('noteSilentManagers');
+      await silence();
+    },
   });
   return {
     managers,
@@ -53,6 +61,7 @@ function fakeManagers(
     flushCalls: () => flushCalls,
     settleCalls: () => settleCalls,
     renotifyCalls: () => renotifyCalls,
+    silenceCalls: () => silenceCalls,
     order: () => order,
   };
 }
@@ -124,6 +133,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       'flushWithheldReports',
       'settleStalledUsageWakes',
       'renotifyStalledDenials',
+      'noteSilentManagers',
     ]);
 
     poller.stop();
@@ -176,6 +186,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       'flushWithheldReports',
       'settleStalledUsageWakes',
       'renotifyStalledDenials',
+      'noteSilentManagers',
     ]);
 
     poller.stop();
@@ -232,9 +243,46 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       'flushWithheldReports',
       'settleStalledUsageWakes',
       'renotifyStalledDenials',
+      'noteSilentManagers',
     ]);
 
     poller.stop();
+  });
+
+  it('renotifyStalledDenials() の後ろで noteSilentManagers() も呼ぶ。前の段が投げても走り、自身が投げてもポーラーは落ちない', async () => {
+    const ok = fakeManagers(() => undefined);
+    const okPoller = startManagerPolling({ managers: ok.managers, intervalMs: 10_000 });
+    await okPoller.refresh();
+    okPoller.stop();
+    expect(ok.silenceCalls()).toBe(1);
+    expect(ok.order().slice(-2)).toEqual(['renotifyStalledDenials', 'noteSilentManagers']);
+
+    const prior = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => {
+        throw new Error('知らせ直しに失敗した（模擬）');
+      },
+    );
+    const priorPoller = startManagerPolling({ managers: prior.managers, intervalMs: 10_000 });
+    await priorPoller.refresh();
+    priorPoller.stop();
+    expect(prior.silenceCalls()).toBe(1);
+
+    const own = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => {
+        throw new Error('無音の見張りに失敗した（模擬）');
+      },
+    );
+    const ownPoller = startManagerPolling({ managers: own.managers, intervalMs: 10_000 });
+    await expect(ownPoller.refresh()).resolves.toBeUndefined();
+    ownPoller.stop();
+    expect(own.calls()).toBeGreaterThanOrEqual(1);
   });
 
   it('settleStalledUsageWakes() が投げても renotifyStalledDenials() は走る', async () => {

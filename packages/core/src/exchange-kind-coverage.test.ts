@@ -486,6 +486,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'denial-renotify.ts': {
     '#renotifyOne': 'thinning',
   },
+  // running のまま無音の担当への知らせ（A2）: 知らせた episode は failure、出来事が戻ったときの日誌は recovery（受信箱へは出さない）。どちらも `#` 付きの私的メソッド
+  'manager-silence-watch.ts': {
+    '#notify': 'failure',
+    '#recover': 'recovery',
+  },
   // 生ログの退避の継続性の日誌（旧 `Pool#handleEvent` の archive の case）。同じ検査をここへ移した。
   'archive-receiver.ts': {
     onArchive: 'failure',
@@ -650,6 +655,7 @@ const EXCHANGE_SOURCES = [
   'manager-resume.ts',
   'manager-self-fenced.ts',
   'manager-session.ts',
+  'manager-silence-watch.ts',
   'manager-waiting.ts',
   'manager.ts',
   'push-ledger.ts',

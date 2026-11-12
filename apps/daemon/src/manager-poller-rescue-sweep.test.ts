@@ -9,6 +9,7 @@ function poolWith(sweep: () => Promise<void>): ManagerPool {
     flushWithheldReports: async () => undefined,
     settleStalledUsageWakes: async () => [],
     renotifyStalledDenials: async () => undefined,
+    noteSilentManagers: async () => undefined,
     deliverHeldMessages: async () => undefined,
     autoFoldUnderPressure: async () => undefined,
     sweepRescueRefs: sweep,
