@@ -130,9 +130,10 @@ export class FsAttachmentStore implements AttachmentStore {
     const id = randomUUID();
     const dir = join(this.#dir, id);
     await mkdir(dir, { recursive: true });
+    const tmp = join(dir, `${DATA_FILE}.tmp.${process.pid}.${randomUUID().slice(0, 8)}`);
+    const out = createWriteStream(tmp, { mode: 0o600 });
     try {
       const meter = new AttachmentStreamMeter(plan);
-      const tmp = join(dir, `${DATA_FILE}.tmp.${process.pid}.${randomUUID().slice(0, 8)}`);
       await pipeline(
         body,
         async function* (source: AsyncIterable<Uint8Array>) {
@@ -141,7 +142,7 @@ export class FsAttachmentStore implements AttachmentStore {
             yield chunk;
           }
         },
-        createWriteStream(tmp, { mode: 0o600 }),
+        out,
       );
       const done = meter.finish();
       const meta: AttachmentMeta = {
@@ -159,6 +160,10 @@ export class FsAttachmentStore implements AttachmentStore {
       await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(meta)}\n`, { mode: 0o600 });
       return meta;
     } catch (error) {
+      // 書き込み先が閉じるのを待ってから消す: 流れが先に落ちると pipeline は書き込み先の open の完了前に reject し、
+      // 後から open が一時ファイルを作ると、先に済ませた rm をすり抜けて 0 バイトの `.tmp.*` が残るため
+      out.destroy();
+      if (!out.closed) await new Promise<void>((done) => out.once('close', () => done()));
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
