@@ -268,29 +268,6 @@ const KINDS: Append[] = [
   } as Append,
   /* 21 */ { type: 'external_event', source: 'cron', summary: '定刻の合図' } as Append,
   /* 22 */ {
-    type: 'worker_wait',
-    openedAt: '2026-10-26T01:00:00.000Z',
-    tasks: 2,
-    turns: 5,
-    byCause: { input: 1, notification: 3, continuation: 1 },
-    toolless: 2,
-    notifications: 3,
-    submits: 4,
-    sources: { human: 1, task: 3 },
-    settled: true,
-  } as Append,
-  /* 23 */ {
-    type: 'worker_wait',
-    openedAt: '2026-10-26T01:00:00.000Z',
-    tasks: 1,
-    turns: 1,
-    byCause: { input: 0, notification: 1, continuation: 0 },
-    toolless: 0,
-    notifications: 1,
-    submits: 0,
-    settled: false,
-  } as Append,
-  /* 24 */ {
     type: 'turn_usage',
     layer: 'clone',
     site: 'session',
@@ -301,7 +278,7 @@ const KINDS: Append[] = [
       'claude-haiku': totals(0.001, 10, 1, 5, 0),
     },
   } as Append,
-  /* 25 */ {
+  /* 23 */ {
     type: 'turn_usage',
     layer: 'manager',
     site: 'distill',
@@ -320,7 +297,7 @@ const KINDS: Append[] = [
       { trigger: 'manual', preTokens: 90_000 },
     ],
   } as Append,
-  /* 26 */ {
+  /* 24 */ {
     type: 'turn_usage',
     layer: 'clone',
     site: 'peer',
@@ -328,7 +305,7 @@ const KINDS: Append[] = [
     models: { 'claude-opus': totals(0.5, 10, 10) },
     contextUsage: CTX_ERROR,
   } as Append,
-  /* 27 */ {
+  /* 25 */ {
     type: 'turn_usage',
     layer: 'clone',
     site: 'session',
@@ -336,7 +313,7 @@ const KINDS: Append[] = [
     models: { 'claude-opus': totals(0.25, 10, 10) },
     contextUsage: CTX_SPARSE,
   } as Append,
-  /* 28 */ {
+  /* 26 */ {
     type: 'context_usage',
     layer: 'clone',
     site: 'session',
@@ -344,7 +321,7 @@ const KINDS: Append[] = [
     turnSucceeded: true,
     contextUsage: CTX_FULL,
   } as Append,
-  /* 29 */ {
+  /* 27 */ {
     type: 'context_usage',
     layer: 'manager',
     site: 'session',
@@ -352,7 +329,7 @@ const KINDS: Append[] = [
     turnSucceeded: false,
     contextUsage: CTX_BARE,
   } as Append,
-  /* 30 */ {
+  /* 28 */ {
     type: 'turn_timing',
     triggers: ['human_message', 'timer'],
     batchSize: 2,
@@ -375,7 +352,7 @@ const KINDS: Append[] = [
     sdk: { durationMs: 12_000, durationApiMs: 9000, numTurns: 3 },
     tokens: { input: 100, cacheRead: 80_000, cacheCreation: 5000, output: 400 },
   } as Append,
-  /* 31 */ {
+  /* 29 */ {
     type: 'turn_timing',
     triggers: [],
     batchSize: 0,
@@ -384,7 +361,7 @@ const KINDS: Append[] = [
     totalMs: 80,
     phases: {},
   } as Append,
-  /* 32 */ {
+  /* 30 */ {
     type: 'http_timing',
     windowStartedAt: '2026-10-26T02:00:00.000Z',
     windowMs: 600_000,
@@ -437,7 +414,7 @@ const KINDS: Append[] = [
       },
     ],
   } as Append,
-  /* 33 */ {
+  /* 31 */ {
     type: 'http_timing',
     windowStartedAt: '2026-10-26T02:10:00.000Z',
     windowMs: 30_000,
@@ -445,7 +422,7 @@ const KINDS: Append[] = [
     routes: [],
     slowest: [],
   } as Append,
-  /* 34 */ {
+  /* 32 */ {
     type: 'token_rotation',
     event: 'rotated',
     signal: 'reached',
@@ -456,23 +433,23 @@ const KINDS: Append[] = [
     recoveredSource: 'trial',
     text: '鍵を撒き直した',
   } as Append,
-  /* 35 */ {
+  /* 33 */ {
     type: 'token_rotation',
     event: 'parked',
     tokenId: 'tok-1',
     earliestAt: '2026-10-26T05:00:00.000Z',
     text: '全部の鍵が止まった',
   } as Append,
-  /* 36 */ { type: 'token_rotation', event: 'parked', text: '戻る時刻が取れない' } as Append,
-  /* 37 */ {
+  /* 34 */ { type: 'token_rotation', event: 'parked', text: '戻る時刻が取れない' } as Append,
+  /* 35 */ {
     type: 'token_rotation',
     event: 'exhausted',
     signal: 'quota_rejected',
     earliestAt: '2026-10-26T06:00:00.000Z',
     text: '候補が尽きた',
   } as Append,
-  /* 38 */ { type: 'token_rotation', event: 'exhausted', text: 'プールが空' } as Append,
-  /* 39 */ {
+  /* 36 */ { type: 'token_rotation', event: 'exhausted', text: 'プールが空' } as Append,
+  /* 37 */ {
     type: 'token_rotation',
     event: 'not_rotated',
     signal: 'none',
@@ -480,7 +457,7 @@ const KINDS: Append[] = [
     tokenId: 'tok-1',
     text: '見直したが変えなかった',
   } as Append,
-  /* 40 */ {
+  /* 38 */ {
     type: 'subagent_stall',
     agentId: 'agent-1',
     agentType: 'worker',
@@ -490,7 +467,7 @@ const KINDS: Append[] = [
     outcome: 'woken',
     text: '空転したので起こした',
   } as Append,
-  /* 41 */ {
+  /* 39 */ {
     type: 'subagent_stall',
     agentId: 'agent-2',
     ownedTaskCount: 0,
@@ -499,30 +476,7 @@ const KINDS: Append[] = [
     outcome: 'limit_reached',
     text: '再開の上限に達した',
   } as Append,
-  /* 42 */ {
-    type: 'inbox_flow',
-    windowStartedAt: '2026-10-26T03:00:00.000Z',
-    arrived: {
-      total: 5,
-      byType: [
-        { type: 'human_message', count: 3 },
-        { type: 'timer', count: 2 },
-      ],
-    },
-    delivered: { total: 4, byType: [{ type: 'human_message', count: 4 }] },
-    settled: { total: 0, byType: [] },
-    pending: { count: 1, oldestAt: '2026-10-26T03:30:00.000Z' },
-    retained: { unread: 1, redelivered: 0, pendingCollapse: 2 },
-  } as Append,
-  /* 43 */ {
-    type: 'inbox_flow',
-    windowStartedAt: '2026-10-26T03:00:00.000Z',
-    arrived: { total: 0, byType: [] },
-    delivered: { total: 0, byType: [] },
-    settled: { total: 0, byType: [] },
-    pending: { count: 0 },
-  } as Append,
-  /* 44 */ {
+  /* 40 */ {
     type: 'github_observation',
     observedBy: 'clone',
     repo: 'acme/app',
@@ -536,14 +490,14 @@ const KINDS: Append[] = [
       ci: { pulls: 3, success: 1, failure: 1, pending: 1, checks: 'build/test' },
     },
   } as Append,
-  /* 45 */ {
+  /* 41 */ {
     type: 'github_observation',
     observedBy: 'clone',
     repo: 'acme/app',
     query: 'is:open',
     result: { status: 'ok', openIssues: 0, openPulls: 0, truncated: false },
   } as Append,
-  /* 46 */ {
+  /* 42 */ {
     type: 'github_observation',
     observedBy: 'manager',
     repo: 'acme/lib',
@@ -556,7 +510,7 @@ const KINDS: Append[] = [
       ciUnavailable: 'checks API が 403',
     },
   } as Append,
-  /* 47 */ {
+  /* 43 */ {
     type: 'github_observation',
     observedBy: 'clone',
     repo: 'acme/app',
@@ -564,7 +518,7 @@ const KINDS: Append[] = [
     limit: 50,
     result: { status: 'failed', reason: 'rate limit' },
   } as Append,
-  /* 48 */ {
+  /* 44 */ {
     type: 'conversation_deleted',
     deletedConversationId: 'conv-gone',
     deletedBy: 'operator',
@@ -580,14 +534,12 @@ const ALL_TYPES = [
   'memory_update',
   'daily_report',
   'external_event',
-  'worker_wait',
   'turn_usage',
   'token_rotation',
   'subagent_stall',
   'context_usage',
   'turn_timing',
   'http_timing',
-  'inbox_flow',
   'github_observation',
   'conversation_deleted',
 ];
@@ -714,7 +666,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'id-kinds',
     covers:
-      '全種別（17 種・各種別の枝）を id で全文読み: exchange の相手・添付と受け取れなかった添付（全件）・本文が空・decision の宛先と人間の操作・escalation の4状態・tool_use の入力（object／無し／JSON にならない値）・memory_update の旧形式・turn_usage の内訳・文脈・compaction・context_usage・turn_timing・http_timing・token_rotation の各 event・subagent_stall・inbox_flow・github_observation・conversation_deleted',
+      '全種別（15 種・各種別の枝）を id で全文読み: exchange の相手・添付と受け取れなかった添付（全件）・本文が空・decision の宛先と人間の操作・escalation の4状態・tool_use の入力（object／無し／JSON にならない値）・memory_update の旧形式・turn_usage の内訳・文脈・compaction・context_usage・turn_timing・http_timing・token_rotation の各 event・subagent_stall・github_observation・conversation_deleted',
     seed: seedKinds,
     steps: KINDS.map((_, index) => ({ args: { id: `id-${String(index + 1)}` } })),
   },
@@ -1281,25 +1233,23 @@ describe('journal_read の出力の固定（場面ごとの全文と字数）', 
     expect(text('id-kinds#15')).toContain('undefined');
     expect(text('id-kinds#16')).toContain('12345');
     expect(text('id-kinds#18')).toContain('bytes=不明(旧形式)');
-    expect(text('id-kinds#25')).toContain('⚠reset');
-    expect(text('id-kinds#25')).toContain('[分類なし]');
-    expect(text('id-kinds#26')).toContain('測れなかった');
-    expect(text('id-kinds#34')).toContain('src=trial');
-    expect(text('id-kinds#35')).toContain('撒いた鍵は 2026-10-26T05:00:00.000Z まで通らない');
-    expect(text('id-kinds#36')).toContain('通るようになる時刻が取れていない');
-    expect(text('id-kinds#37')).toContain('いちばん早く戻る');
-    expect(text('id-kinds#38')).toContain('候補が1本も無い');
-    expect(text('id-kinds#42')).toContain('残存: unread=1');
-    expect(text('id-kinds#43')).toContain('（無し）');
-    expect(text('id-kinds#44')).toContain('limit に達した');
-    expect(text('id-kinds#47')).toContain('取れなかった: rate limit');
-    expect(text('id-kinds#48')).toContain('会話 conv-gone を削除した');
+    expect(text('id-kinds#23')).toContain('⚠reset');
+    expect(text('id-kinds#23')).toContain('[分類なし]');
+    expect(text('id-kinds#24')).toContain('測れなかった');
+    expect(text('id-kinds#32')).toContain('src=trial');
+    expect(text('id-kinds#33')).toContain('撒いた鍵は 2026-10-26T05:00:00.000Z まで通らない');
+    expect(text('id-kinds#34')).toContain('通るようになる時刻が取れていない');
+    expect(text('id-kinds#35')).toContain('いちばん早く戻る');
+    expect(text('id-kinds#36')).toContain('候補が1本も無い');
+    expect(text('id-kinds#40')).toContain('limit に達した');
+    expect(text('id-kinds#43')).toContain('取れなかった: rate limit');
+    expect(text('id-kinds#44')).toContain('会話 conv-gone を削除した');
     expect(text('id-paged#1')).toContain('ここで切れている');
     expect(text('id-paged#4')).toContain('末尾を越えている');
     expect(text('id-lookup#2')).toContain('在るが読めない');
     expect(text('id-lookup#3')).toContain('は無い');
     expect(text('list-kinds#1')).toContain('ほか 2 件（全件は journal_read id=<id>）');
-    expect(text('list-kinds#9')).toContain('…ほか 2 モデル');
+    expect(text('list-kinds#8')).toContain('…ほか 2 モデル');
     expect(text('list-basic#1')).toContain('tool_use が今回の');
     expect(text('list-basic#11')).not.toContain('tool_use が今回の');
     expect(text('list-basic#12')).not.toContain('tool_use が今回の');

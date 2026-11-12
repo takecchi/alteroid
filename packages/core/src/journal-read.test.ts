@@ -146,29 +146,6 @@ describe('journal_read', () => {
     expect(await call('journal_read', { types: ['daily_report'] })).toContain('当たる日誌は無い');
   });
 
-  it('worker_wait は空回りが目で分かる1行として出る', async () => {
-    const stores = createMemoryStores();
-    await stores.journal.append({
-      type: 'worker_wait',
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 3,
-      turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      settled: true,
-    });
-    const call = tools(stores);
-
-    const reply = await call('journal_read', { types: ['worker_wait'] });
-    expect(reply).toContain('作業者 3 体を待つあいだに 41 ターン');
-    expect(reply).toContain('通知 3');
-    expect(reply).toContain('自己継続 37');
-    expect(reply).toContain('話しかけ 1');
-    expect(reply).toContain('38 ターンは道具を1つも動かしていない');
-  });
-
   it('turn_usage は cache read/write が潰されずに1行として出て、reset の印は隠れない', async () => {
     const stores = createMemoryStores();
     await stores.journal.append({
@@ -268,7 +245,7 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     expect(reply).toContain('tool_use の input');
     // turn_timing（#5086）も自由文を持たないので、探す対象に入らない側に並ぶ
     expect(reply).toContain(
-      'tool_use の input・worker_wait・turn_usage・context_usage・turn_timing・http_timing・inbox_flow・github_observation',
+      'tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation',
     );
     expect(reply).not.toContain('日誌はまだ空');
   });

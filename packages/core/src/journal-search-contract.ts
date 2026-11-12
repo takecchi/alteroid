@@ -56,16 +56,13 @@ export async function verifyJournalStoreSearchContract(
     text: `${TAG}: gamma\ndelta`,
   });
   const fieldless = await journal.append({
-    type: 'worker_wait',
-    openedAt: new Date().toISOString(),
-    tasks: 1,
-    turns: 1,
-    byCause: { notification: 0, continuation: 0, input: 0 },
-    toolless: 0,
-    notifications: 0,
-    submits: 0,
-    settled: true,
-  } as never);
+    type: 'http_timing',
+    windowStartedAt: new Date().toISOString(),
+    windowMs: 0,
+    requests: 0,
+    routes: [],
+    slowest: [],
+  });
 
   const ids = async (q: string, extra: { limit?: number } = {}): Promise<string[]> =>
     (await journal.list({ q, ...extra })).map((entry) => entry.id);
@@ -175,13 +172,13 @@ export async function verifyJournalStoreSearchContract(
   if ((await ids('\n')).includes(fieldless.id)) {
     throw new Error(
       'JournalStore の q 契約（欄ごとに当てる）が破れている — ' +
-        `探す欄を持たない種別（worker_wait。id=${fieldless.id}）が、q: '\\n' に当たった。`,
+        `探す欄を持たない種別（http_timing。id=${fieldless.id}）が、q: '\\n' に当たった。`,
     );
   }
   if (!(await ids('')).includes(fieldless.id)) {
     throw new Error(
       "JournalStore の q 契約（''=絞らない）が破れている — " +
-        `q: '' が、探す欄を持たない種別（worker_wait。id=${fieldless.id}）を返さなかった。`,
+        `q: '' が、探す欄を持たない種別（http_timing。id=${fieldless.id}）を返さなかった。`,
     );
   }
 

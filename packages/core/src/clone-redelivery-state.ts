@@ -16,7 +16,7 @@ export class CloneRedeliveryState {
     this.#redelivered.delete(id);
   }
 
-  /** 試験の観測口（`retainedSizesForTest`）だけが読む。本番の経路は呼ばない。 */
+  /** 試験の観測口（`retainedSizesForTesting`）だけが読む。本番の経路は呼ばない。 */
   get redeliveredSize(): number {
     return this.#redelivered.size;
   }

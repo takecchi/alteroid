@@ -59,7 +59,7 @@ describe('日誌の検索の断りの並びは、SEARCHABLE_FIELDS_BY_TYPE か�
         !rel.includes('/generated/'),
     );
     expect(files.length).toBeGreaterThan(100);
-    const handWritten = /`?worker_wait`?・`?turn_usage`?/;
+    const handWritten = /`?turn_usage`?・`?context_usage`?/;
     const offenders = files.filter((rel) =>
       handWritten.test(readFileSync(path.join(ROOT, rel), 'utf8')),
     );

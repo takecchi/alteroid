@@ -15,7 +15,7 @@ export const MANAGER_SILENCE_NOTICE_MS = 30 * 60_000;
  * **`mirror` を数えない**: SDK の `sessionStoreFlush` の既定は `'batched'` で、時間基準の flush が無く、ターンの終わり（`result`）か
  * 溜まりが 500 件／1 MiB を超えたときにしか届かない。長い 1 ターンの間は 1 本も届かないので、無音の信号に使うと進んでいる担当を無音と取り違える。
  * 数えない他の出来事: `usage`・`context_usage`・`usage_notice`・`rate_limit`（ターン境界の外でも flush される）、`archive`、`rescue_*`、
- * `external_output`、`project_key`（mirror と対で出る）、`worker_wait`、`closed`・`resume_failed`（別の経路が扱う）。
+ * `external_output`、`project_key`（mirror と対で出る）、`closed`・`resume_failed`（別の経路が扱う）。
  */
 const PROGRESS_EVENT_TYPES: ReadonlySet<string> = new Set([
   'tool_use',

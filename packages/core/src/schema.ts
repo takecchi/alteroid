@@ -312,25 +312,6 @@ export const unreadableInboxEventSchema = z.object({
 });
 export type UnreadableInboxEvent = z.infer<typeof unreadableInboxEventSchema>;
 
-// `inboxEventSchema` の判別子を手で列挙する: 機械的に導出すると `InboxEvent['type']` との対応を静的に保証できないため
-const inboxFlowByTypeCountSchema = z.object({
-  total: z.number().int().nonnegative(),
-  byType: z.array(
-    z.object({
-      type: z.enum([
-        'human_message',
-        'human_answer',
-        'distill',
-        'timer',
-        'external',
-        'self_initiative',
-        'manager_message',
-      ]) satisfies z.ZodType<InboxEvent['type']>,
-      count: z.number().int().nonnegative(),
-    }),
-  ),
-});
-
 // HTTP の要求の中の DB の内訳（#5089）。`wallMs` は問い合わせが1本以上走っていた時間で、並行した分を二重に数えない
 const httpTimingDbSchema = z.object({
   count: z.number().int().nonnegative(),
@@ -405,50 +386,6 @@ export const contextUsageObservationSchema = z.object({
 });
 
 export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
-
-/**
- * 作業者を待つ区間の計測（`worker_wait`）の欄。runner から daemon へ送る出来事（`runner-protocol.ts`）と、日誌の行（下の `journalEntrySchema`）が、この1つを広げて使う:
- * 片方にだけ欄を足すと、もう片方が知らない欄として黙って落とすため。
- *
- * 1ターン1行ではなく委譲1区間1行にする: ターンの回数と時刻は既に日誌にあり、足りないのは契機だけなので、1ターン1行は日誌でいちばん書き込みの多い経路を二重にする。
- * 「どの作業者だったか」は `tool_use` の日誌にある。
- * 数えるのは「マネージャーのターン」だけで、作業者（Task サブエージェント）のターンは出てこない。作業者は同一の SDK セッションの中で走り、SDK が層をまたいで合算して降ろすので分離できない。分離しようとしないこと。
- */
-export const workerWaitMeasureShape = {
-  openedAt: isoDateTime,
-  /** `task_started` の件数で、作業者の人数ではない（同じ `task_id` が二度来れば二度数える）。ambient task も間引かない。 */
-  tasks: z.number().int().nonnegative(),
-  turns: z.number().int().nonnegative(),
-  /** 3つの合計は必ず `turns` と一致する（排他で1件だけ数える）。 */
-  byCause: z.object({
-    input: z.number().int().nonnegative(),
-    /** 「通知の直後に回ったターン」であって、その通知が原因だったことの証明ではない。 */
-    notification: z.number().int().nonnegative(),
-    /**
-     * 消去法で出している値: 分類の漏れ（まだ知らない第4の契機）も黙ってここへ流れ込む。
-     * 「SDK/CLI 側の自己継続である」は解釈であって観測ではない——alteroid はこの部分のコードを1行も持たないので
-     * 直接確かめる手段が無い。
-     */
-    continuation: z.number().int().nonnegative(),
-  }),
-  /** マネージャー自身の `PostToolUse` が発火しなかったことだけを言う（本文だけ書いて終わったターンも入る）。作業者の道具は混ぜない。 */
-  toolless: z.number().int().nonnegative(),
-  /** 対応する `task_started` を観測していない通知も数えるので、`tasks` を超えうる。 */
-  notifications: z.number().int().nonnegative(),
-  /** `turns` と食い違うこと自体が観測だが、食い違いの原因までは言っていない。 */
-  submits: z.number().int().nonnegative(),
-  /**
-   * 取れた分だけ載せ、1件も取れなければフィールドごと省く（`{}` を置かない）。
-   * `system` は「機械に起こされたターン」の数で、通知か SDK の自己継続かの内訳ではない。
-   * 無いことは機械に起こされていないではない: SDK JSDoc は「Payloads may omit it while the field rolls out」[sdk-verbatim UserPromptSubmitHookInput.source] と言っている。
-   */
-  sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
-  /**
-   * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う。`false` は閉じた時点で完了通知が未着の委譲があったことだけを言い、
-   * 通知が失われたことは意味しない。`true` でも最後の `result` が来ないまま畳まれると `turns` に含まれない（`submits` との突き合わせで気づける）。
-   */
-  settled: z.boolean(),
-};
 
 // `DroppedSignalDigest`（`dropped-signals.ts`）の写し。型の対応は `dropped-signals.ts` が `satisfies` で縛る
 const droppedSignalDigestSchema = z.object({
@@ -684,12 +621,6 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     summary: z.string(),
   }),
   z.object({
-    type: z.literal('worker_wait'),
-    id: z.string(),
-    at: isoDateTime,
-    ...workerWaitMeasureShape,
-  }),
-  z.object({
     type: z.literal('turn_usage'),
     id: z.string(),
     at: isoDateTime,
@@ -833,32 +764,6 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       }),
     ),
   }),
-  // 新しくは書かない（デーモンは毎ターンの1行を止めた）。古い行を読み込みで落とさないために variant だけ残す: 外すと storage の読み出しが未知の type の行を「読めない行」として落とし、`get` は `UnreadableJournalEntryError` を投げる
-  // `Inbox#unshift` は `delivered` に数えない: 戻される合図は保持される前に `push` で数えられていて、数え直すと二重に計上されるため
-  // `InboxStore.pending()` が読めなければこの窓は書かず、カウンタも戻さない: 次のターンへ持ち越せば、この窓ぶんの到着・配達・消し込みを失わずに済むため
-  z.object({
-    type: z.literal('inbox_flow'),
-    id: z.string(),
-    at: isoDateTime,
-    // 必ず持たせる: カウンタは器が入れ替わると0から始まり、無いと「いつからの数か」が消えて器を跨いだ比較が壊れるため
-    windowStartedAt: isoDateTime,
-    arrived: inboxFlowByTypeCountSchema,
-    delivered: inboxFlowByTypeCountSchema,
-    settled: inboxFlowByTypeCountSchema,
-    pending: z.object({
-      count: z.number().int().nonnegative(),
-      oldestAt: isoDateTime.optional(),
-    }),
-    // 窓ごとに0へ戻さない: 増分ではなく時点の値で、書いた直後にクリアすると「残っている件数」という意味が壊れるため
-    // `.optional()` にして `default` で埋めない: この欄が増える前の行が読み出しで丸ごと落ちるため、無いことは「観測していない」であって「0件だった」ではない
-    retained: z
-      .object({
-        unread: z.number().int().nonnegative(),
-        redelivered: z.number().int().nonnegative(),
-        pendingCollapse: z.number().int().nonnegative(),
-      })
-      .optional(),
-  }),
   // `observedBy` を必須にする: 観測した側が名乗った申告で、デーモンは値を確かめられないため
   // 古さを判定しない: `at` をそのまま返し、新しさの判断は読み手に任せるため
   z.object({
@@ -937,7 +842,7 @@ export type _AssertTraceActionMatchesLikeType = AssertTrue<
 export type _AssertJournalDiagnosticsMatchesLikeType = AssertTrue<
   Extract<
     JournalEntry,
-    { type: 'worker_wait' | 'turn_usage' | 'context_usage' | 'inbox_flow' }
+    { type: 'turn_usage' | 'context_usage' }
   > extends JournalDiagnosticsEntryLike
     ? true
     : false
@@ -963,14 +868,12 @@ const journalEntryTypeNames = {
   memory_update: true,
   daily_report: true,
   external_event: true,
-  worker_wait: true,
   turn_usage: true,
   token_rotation: true,
   subagent_stall: true,
   context_usage: true,
   turn_timing: true,
   http_timing: true,
-  inbox_flow: true,
   github_observation: true,
   conversation_deleted: true,
 } satisfies Record<JournalEntryType, true>;

@@ -197,81 +197,6 @@ describe('落とした記録の跡', () => {
     expect(withoutUnavailable).not.toContain('unavailable');
   });
 
-  it('worker_wait は自由文が無いので数値をそのまま載せる', () => {
-    // byCause の3値は互いに違う値にする: 同じ値だとキーと値の結び付きを入れ替えても出力が変わらない。
-    const byCause = { input: 1, notification: 3, continuation: 37 };
-    expect(new Set(Object.values(byCause)).size).toBe(3);
-
-    const shape = journalEntryShape({
-      type: 'worker_wait',
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 5,
-      turns: 41,
-      byCause,
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      settled: false,
-    });
-
-    expect(shape).toBe(
-      'worker_wait openedAt=2026-08-20T00:00:00.000Z tasks=5 turns=41 ' +
-        'byCause.input=1 byCause.notification=3 byCause.continuation=37 toolless=38 ' +
-        'notifications=3 submits=0 settled=false',
-    );
-    expect(shape).not.toContain('sources');
-
-    const withSources = journalEntryShape({
-      type: 'worker_wait',
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 5,
-      turns: 41,
-      byCause,
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      sources: { system: 3, user: 1 },
-      settled: false,
-    });
-
-    expect(withSources).toBe(
-      'worker_wait openedAt=2026-08-20T00:00:00.000Z tasks=5 turns=41 ' +
-        'byCause.input=1 byCause.notification=3 byCause.continuation=37 toolless=38 ' +
-        'notifications=3 submits=0 sources=2 settled=false',
-    );
-    expect(withSources).not.toContain('system');
-    expect(withSources).not.toContain('user');
-
-    // 上のフィクスチャの値を将来揃えられても効くよう、1欄だけに印を置いて残りを 0 にする。
-    const causes = ['input', 'notification', 'continuation'] as const;
-    const oneHotByCause = (marked: (typeof causes)[number], marker: number) => ({
-      input: marked === 'input' ? marker : 0,
-      notification: marked === 'notification' ? marker : 0,
-      continuation: marked === 'continuation' ? marker : 0,
-    });
-
-    for (const marked of causes) {
-      const marker = 11 * (causes.indexOf(marked) + 1);
-      const oneHot = journalEntryShape({
-        type: 'worker_wait',
-        openedAt: '2026-08-20T00:00:00.000Z',
-        tasks: 5,
-        turns: 41,
-        byCause: oneHotByCause(marked, marker),
-        toolless: 38,
-        notifications: 3,
-        submits: 0,
-        settled: false,
-      });
-
-      expect(oneHot).toContain(`byCause.${marked}=${marker}`);
-      for (const other of causes) {
-        if (other === marked) continue;
-        expect(oneHot).toContain(`byCause.${other}=0`);
-      }
-    }
-  });
-
   it('turn_usage は models の中身を出さず、件数と reset の有無だけを載せる', () => {
     const shape = journalEntryShape({
       type: 'turn_usage',
@@ -1499,17 +1424,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '`inboxEventShape` の `external.attachments` と同じ判断で、`tag()` は禁止。',
       },
     },
-    worker_wait: {
-      openedAt: { emit: 'tag', token: 'openedAt' },
-      tasks: { emit: 'raw', token: 'tasks' },
-      turns: { emit: 'raw', token: 'turns' },
-      byCause: { emit: 'raw', token: 'byCause.input' },
-      toolless: { emit: 'raw', token: 'toolless' },
-      notifications: { emit: 'raw', token: 'notifications' },
-      submits: { emit: 'raw', token: 'submits' },
-      sources: { emit: 'raw', token: 'sources' },
-      settled: { emit: 'raw', token: 'settled' },
-    },
     turn_usage: {
       layer: { emit: 'tag', token: 'layer' },
       site: { emit: 'tag', token: 'site' },
@@ -1564,14 +1478,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: "#981 で決めた（入れ子のどの階層も跡へ出さない）。理由は `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いてある。",
       },
-    },
-    inbox_flow: {
-      windowStartedAt: { emit: 'tag', token: 'windowStartedAt' },
-      arrived: { emit: 'raw', token: 'arrived' },
-      delivered: { emit: 'raw', token: 'delivered' },
-      settled: { emit: 'raw', token: 'settled' },
-      pending: { emit: 'raw', token: 'pending' },
-      retained: { emit: 'raw', token: 'retainedUnread' },
     },
     turn_timing: {
       triggers: { emit: 'tag', token: 'triggers' },
@@ -1928,18 +1834,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       via: { keyId: SECRET, name: SECRET },
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
     },
-    worker_wait: {
-      type: 'worker_wait',
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 5,
-      turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      sources: { system: 3, user: 1 },
-      settled: false,
-    },
     turn_usage: {
       type: 'turn_usage',
       layer: 'clone',
@@ -2000,15 +1894,6 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionId: 'sess-1',
       turnSucceeded: false,
       contextUsage: FULL_CONTEXT_USAGE,
-    },
-    inbox_flow: {
-      type: 'inbox_flow',
-      windowStartedAt: '2026-09-16T00:00:00.000Z',
-      arrived: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
-      delivered: { total: 1, byType: [{ type: 'human_message', count: 1 }] },
-      settled: { total: 0, byType: [] },
-      pending: { count: 2, oldestAt: '2026-09-15T00:00:00.000Z' },
-      retained: { unread: 1, redelivered: 1, pendingCollapse: 1 },
     },
     turn_timing: {
       type: 'turn_timing',

@@ -313,23 +313,6 @@ function renderJournalEntry(
         head: `[external_event ${field(entry.source)}]${journalAttachmentHead(entry.attachments, undefined, attachmentLimit, field)}`,
         body: entry.summary,
       };
-    case 'worker_wait': {
-      const cause = entry.byCause;
-      return {
-        head: `[worker_wait tasks=${entry.tasks} turns=${entry.turns} settled=${entry.settled}]`,
-        body:
-          `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
-          `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
-          `うち ${entry.toolless} ターンは道具を1つも動かしていない。` +
-          `UserPromptSubmit の発火は ${entry.submits} 回` +
-          (entry.sources === undefined
-            ? '（source は取れていない）'
-            : `（内訳: ${Object.entries(entry.sources)
-                .map(([source, count]) => `${source}=${count}`)
-                .join(', ')}）`) +
-          '。',
-      };
-    }
     case 'turn_usage': {
       // キャッシュの書き直しを目で分かる形にする: 潰すと測る意味が消えるため、印の行を一覧から隠さない
       const modelLines = Object.entries(entry.models)
@@ -425,30 +408,6 @@ function renderJournalEntry(
           `owned=${entry.ownedTaskCount} session=${entry.sessionTaskCount} ` +
           `wakeup=${entry.wakeupCount}]`,
         body: entry.text,
-      };
-    }
-    case 'inbox_flow': {
-      const byTypeText = (count: { byType: { type: string; count: number }[] }): string =>
-        count.byType.length === 0
-          ? '（無し）'
-          : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
-      // `retained` は見出しに出さない: 一覧の1行を太らせないため、詳細は本文（全文モード）に回す
-      const retainedLine =
-        entry.retained === undefined
-          ? ''
-          : `\n残存: unread=${entry.retained.unread} redelivered=${entry.retained.redelivered} ` +
-            `pendingCollapse=${entry.retained.pendingCollapse}`;
-      return {
-        head:
-          `[inbox_flow arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
-          `settled=${entry.settled.total} pending=${entry.pending.count}]`,
-        body:
-          `窓: ${entry.windowStartedAt} 〜 ${entry.at}\n` +
-          `到着: ${byTypeText(entry.arrived)}\n` +
-          `配達: ${byTypeText(entry.delivered)}\n` +
-          `消し込み: ${byTypeText(entry.settled)}` +
-          (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`) +
-          retainedLine,
       };
     }
     case 'github_observation': {

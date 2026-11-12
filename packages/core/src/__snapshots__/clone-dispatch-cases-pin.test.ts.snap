@@ -43,7 +43,6 @@ exports[`clone.ts の振り分け（#handle・#apply）の各 case の中身を�
   "note: if (event.workerLimit !== undefined) {await this.#note.markWorkerLimitStopped(record, event.managerId, event.workerLimit);} const noteText = event.workerLimit === undefined ? event.text : \`\${event.text}\\n\${await this.#usageWake.describeWorkerLimitKey(event.workerLimit.raw)}\`; await this.#note.journalNote(event, noteText); this.#note.emitNoteNotices(event, noteText); if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId); return;",
   "tool_use: return this.#toolUse.handle(event, record);",
   "permission_denied: return this.#denial.handle(event, record);",
-  "worker_wait: await this.#journal({type: 'worker_wait', openedAt: event.openedAt, tasks: event.tasks, turns: event.turns, byCause: event.byCause, toolless: event.toolless, notifications: event.notifications, submits: event.submits, ...(event.sources === undefined ? {} : {sources: event.sources}), settled: event.settled}); return;",
   "usage: await this.#usageReceiver.onUsage(event, fromRunnerId, record, usageTicket); return;",
   "parked_peers_closed: return this.#parkedPeers.handle(event, record);",
   "peer_usage: await this.#usageReceiver.onPeerUsage(event); return;",

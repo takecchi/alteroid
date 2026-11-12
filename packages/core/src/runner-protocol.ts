@@ -20,7 +20,6 @@ import {
   externalOutputSchema,
   jobStatusSchema,
   rescueWorktreeSchema,
-  workerWaitMeasureShape,
 } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
@@ -932,13 +931,6 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** 中身は載せない: デーモンが `GET /managers/:id/outbox/:fileId` で取りに行き、受け取ったら `DELETE` で消す。旧 runner が送らない欄は「添付が無い」と読む。 */
     files: z.array(runnerOutboxFileSchema).optional(),
     rejectedFiles: z.array(runnerOutboxRejectedFileSchema).optional(),
-  }),
-  // runner はもう出さない（計測をやめた）。入れ替え中の旧 runner が出す分を daemon が日誌へ書けるよう、型だけ残す。
-  // 計測の欄と、その意味（何を数えて何を数えないか）は `workerWaitMeasureShape`（`schema.ts`）に1つだけ置く: 日誌の行と同じ欄を使うため
-  z.object({
-    type: z.literal('worker_wait'),
-    managerId: z.string(),
-    ...workerWaitMeasureShape,
   }),
   z.object({
     type: z.literal('ask'),

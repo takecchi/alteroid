@@ -7,7 +7,7 @@ export type JournalSearchTarget = Readonly<Record<string, unknown>>;
 // 照合は「その行の種別の欄」ではなく平らな `JOURNAL_SEARCH_FIELDS` に対して行う: pg が SQL で種別ごとに分岐せずに済み、3実装がずれる余地が無い。
 // 対象にしない欄:
 // - `tool_use` の `input`: pg の jsonb のテキスト化と JS の `JSON.stringify` が同じ文字列にならず、3実装で答えが揃わない。
-// - `worker_wait` / `turn_usage` の本文: 数から組み立てた文で、自由文として保存されていない。
+// - `turn_usage` の本文: 数から組み立てた文で、自由文として保存されていない。
 // - 識別子・列挙値の欄（`actor` / `tool` / `with` / `role` など）: 混ぜると `q: "human"` が `with: 'human'` の全行に当たり、種別で絞る口の代わりに使われる。
 export const SEARCHABLE_FIELDS_BY_TYPE = {
   exchange: ['text'],
@@ -21,7 +21,6 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
   memory_update: ['summary'],
   daily_report: ['body', 'unavailable'],
   external_event: ['summary'],
-  worker_wait: [],
   // `contextUsage.error` は入れない: ネストした欄で、トップレベルの素の文字列だけを想定しているため。
   turn_usage: [],
   context_usage: [],
@@ -29,7 +28,6 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
   turn_timing: [],
   // 自由文を持たない（経路の型・SQL の頭・数だけ）
   http_timing: [],
-  inbox_flow: [],
   // `failed.reason` はネストした欄なので対象外。
   github_observation: [],
   conversation_deleted: [],

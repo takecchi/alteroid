@@ -188,42 +188,7 @@ async function startPrimed(host: RunnerHost, sessions: FakeSession[]): Promise<F
   return session;
 }
 
-const workerWaitCount = (events: readonly RunnerEvent[]): number =>
-  events.filter((event) => event.type === 'worker_wait').length;
-
-describe('runner は worker_wait を出さない（計測をやめた。旧 runner の出来事は daemon が受けて日誌へ書く）', () => {
-  it('委譲して通知を受け、ターンが回って区間が閉じる並びでも worker_wait を1件も上げない', async () => {
-    const s = setup();
-    const session = await startPrimed(s.host, s.sessions);
-
-    await session.taskStarted('task-1', { task_type: 'local_agent' });
-    await session.usedTool('Bash');
-    await session.submitPrompt({ source: 'system' });
-    await session.finish('turn1');
-    await session.taskNotification('task-1');
-    await session.finish('完了通知を契機に回った回');
-
-    expect(s.events.some((event) => event.type === 'report')).toBe(true);
-    expect(workerWaitCount(s.events)).toBe(0);
-  });
-
-  it('通知を受け切る前にセッションが畳まれても、受け切った直後に畳まれても worker_wait を上げない', async () => {
-    const s = setup();
-    const session = await startPrimed(s.host, s.sessions);
-
-    await session.taskStarted('task-1', { task_type: 'local_agent' });
-    await session.taskStarted('task-2', { task_type: 'local_agent' });
-    await session.finish('作業中');
-    await session.taskNotification('task-1');
-
-    session.endStream();
-    await vi.waitFor(() => {
-      if (!s.events.some((event) => event.type === 'closed')) throw new Error('まだ畳まれていない');
-    });
-
-    expect(workerWaitCount(s.events)).toBe(0);
-  });
-
+describe('作業者の完了通知は、ターンを起こす契機にしない', () => {
   it('task_notification を受けても #input へは1件も積まれない（守られていない前提: 作業者の完了を契機に push を呼ばない）', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);

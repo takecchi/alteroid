@@ -14,7 +14,6 @@ export const JOURNAL_TONE = {
   memory_update: 'ok',
   daily_report: 'accent',
   external_event: 'warn',
-  worker_wait: 'neutral',
   turn_usage: 'neutral',
   context_usage: 'neutral',
   turn_timing: 'neutral',
@@ -24,7 +23,6 @@ export const JOURNAL_TONE = {
   // `danger` にしない: `danger` は「その場で壊れて動いていない」ことに使っており、
   // より重い `token_rotation` の `exhausted` ですら `warn` に留めている釣り合いに合わせる。
   subagent_stall: 'warn',
-  inbox_flow: 'neutral',
   github_observation: 'neutral',
   conversation_deleted: 'neutral',
 } satisfies Record<JournalEntryType, JournalTone>;
@@ -42,14 +40,12 @@ export const JOURNAL_TYPE_LABEL = {
   memory_update: '記憶の更新',
   daily_report: '日報',
   external_event: '外からの出来事',
-  worker_wait: '作業者の待機',
   turn_usage: '1回のトークン数',
   context_usage: '文脈の埋まり具合',
   turn_timing: 'ターンの時間',
   http_timing: 'API の時間',
   token_rotation: 'トークンの切り替え',
   subagent_stall: '作業者の停滞',
-  inbox_flow: '受信箱の出入り',
   github_observation: 'GitHub の観測',
   conversation_deleted: '会話の削除',
 } satisfies Record<JournalEntryType, string>;

@@ -55,8 +55,6 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
       return false;
     case 'context_usage':
       return false;
-    case 'inbox_flow':
-      return false;
     default:
       return false;
   }

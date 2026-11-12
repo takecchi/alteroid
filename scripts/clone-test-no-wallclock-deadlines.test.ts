@@ -25,7 +25,6 @@ const TARGET_RELATIVE_PATHS: readonly string[] = [
   'clone-precompact-and-distill-tail.test.ts',
   'clone-grave-pickup-startup.test.ts',
   'clone-turn-usage.test.ts',
-  'clone-inbox-flow-journal.test.ts',
   'clone-token-pool-notice.test.ts',
   'clone-quota-hold.test.ts',
   'clone-usage-window.test.ts',

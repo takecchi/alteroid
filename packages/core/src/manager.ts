@@ -4841,7 +4841,7 @@ class Pool implements ManagerPool {
     release: () => void;
   } {
     const noGate = { wait: undefined, release: () => undefined };
-    if (!(isSessionScopedEvent(event) || event.type === 'note' || event.type === 'worker_wait')) {
+    if (!(isSessionScopedEvent(event) || event.type === 'note')) {
       return noGate;
     }
     const managerId = event.managerId;
@@ -5032,23 +5032,6 @@ class Pool implements ManagerPool {
 
       case 'permission_denied': {
         return this.#denial.handle(event, record);
-      }
-
-      case 'worker_wait': {
-        // 日誌に閉じる: 台帳には足さない（生きているマネージャーの状態ではない）。受信箱へも出さない（1区間ごとに割り込むほどの事実ではない）。
-        await this.#journal({
-          type: 'worker_wait',
-          openedAt: event.openedAt,
-          tasks: event.tasks,
-          turns: event.turns,
-          byCause: event.byCause,
-          toolless: event.toolless,
-          notifications: event.notifications,
-          submits: event.submits,
-          ...(event.sources === undefined ? {} : { sources: event.sources }),
-          settled: event.settled,
-        });
-        return;
       }
 
       case 'usage': {

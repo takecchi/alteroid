@@ -17,7 +17,6 @@ const OLD_TONE_IN_ORDER = [
   ['memory_update', 'ok'],
   ['daily_report', 'accent'],
   ['external_event', 'warn'],
-  ['worker_wait', 'neutral'],
   ['turn_usage', 'neutral'],
   ['context_usage', 'neutral'],
   // ターンの時間（#5086）は移した後に足した種別。診断の仲間として context_usage の後に置く
@@ -26,7 +25,6 @@ const OLD_TONE_IN_ORDER = [
   ['http_timing', 'neutral'],
   ['token_rotation', 'warn'],
   ['subagent_stall', 'warn'],
-  ['inbox_flow', 'neutral'],
   ['github_observation', 'neutral'],
   // 墓標は移す前の行に無い: 移した後に足した種別なので、並びの末尾に置く
   ['conversation_deleted', 'neutral'],
@@ -65,25 +63,18 @@ describe('種別の日本語名（issue #2806）', () => {
 
   it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
     expect(SEARCH_SCOPE_NOTE_JA).toBe(
-      '道具の入力・作業者の待機・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・受信箱の出入り・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
     expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });
 
-  it('読めなかった5つの種別名は言い換えた名前で、旧い名前は出ない（type の値は変えない）', () => {
+  it('読めなかった4つの種別名は言い換えた名前で、旧い名前は出ない（type の値は変えない）', () => {
     expect(journalTypeLabel('turn_usage')).toBe('1回のトークン数');
     expect(journalTypeLabel('context_usage')).toBe('文脈の埋まり具合');
     expect(journalTypeLabel('token_rotation')).toBe('トークンの切り替え');
     expect(journalTypeLabel('subagent_stall')).toBe('作業者の停滞');
-    expect(journalTypeLabel('inbox_flow')).toBe('受信箱の出入り');
     const all = JOURNAL_TYPES.map(journalTypeLabel).join('・');
-    for (const old of [
-      'ターンの消費',
-      '文脈の占有',
-      'トークンの交代',
-      '作業者の空回り',
-      '受信箱の流量',
-    ]) {
+    for (const old of ['ターンの消費', '文脈の占有', 'トークンの交代', '作業者の空回り']) {
       expect(all).not.toContain(old);
     }
   });

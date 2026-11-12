@@ -74,8 +74,6 @@ import { createCloneTools } from './tools.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 import type { UsageTotals } from './usage.js';
 
-type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
-
 // 末尾専用の一意な目印: `.repeat()` の繰り返しだと抜粋の先頭にも同じ文字列が含まれ、
 // `not.toContain` が先頭一致で落ちるため、切り詰めの外にしか無い文字列を末尾へ足す。
 const REQUEST_TAIL_MARKER = 'REQUEST-TAIL-MARKER-9f3c2a91';
@@ -2291,9 +2289,6 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...(answered === undefined ? {} : { answered }),
       });
     },
-    workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
-      emit?.({ type: 'worker_wait', managerId, ...fields });
-    },
     closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string) {
       state.alive = state.alive.filter((s) => s.managerId !== managerId);
       emit?.({ type: 'closed', managerId, status, reason });
@@ -2651,91 +2646,6 @@ describe('消費を台帳へ積む', () => {
     // 積み終わるのを待ってから見る: 待たずに見ると処理前の空を測ることになり、歯が効かない。
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
     expect(seen.filter((o) => o.succeeded === true)).toEqual([]);
-
-    await s.pool.stop();
-  });
-});
-
-describe('worker_wait — 委譲1区間ぶんの集計を日誌に残す', () => {
-  const runningJob = {
-    id: 'mgr-wait',
-    managerId: 'mgr-wait',
-    createdAt: '2026-08-01T00:00:00.000Z',
-    updatedAt: '2026-08-01T01:00:00.000Z',
-    status: 'running' as const,
-    summary: '調べもの',
-    request: '調べておいて',
-    cwd: '/work/project',
-    sessionId: 'sess-1',
-    runnerId: 'runner-primary',
-  };
-
-  it('runner から降りた worker_wait は日誌に1件だけ入る（台帳には足さない）', async () => {
-    const stores = createMemoryStores();
-    await stores.jobs.putJob(runningJob);
-    const fake = swappableRunner();
-    const s = setup(undefined, { stores, runner: fake.runner });
-    await s.pool.restore();
-
-    fake.workerWait('mgr-wait', {
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 5,
-      turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
-      toolless: 38,
-      notifications: 3,
-      submits: 0,
-      settled: true,
-    });
-
-    const entries = await vi.waitFor(async () => {
-      const found = await stores.journal.list({ types: ['worker_wait'] });
-      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
-      return found;
-    });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      type: 'worker_wait',
-      tasks: 5,
-      turns: 41,
-      byCause: { input: 1, notification: 3, continuation: 37 },
-      toolless: 38,
-      settled: true,
-    });
-    expect(entries[0]).not.toHaveProperty('sources');
-
-    const summary = (await s.pool.list()).find((job) => job.managerId === 'mgr-wait');
-    expect(summary).not.toHaveProperty('workerWait');
-    expect(JSON.stringify(summary)).not.toContain('worker_wait');
-
-    await s.pool.stop();
-  });
-
-  it('sources を渡していれば日誌にもそのまま残る', async () => {
-    const stores = createMemoryStores();
-    await stores.jobs.putJob(runningJob);
-    const fake = swappableRunner();
-    const s = setup(undefined, { stores, runner: fake.runner });
-    await s.pool.restore();
-
-    fake.workerWait('mgr-wait', {
-      openedAt: '2026-08-20T00:00:00.000Z',
-      tasks: 1,
-      turns: 1,
-      byCause: { input: 0, notification: 1, continuation: 0 },
-      toolless: 1,
-      notifications: 1,
-      submits: 1,
-      sources: { system: 1 },
-      settled: true,
-    });
-
-    const entries = await vi.waitFor(async () => {
-      const found = await stores.journal.list({ types: ['worker_wait'] });
-      if (found.length === 0) throw new Error('worker_wait がまだ日誌に無い');
-      return found;
-    });
-    expect(entries[0]).toMatchObject({ sources: { system: 1 } });
 
     await s.pool.stop();
   });

@@ -593,7 +593,7 @@ export function writeStderrLine(line: string): void {
  * 入れ子オブジェクト（`contextUsage` のような構造を持つ欄）の中へは踏み込まない: 入れ子の中に新しい自由文が
  * 増えてもこの関数の判定は知らない。増やすときは、その入れ子を持つ `case` の側で個別に決める。
  * 「入れ子は全部同じ規則で再帰的に判定する」としないのは、SDK 由来の入れ子ほど既定を「出ない」側に置きたく、
- * alteroid 自身が決める入れ子（`inbox_flow` 等）は件数だけを出すというように、入れ子ごとに判断が違うため。
+ * alteroid 自身が決める入れ子（`http_timing` 等）は件数だけを出すというように、入れ子ごとに判断が違うため。
  *
  * **唯一の例外は `tool_use` の `input` である。長さも出さない。**
  * 1. `input` は `z.unknown().optional()` で `.length` を持たず、長さを出すには `JSON.stringify` が要る。
@@ -662,16 +662,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // `source` は外から来る値なので、名前であっても長さだけにする。
     case 'external_event':
       return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
-    // 全フィールドが runner 自身の数え上げ（整数・列挙値）で自由文が無いので、`size()` へ逃がさず数値をそのまま載せる。
-    case 'worker_wait':
-      return (
-        `worker_wait openedAt=${tag(entry.openedAt)} tasks=${entry.tasks} turns=${entry.turns} ` +
-        `byCause.input=${entry.byCause.input} byCause.notification=${entry.byCause.notification} ` +
-        `byCause.continuation=${entry.byCause.continuation} toolless=${entry.toolless} ` +
-        `notifications=${entry.notifications} submits=${entry.submits}` +
-        (entry.sources === undefined ? '' : ` sources=${Object.keys(entry.sources).length}`) +
-        ` settled=${entry.settled}`
-      );
     // `models` はモデル id ごとの件数だけ載せ、中身の数値までは載せない。
     // `contextUsage` には下の `case 'context_usage'` と同じ判断が掛かる（理由はそちらに1箇所だけ書く）。
     case 'turn_usage':
@@ -743,21 +733,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         (entry.slowest[0] === undefined
           ? ''
           : ` slowestRoute=${tag(entry.slowest[0].route)} slowestMs=${entry.slowest[0].totalMs}`)
-      );
-    // 自由文を持たない（残りは全部数）ので、他の型のように長さだけに削らず、総数と滞留までそのまま出す。
-    case 'inbox_flow':
-      return (
-        `inbox_flow windowStartedAt=${tag(entry.windowStartedAt)} ` +
-        `arrived=${entry.arrived.total} delivered=${entry.delivered.total} ` +
-        `settled=${entry.settled.total} pending=${entry.pending.count}` +
-        (entry.pending.oldestAt === undefined
-          ? ''
-          : ` pendingOldestAt=${tag(entry.pending.oldestAt)}`) +
-        (entry.retained === undefined
-          ? ''
-          : ` retainedUnread=${entry.retained.unread} ` +
-            `retainedRedelivered=${entry.retained.redelivered} ` +
-            `retainedPendingCollapse=${entry.retained.pendingCollapse}`)
       );
     // `observedBy` / `repo` / `query` / `reason` は観測した側が名乗る自由文でデーモンは値を確かめられないので出さない。
     case 'github_observation':
