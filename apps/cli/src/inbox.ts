@@ -7,8 +7,9 @@ import {
   type InboxBacklogBreakdown,
 } from '@alteroid/core';
 import { splitList } from '@alteroid/logic';
+import type { InferResponseType } from 'hono/client';
 
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason, describeFailedResponse } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
@@ -23,16 +24,9 @@ interface InboxRemoveOptions {
   limit?: string;
 }
 
-interface InboxRemoveManyResult {
-  ok: true;
-  dryRun: boolean;
-  totalPending: number;
-  matched: number;
-  targeted: number;
-  removedIds: string[];
-  droppedFromDelivery: number;
-  remaining: number;
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 実行時は従来どおり素の `fetch`（`createClient` へ載せ替えない）
+type InboxRemoveManyResult = InferResponseType<DaemonClient['inbox']['remove']['$post'], 200>;
 
 export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<void> {
   const target = await resolveTarget();
@@ -112,10 +106,10 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
 /** 並べる id の上限: 数百件の id で端末と、ログへ写された出力を埋めないため（全件は日誌の `decision` 行に在る）。 */
 const STOPPED_REMOVAL_IDS_SHOWN = 10;
 
-interface StoppedRemoval {
-  removedIds: string[];
-  droppedFromDelivery: number;
-}
+type StoppedRemoval = Pick<
+  InferResponseType<DaemonClient['inbox']['remove']['$post'], 500>,
+  'removedIds' | 'droppedFromDelivery'
+>;
 
 // daemon の `inboxRemoveManyStoppedResponseSchema` の読み側: CLI は daemon の実行時コードを取り込まない（型だけ）ので、必要な 2 欄だけを手で読む。
 // 空の `removedIds`・欄の無い本文は null: 何も消えていない 500 は従来の「畳めませんでした」のままにするため。
@@ -227,8 +221,7 @@ export async function inboxShowCommand(): Promise<void> {
       ),
     );
   }
-  const breakdown = (await response.json()) as InboxBacklogBreakdown;
-  stdout.write(`${renderInboxBacklog(breakdown)}\n`);
+  stdout.write(`${renderInboxBacklog(await response.json())}\n`);
 }
 
 export function renderInboxBacklog(breakdown: InboxBacklogBreakdown): string {
