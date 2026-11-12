@@ -1,49 +1,24 @@
 import { stdin } from 'node:process';
 import { stdout } from './terminal-out.js';
+import type { InferResponseType } from 'hono/client';
 
 import { maskUrl } from '@alteroid/core/mask-url';
 import { hasMcpPushProblem } from '@alteroid/logic';
 
 import { confirmIrreversible } from './confirm.js';
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
 import { runEditSession } from './edit-session.js';
 import { readAllText, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
-interface McpServerEntry {
-  type?: string;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-  headers?: Record<string, string>;
-  [key: string]: unknown;
-}
-
-type McpServers = Record<string, McpServerEntry>;
-
-interface McpServersView {
-  mcpServers: McpServers;
-  updatedAt?: string;
-  version: string;
-}
-
-interface McpServersRunnerResult {
-  runnerId: string;
-  ok: boolean;
-  mcpServers?: { names: string[]; sha256: string };
-  error?: string;
-}
-
-interface McpServersUpdateView {
-  names: string[];
-  updatedAt: string;
-  sha256?: string;
-  appliesFrom: string;
-  runners: McpServersRunnerResult[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+// 登録の 1 件は stdio / http / sse の和（`command` と `args` と `env` は stdio、`url` と `headers` は http・sse）
+type McpServersView = InferResponseType<DaemonClient['mcp-servers']['$get'], 200>;
+type McpServers = McpServersView['mcpServers'];
+type McpServerEntry = McpServers[string];
+type McpServersUpdateView = InferResponseType<DaemonClient['mcp-servers']['$put'], 200>;
 
 // `args` の要素と URL のクエリ・認証情報も伏せる: `--api-key xxx` や `?token=xxx` の形で鍵が入る登録が実在するため
 const MASK = '***';
@@ -68,16 +43,16 @@ function renderMcpList(view: McpServersView): string {
       (view.updatedAt === undefined ? '' : `（更新 ${view.updatedAt}）`),
   ];
   for (const name of names) {
-    const entry = view.mcpServers[name] ?? {};
+    const entry = view.mcpServers[name];
+    if (entry === undefined) continue;
     const transport = entry.type ?? 'stdio';
-    const where =
-      typeof entry.url === 'string' ? maskUrl(entry.url) : (entry.command ?? '（宛先なし）');
+    const where = 'url' in entry ? maskUrl(entry.url) : entry.command;
     lines.push(`  ${name}  ${transport}  ${where}`);
-    const args = entry.args ?? [];
+    const args = 'args' in entry ? (entry.args ?? []) : [];
     if (args.length > 0) lines.push(`    args: ${String(args.length)} 個（値は伏せた）`);
-    const envKeys = Object.keys(entry.env ?? {}).sort();
+    const envKeys = Object.keys('env' in entry ? (entry.env ?? {}) : {}).sort();
     if (envKeys.length > 0) lines.push(`    env: ${envKeys.join(', ')}`);
-    const headerKeys = Object.keys(entry.headers ?? {}).sort();
+    const headerKeys = Object.keys('headers' in entry ? (entry.headers ?? {}) : {}).sort();
     if (headerKeys.length > 0) lines.push(`    headers: ${headerKeys.join(', ')}`);
   }
   lines.push('値を見るには: alteroid mcp show --reveal');
@@ -196,10 +171,10 @@ function maskMcpServers(servers: McpServers): McpServers {
   const masked: McpServers = {};
   for (const [name, entry] of Object.entries(servers)) {
     const copy: McpServerEntry = { ...entry };
-    if (entry.args !== undefined) copy.args = entry.args.map(() => MASK);
-    if (entry.env !== undefined) copy.env = maskValues(entry.env);
-    if (entry.headers !== undefined) copy.headers = maskValues(entry.headers);
-    if (typeof entry.url === 'string') copy.url = maskUrl(entry.url);
+    if ('args' in copy && copy.args !== undefined) copy.args = copy.args.map(() => MASK);
+    if ('env' in copy && copy.env !== undefined) copy.env = maskValues(copy.env);
+    if ('headers' in copy && copy.headers !== undefined) copy.headers = maskValues(copy.headers);
+    if ('url' in copy) copy.url = maskUrl(copy.url);
     masked[name] = copy;
   }
   return masked;
@@ -219,10 +194,11 @@ async function put(
 ): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['mcp-servers'].$put({
-    json: { mcpServers: servers, ifMatch } as never,
+    json: { mcpServers: servers, ifMatch },
   });
   // 409 は版の衝突だけ: この口に他の 409 は無いため。current は値を含むので、名前だけを出す
   if (response.status === 409) {
+    // 409 の本文は `current`（`GET` と同じ形）だけを使う。`status === 409` では型が絞られないので、取り出す欄だけ言い直す
     const body = (await response.json().catch(() => ({}))) as { current?: McpServersView };
     const names = Object.keys(body.current?.mcpServers ?? {}).sort();
     stdout.write(
@@ -235,8 +211,8 @@ async function put(
     );
     throw new Error('MCP の登録が読んだ後に変わっていたので置き換えませんでした');
   }
-  if (!response.ok) await fail(response, target);
-  const result = (await response.json()) as McpServersUpdateView;
+  if (!response.ok) return fail(response, target);
+  const result: McpServersUpdateView = await response.json();
   stdout.write(renderMcpUpdate(result, beforeNames));
   if (hasMcpPushProblem(result)) {
     throw new Error(
@@ -302,8 +278,8 @@ function renderMcpUpdate(result: McpServersUpdateView, beforeNames: string[]): s
 async function read(target: Target): Promise<McpServersView> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['mcp-servers'].$get();
-  if (!response.ok) await fail(response, target);
-  return (await response.json()) as McpServersView;
+  if (!response.ok) return fail(response, target);
+  return await response.json();
 }
 
 async function fail(

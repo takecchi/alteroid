@@ -1,7 +1,8 @@
 import { clipWithEllipsis } from '@alteroid/core/cli-light';
+import type { InferRequestType, InferResponseType } from 'hono/client';
 
 import { confirmProceed, type ConfirmIo } from './confirm.js';
-import { createClient } from './client.js';
+import { createClient, type DaemonClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
 import { stdout } from './terminal-out.js';
@@ -14,77 +15,17 @@ import { stdout } from './terminal-out.js';
 const SCOPES = ['all', 'app', 'runner'] as const;
 type Scope = (typeof SCOPES)[number];
 
-interface SourceView {
-  kind: string;
-  url: string;
-  path?: string;
-  sha: string;
-  version?: string;
-  marketplace?: string;
-  plugin?: string;
-}
-
-interface Presence {
-  present: boolean;
-  paths: string[];
-}
-
-interface PreviewSummary {
-  name: string;
-  description?: string;
-  source: SourceView;
-  sha: string;
-  fileCount: number;
-  totalBytes: number;
-  files: { path: string; size: number; executable: boolean }[];
-  counts: { skills: number; agents: number; commands: number };
-  hooks: Presence;
-  modules: Presence;
-  lspServers: Presence;
-  mcp: Presence;
-  executables: { extracted: string[]; notExtracted: string[] };
-  shellExecution: Presence;
-  skipped: { path: string; reason: string }[];
-  extractorDrops: { path: string; reason: string }[];
-  skillExcerpts: { path: string; excerpt: string; truncated: boolean }[];
-}
-
-interface PreviewView {
-  previewId: string;
-  expiresAt: string;
-  summary: PreviewSummary;
-  replaces?: { name: string; source: SourceView; sha: string; installedAt: string };
-}
-
-interface PluginRow {
-  name: string;
-  description?: string;
-  source: SourceView;
-  scope: string;
-  enableHooks: boolean;
-  enableMcp: boolean;
-  fileCount: number;
-  totalBytes: number;
-  installedAt: string;
-}
-
-interface RunnerResult {
-  runnerId: string;
-  ok: boolean;
-  error?: string;
-}
-
-interface InstallView {
-  plugin: PluginRow;
-  appliesFrom: string;
-  runners: RunnerResult[];
-}
-
-interface RemoveView {
-  name: string;
-  appliesFrom: string;
-  runners: RunnerResult[];
-}
+// デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
+type PluginsView = InferResponseType<DaemonClient['plugins']['$get'], 200>;
+type PluginRow = PluginsView['plugins'][number];
+type SourceView = PluginRow['source'];
+type PreviewView = InferResponseType<DaemonClient['plugins']['preview']['$post'], 200>;
+type PreviewSummary = PreviewView['summary'];
+type Presence = PreviewSummary['hooks'];
+type InstallView = InferResponseType<DaemonClient['plugins']['$post'], 200>;
+type RemoveView = InferResponseType<DaemonClient['plugins'][':name']['$delete'], 200>;
+type RunnerResult = RemoveView['runners'][number];
+type PreviewRequest = InferRequestType<DaemonClient['plugins']['preview']['$post']>['json'];
 
 interface PluginAddOptions {
   path?: string;
@@ -102,8 +43,8 @@ export async function pluginListCommand(): Promise<void> {
   const target = await resolveTarget();
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.plugins.$get();
-  if (!response.ok) await fail(response, target);
-  const body = (await response.json()) as { plugins: PluginRow[] };
+  if (!response.ok) return fail(response, target);
+  const body = await response.json();
   stdout.write(renderPluginList(body.plugins));
 }
 
@@ -149,9 +90,9 @@ export async function pluginAddCommand(
 
   const target = await resolveTarget();
   const client = createClient(target.baseUrl, target.headers);
-  const previewResponse = await client.plugins.preview.$post({ json: body as never });
-  if (!previewResponse.ok) await fail(previewResponse, target);
-  const preview = (await previewResponse.json()) as PreviewView;
+  const previewResponse = await client.plugins.preview.$post({ json: body });
+  if (!previewResponse.ok) return fail(previewResponse, target);
+  const preview: PreviewView = await previewResponse.json();
   stdout.write(renderPluginPreview(preview.summary, { enableHooks: options.enableHooks === true }));
 
   // 置き換えの有無はプレビューの応答から取る（預かりと結び付いた時点の値。確定の突き合わせと同じもの。#4797）
@@ -175,8 +116,8 @@ export async function pluginAddCommand(
   const response = await client.plugins.$post({
     json: { previewId: preview.previewId, scope, enableHooks, enableMcp },
   });
-  if (!response.ok) await fail(response, target);
-  const result = (await response.json()) as InstallView;
+  if (!response.ok) return fail(response, target);
+  const result: InstallView = await response.json();
   stdout.write(renderInstall(result));
   throwOnPushProblem(result.runners);
 }
@@ -185,8 +126,8 @@ export async function pluginRemoveCommand(name: string): Promise<void> {
   const target = await resolveTarget();
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.plugins[':name'].$delete({ param: { name } });
-  if (!response.ok) await fail(response, target);
-  const result = (await response.json()) as RemoveView;
+  if (!response.ok) return fail(response, target);
+  const result: RemoveView = await response.json();
   stdout.write(
     [
       `plugin「${result.name}」を外しました。`,
@@ -205,7 +146,7 @@ function parseScope(value: string | undefined): Scope {
   );
 }
 
-function buildPreviewRequest(source: string, options: PluginAddOptions): Record<string, unknown> {
+function buildPreviewRequest(source: string, options: PluginAddOptions): PreviewRequest {
   if (/^https:\/\//i.test(source)) {
     if (options.sha !== undefined && !/^[0-9a-f]{40}$/.test(options.sha)) {
       throw new Error(
