@@ -1,6 +1,9 @@
 import {
   accountUsageStateSchema,
+  attachmentLimitsSchema,
+  attachmentMetaSchema,
   attachmentRefSchema,
+  attachmentUsageSchema,
   clientMessageIdSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
@@ -65,40 +68,10 @@ import { createApp } from './app.js';
 
 export const errorResponseSchema = z.object({ error: z.string() });
 
-export const attachmentMetaSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  mediaType: z.string(),
-  size: z.number().int(),
-  sha256: z.string(),
-  conversationId: z.string().optional(),
-  externalEventId: z.string().optional(),
-  managerReportId: z.string().optional(),
-  uploadedBy: z.string().optional(),
-  createdAt: z.string(),
-  expiresAt: z.string().optional(),
-  keptAt: z.string().optional(),
-  releasedAt: z.string().optional(),
-});
+// 添付の meta・usage・limits は core の `attachment-schema.ts` が正本（ここでは再 export するだけ）
+export { attachmentLimitsSchema, attachmentMetaSchema };
 
 const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
-
-const attachmentUsageBucketSchema = z.object({
-  count: z.number().int(),
-  totalBytes: z.number().int(),
-});
-
-const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
-  byFrom: z.object({
-    human: attachmentUsageBucketSchema,
-    clone: attachmentUsageBucketSchema,
-    manager: attachmentUsageBucketSchema,
-    integration: attachmentUsageBucketSchema,
-    unknown: attachmentUsageBucketSchema,
-  }),
-  // 鍵の id → 期限内の件数と合計。上げたことの無い鍵は載らない（#4005）
-  byIntegrationKey: z.record(z.string(), attachmentUsageBucketSchema),
-});
 
 export const attachmentListQuery = z.object({
   kept: z
@@ -119,15 +92,6 @@ export const attachmentListResponseSchema = z.object({
 });
 
 export const attachmentKeptBodySchema = z.object({ kept: z.boolean() });
-
-export const attachmentLimitsSchema = z.object({
-  maxImageBytes: z.number().int(),
-  maxFileBytes: z.number().int(),
-  maxLargeFileBytes: z.number().int(),
-  maxPerMessage: z.number().int(),
-  maxTotalBytes: z.number().int(),
-  retentionDays: z.number().int(),
-});
 
 export const attachmentErrorResponseSchema = z.object({
   error: z.string(),

@@ -965,6 +965,11 @@ export {
   type AttachmentStore,
   type AttachmentStoreOptions,
 } from './attachment.js';
+export {
+  attachmentLimitsSchema,
+  attachmentMetaSchema,
+  attachmentUsageSchema,
+} from './attachment-schema.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
 export { fetchManagerOutbox } from './manager-outbox-fetch.js';
 export {
