@@ -1082,7 +1082,7 @@ describe('restore: 直列化（#restoreQueue）と #restoring', () => {
     await env.pool.stop();
   });
 
-  it('restore() を呼んだ同じ tick に reattachRunner を呼ぶと、旗が立つ前なので待たずに list へ進む（現状の固定）', async () => {
+  it('restore() を呼んだ同じ tick に reattachRunner を呼んでも、旗が同期的に立つので復元の終わりまで list へ進まない（#6726）', async () => {
     const env = await build();
     const firstList = gate();
     env.fake.listGates.push(firstList);
@@ -1098,13 +1098,11 @@ describe('restore: 直列化（#restoreQueue）と #restoring', () => {
       {
         "log": [
           "list",
-          "list",
           "resume:mgr-1",
+          "list",
         ],
         "logWhileBlocked": [
           "list",
-          "list",
-          "resume:mgr-1",
         ],
       }
     `);

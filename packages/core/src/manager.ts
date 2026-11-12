@@ -3772,7 +3772,9 @@ class Pool implements ManagerPool {
   /** runner ごと作り直されていたら実際に resume する: 「話しかけられるまで止めておく」は人間の不在で仕事が止まらないという要件に反する。 */
   async restore(): Promise<ManagerSummary[]> {
     // 同時に2本走らせず列に並べる: `#restoring` は1本ぶんの旗しか持てず、重ねると後の呼びが旗を上書きして `#reattach` が同時に走り、同じ仕事を二本起こす。
-    const run = this.#restoreQueue.then(() => this.#restoreExclusive());
+    // 旗は呼んだ時点（同期）で立てる: 列の `.then` の中で立てると 1 マイクロタスク遅れ、同じ tick の `reattachRunner` が旗を見ずに list へ進む（#6726）。
+    const flag = this.#raiseRestoring();
+    const run = this.#restoreQueue.then(() => this.#restoreExclusive(flag));
     this.#restoreQueue = run.then(
       () => undefined,
       () => undefined,
@@ -3957,19 +3959,31 @@ class Pool implements ManagerPool {
     return result;
   }
 
-  async #restoreExclusive(): Promise<ManagerSummary[]> {
-    // await を挟む前に立てる: 同一プロセスの runner は `connect()` の中で同期的に名乗るので、遅れると `#reattach` が引き取りと同時に走り、同じ仕事を二重に起こす。
-    let finished!: () => void;
-    this.#restoring = new Promise<void>((resolve) => {
-      finished = resolve;
+  /** 旗の Promise と、それを下ろす口を作る。他の復元が走っていない（旗が空）ときだけ、その場で旗として立てる。 */
+  #raiseRestoring(): { promise: Promise<void>; finish: () => void } {
+    let finish!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      finish = resolve;
     });
+    if (this.#restoring === null) this.#restoring = promise;
+    return { promise, finish };
+  }
+
+  async #restoreExclusive(flag: {
+    promise: Promise<void>;
+    finish: () => void;
+  }): Promise<ManagerSummary[]> {
+    // await を挟む前に立てる: 同一プロセスの runner は `connect()` の中で同期的に名乗るので、遅れると `#reattach` が引き取りと同時に走り、同じ仕事を二重に起こす。
+    // 列で待たされた呼びは、先の呼びが旗を下ろした後のここで立てる（`restore()` の時点では先の旗が立っていて、上書きできない）。
+    this.#restoring = flag.promise;
+    const finished = flag.finish;
     try {
       if (!this.#stopped) await this.#taskLink.repairStranded();
       const restored = await this.#restoreJobs();
       this.#withheld.rebuildFromLedger();
       return restored;
     } finally {
-      this.#restoring = null;
+      if (this.#restoring === flag.promise) this.#restoring = null;
       finished();
     }
   }
