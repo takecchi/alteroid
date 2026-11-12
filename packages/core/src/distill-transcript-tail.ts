@@ -1,4 +1,5 @@
 import { tailByCodePoints } from './excerpt.js';
+import { isPlainObject } from './mcp-servers-schema.js';
 
 /**
  * 蒸留（PreCompact・退避の拾い直し）へ渡す会話ログの末尾を作る（#5306）。
@@ -15,12 +16,6 @@ import { tailByCodePoints } from './excerpt.js';
 const TOOL_USE_INPUT_CHARS = 200;
 const TOOL_RESULT_CHARS = 300;
 const THINKING_CHARS = 500;
-
-type Json = Record<string, unknown>;
-
-function isObject(value: unknown): value is Json {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /** 先頭から `max` 字（UTF-16 の単位。サロゲートペアの途中では切らない）。切ったら省略した字数を添える。 */
 function clip(text: string, max: number): string {
@@ -40,10 +35,10 @@ function toolResultText(content: unknown): string {
   if (Array.isArray(content)) {
     return content
       .map((part: unknown) => {
-        if (isObject(part) && part['type'] === 'text' && typeof part['text'] === 'string') {
+        if (isPlainObject(part) && part['type'] === 'text' && typeof part['text'] === 'string') {
           return part['text'];
         }
-        if (isObject(part) && part['type'] === 'image') return '[画像]';
+        if (isPlainObject(part) && part['type'] === 'image') return '[画像]';
         return JSON.stringify(part);
       })
       .join(' ');
@@ -54,7 +49,7 @@ function toolResultText(content: unknown): string {
 /** 1つの block を整形する。空なら `''`（何も出さない）。 */
 function formatBlock(speaker: string, block: unknown): string {
   // 想定外の block は、省略せずそのまま出す
-  if (!isObject(block)) return JSON.stringify(block);
+  if (!isPlainObject(block)) return JSON.stringify(block);
   const type = block['type'];
   if (type === 'text' && typeof block['text'] === 'string') {
     return block['text'].length === 0 ? '' : `${speaker}: ${block['text']}`;
@@ -85,11 +80,11 @@ function formatLine(line: string): string | null {
   } catch {
     return null;
   }
-  if (!isObject(entry)) return null;
+  if (!isPlainObject(entry)) return null;
   const speaker = entry['type'];
   if (speaker !== 'user' && speaker !== 'assistant') return null;
   const message = entry['message'];
-  if (!isObject(message)) return null;
+  if (!isPlainObject(message)) return null;
   const content = message['content'];
   if (typeof content === 'string') return content.length === 0 ? null : `${speaker}: ${content}`;
   if (!Array.isArray(content)) return null;
