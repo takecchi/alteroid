@@ -4,6 +4,7 @@ import {
   memoryTidyEntry,
   parseTimeOfDay,
   placedEnvValue,
+  readNumberEnv,
   SCHEDULE_EVERY_MINUTES_MAX,
   selfInitiativeEntry,
   type ScheduleEntry,
@@ -82,22 +83,21 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
   notes.push(...initiative.notes);
   const initiativeEveryMinutes = initiative.everyMinutes;
 
-  const rawLookback = placedEnvValue(env, 'ALTEROID_REPORT_LOOKBACK_DAYS');
-  let reportLookbackDays = DEFAULT_REPORT_LOOKBACK_DAYS;
-  if (rawLookback !== null) {
-    const parsed = Number(rawLookback);
-    if (!Number.isFinite(parsed) || parsed < 0) {
+  const reportLookbackDays = readNumberEnv(env['ALTEROID_REPORT_LOOKBACK_DAYS'], {
+    fallback: DEFAULT_REPORT_LOOKBACK_DAYS,
+    min: 0,
+    max: MAX_REPORT_LOOKBACK_DAYS,
+    floor: true,
+    onProblem: (problem, raw) => {
+      // 下限（負）の側は「読めない」と同じ文: 上限の側だけ別の文で言う
+      const overMax = problem === 'out-of-range' && Number(raw) > MAX_REPORT_LOOKBACK_DAYS;
       notes.push(
-        `ALTEROID_REPORT_LOOKBACK_DAYS="${rawLookback}" は日数として読めないので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
+        overMax
+          ? `ALTEROID_REPORT_LOOKBACK_DAYS="${raw}" は上限 ${MAX_REPORT_LOOKBACK_DAYS} 日を超えているので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`
+          : `ALTEROID_REPORT_LOOKBACK_DAYS="${raw}" は日数として読めないので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
       );
-    } else if (parsed > MAX_REPORT_LOOKBACK_DAYS) {
-      notes.push(
-        `ALTEROID_REPORT_LOOKBACK_DAYS="${rawLookback}" は上限 ${MAX_REPORT_LOOKBACK_DAYS} 日を超えているので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
-      );
-    } else {
-      reportLookbackDays = Math.floor(parsed);
-    }
-  }
+    },
+  });
 
   return { dailyReportAt, initiativeEveryMinutes, memoryTidyAt, reportLookbackDays, notes };
 }

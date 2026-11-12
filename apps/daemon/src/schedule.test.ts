@@ -205,3 +205,46 @@ describe('readScheduleConfig — 上限を超える値は既定へ倒す（#4723
     );
   });
 });
+
+describe('readScheduleConfig — ALTEROID_REPORT_LOOKBACK_DAYS（注意文の全文・既定・範囲・丸めを固定する）', () => {
+  const KEY = 'ALTEROID_REPORT_LOOKBACK_DAYS';
+  const read = (raw: string | undefined) => {
+    const config = readScheduleConfig(raw === undefined ? {} : { [KEY]: raw });
+    return { days: config.reportLookbackDays, notes: config.notes };
+  };
+  const unreadable = (raw: string) =>
+    `${KEY}="${raw}" は日数として読めないので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`;
+
+  it('未設定・空・空白だけは、知らせずに既定', () => {
+    for (const raw of [undefined, '', '  ']) {
+      expect(read(raw)).toEqual({ days: DEFAULT_REPORT_LOOKBACK_DAYS, notes: [] });
+    }
+  });
+
+  it('読めない値と負の値は、日数として読めないと言って既定へ', () => {
+    for (const raw of ['abc', '-1', '-0.5', 'NaN', 'Infinity', '-Infinity']) {
+      expect(read(raw), raw).toEqual({
+        days: DEFAULT_REPORT_LOOKBACK_DAYS,
+        notes: [unreadable(raw)],
+      });
+    }
+    expect(read('  abc  ').notes).toEqual([unreadable('abc')]);
+  });
+
+  it('上限（365）を超える値は、上限の断りつきで既定へ', () => {
+    expect(read('365.5')).toEqual({
+      days: DEFAULT_REPORT_LOOKBACK_DAYS,
+      notes: [
+        `${KEY}="365.5" は上限 365 日を超えているので既定 ${DEFAULT_REPORT_LOOKBACK_DAYS} を使う`,
+      ],
+    });
+  });
+
+  it('0 と上限ちょうどは採り、小数は切り捨て、知らせない（前後の空白は無視）', () => {
+    expect(read('0')).toEqual({ days: 0, notes: [] });
+    expect(read('365')).toEqual({ days: 365, notes: [] });
+    expect(read('1.9')).toEqual({ days: 1, notes: [] });
+    expect(read('0.9')).toEqual({ days: 0, notes: [] });
+    expect(read(' 7 ')).toEqual({ days: 7, notes: [] });
+  });
+});
