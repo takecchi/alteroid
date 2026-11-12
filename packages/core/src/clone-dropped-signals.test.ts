@@ -5,6 +5,7 @@ import {
   DROPPED_SIGNAL_NOTICE_MAX,
   describeDroppedSignals,
   digestOfDroppedSignal,
+  mergeDroppedSignals,
   restoreDroppedSignals,
   type DroppedSignalDigest,
 } from './dropped-signals.js';
@@ -327,5 +328,67 @@ describe('restoreDroppedSignals（純関数）', () => {
       [settledRow(1, 'not-an-array'), settledRow(2, [1, null, 'zzz'])],
     );
     expect(restored.digests.map((d) => d.id)).toEqual(['ok']);
+  });
+});
+
+describe('mergeDroppedSignals（組み直した要旨と、この器が先に外した分を併せる）', () => {
+  function digest(id: string): DroppedSignalDigest {
+    return {
+      id,
+      at: '2026-11-01T00:00:00.000Z',
+      type: 'manager_message',
+      from: '担当 mgr-1（report）',
+      head: `本文 ${id}`,
+    };
+  }
+  const ids = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, i) => `${prefix}${String(i).padStart(2, '0')}`);
+
+  it('15 件 + 新たに 10 件（うち 2 件は同じ id）→ 重複を 1 件に畳み、上限 20 件に切ってあふれを数える', () => {
+    const restored = ids('r', 15).map(digest);
+    // c08・c09 の代わりに組み直し済みの r13・r14 と同じ id を入れる
+    const current = [...ids('c', 8), 'r13', 'r14'].map(digest);
+    const merged = mergeDroppedSignals({ digests: restored, overflowed: 0 }, current);
+    // 重複を畳むと 15 + 8 = 23 件。古い側 3 件（r00〜r02）があふれる
+    expect(merged.digests).toHaveLength(DROPPED_SIGNAL_NOTICE_MAX);
+    expect(merged.digests.map((d) => d.id)).toEqual([...ids('r', 15).slice(3), ...ids('c', 8)]);
+    expect(new Set(merged.digests.map((d) => d.id)).size).toBe(merged.digests.length);
+    expect(merged.overflowed).toBe(3);
+  });
+
+  it('組み直しの時点であふれていた件数に、併せてあふれた件数を足す', () => {
+    const merged = mergeDroppedSignals(
+      { digests: ids('r', DROPPED_SIGNAL_NOTICE_MAX).map(digest), overflowed: 2 },
+      ids('c', 4).map(digest),
+    );
+    expect(merged.digests).toHaveLength(DROPPED_SIGNAL_NOTICE_MAX);
+    expect(merged.overflowed).toBe(6);
+  });
+});
+
+describe('組み直しであふれた件数は断り書きに出る', () => {
+  it('日誌に 25 件の外れた要旨があれば、再起動後の最初の入力に 20 件と「ほかに 5 件」が載る', async () => {
+    const stores = createMemoryStores();
+    const digests = Array.from({ length: DROPPED_SIGNAL_NOTICE_MAX + 5 }, (_, i) => ({
+      id: `evt-old-${String(i).padStart(2, '0')}`,
+      at: '2026-11-01T00:00:00.000Z',
+      type: 'manager_message',
+      from: '担当 mgr-1（report）',
+      head: `古い報告 ${String(i)}`,
+    }));
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: '[判断] ターンが枠以外の理由で失敗したので、渡した合図 25 件を処理されないまま受信箱から外した（理由: 試験）。',
+      droppedSignals: digests,
+    });
+    const second = setup(undefined, stores, {});
+    const input = await firstInputFor(second, '起動後の最初の発言');
+    expect(input).toContain(NOTICE);
+    expect(input).toContain('ほかに 5 件');
+    expect(input).toContain('id=evt-old-24');
+    expect(input).not.toContain('id=evt-old-04 ');
+    await second.clone.stop();
   });
 });

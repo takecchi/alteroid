@@ -287,6 +287,7 @@ import {
   describeSettledDroppedSignalsForJournal,
   digestOfDroppedSignal,
   DROPPED_SIGNAL_NOTICE_MAX,
+  mergeDroppedSignals,
   type DroppedSignalDigest,
 } from './dropped-signals.js';
 import { readDroppedSignalsFromJournal } from './dropped-signals-journal.js';
@@ -2845,14 +2846,9 @@ class Clone implements CloneHost {
     try {
       const restored = await readDroppedSignalsFromJournal(this.#stores.journal, Date.now());
       // この器が先に外した分（蒸留のターンの失敗）と重なる id は1件に畳む。組み直した分を前に置く（古い側）
-      const restoredIds = new Set(restored.digests.map((digest) => digest.id));
-      const merged = [
-        ...restored.digests,
-        ...this.#droppedSignals.filter((digest) => !restoredIds.has(digest.id)),
-      ];
-      const over = Math.max(0, merged.length - DROPPED_SIGNAL_NOTICE_MAX);
-      this.#droppedSignals = merged.slice(over);
-      this.#droppedSignalsOverflowed += restored.overflowed + over;
+      const merged = mergeDroppedSignals(restored, this.#droppedSignals);
+      this.#droppedSignals = merged.digests;
+      this.#droppedSignalsOverflowed += merged.overflowed;
     } catch (error) {
       noteUnreadableRecord('外れた合図の要旨（日誌）', '', error);
     }

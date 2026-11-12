@@ -200,3 +200,18 @@ export function restoreDroppedSignals(
   const over = Math.max(0, all.length - DROPPED_SIGNAL_NOTICE_MAX);
   return { digests: all.slice(over), overflowed: over };
 }
+
+/**
+ * 日誌から組み直した要旨(`restored`)と、この器が先に外した分(`current`)を併せる。
+ * 組み直した分を前(古い側)に置き、`current` のうち同じ id は1件に畳み、上限を超えた古い側は件数だけ `overflowed` に数える
+ * (`restored.overflowed` を含む。呼び手は既存の件数にこの値を足す)。
+ */
+export function mergeDroppedSignals(
+  restored: { digests: readonly DroppedSignalDigest[]; overflowed: number },
+  current: readonly DroppedSignalDigest[],
+): { digests: DroppedSignalDigest[]; overflowed: number } {
+  const restoredIds = new Set(restored.digests.map((digest) => digest.id));
+  const merged = [...restored.digests, ...current.filter((digest) => !restoredIds.has(digest.id))];
+  const over = Math.max(0, merged.length - DROPPED_SIGNAL_NOTICE_MAX);
+  return { digests: merged.slice(over), overflowed: restored.overflowed + over };
+}
