@@ -491,16 +491,16 @@ describe('前提の断り書き（validityFor）の逐語固定', () => {
     );
   });
 
-  it('同じ → 何も言わない。名乗っていない回（statusAtDelivery 無し）も何も言わない。ただし list() は状況と前提で 2 本引く', async () => {
+  it('同じ → 何も言わない。名乗っていない回（statusAtDelivery 無し）も何も言わない。list() は状況と前提で共有して 1 本', async () => {
     const same = rig({ list: () => Promise.resolve([summary({ status: 'running' })]) });
     expect(await firstPrefix(same, report('evt-1', 'mgr-a', { statusAtDelivery: 'running' }))).toBe(
       '',
     );
-    expect(same.listCalls()).toBe(2);
+    expect(same.listCalls()).toBe(1);
 
     const unclaimed = rig();
     expect(await firstPrefix(unclaimed, report('evt-2', 'mgr-a'))).toBe('');
-    expect(unclaimed.listCalls()).toBe(2);
+    expect(unclaimed.listCalls()).toBe(1);
   });
 
   it('list() が投げる → 「確かめられなかった」（理由付き）。一覧に担当が居ない → 「一覧に居ない」', async () => {
@@ -612,10 +612,10 @@ describe('枠の回復の1節（quotaRecoveryFor）の逐語固定', () => {
     `);
   });
 
-  it('1本も戻っていない → 1節は出ない（list() は状況と回復の 2 本）', async () => {
+  it('1本も戻っていない → 1節は出ない（list() は状況と回復で共有して 1 本）', async () => {
     const s = rig({ list: () => Promise.resolve([summary({ live: false })]) });
     expect(await prefixFor(s, poolQuotaStop('evt-1', ['mgr-a']))).toBe('');
-    expect(s.listCalls()).toBe(2);
+    expect(s.listCalls()).toBe(1);
   });
 
   it('list() が投げる → 「確かめられなかった」（理由付き）', async () => {
@@ -648,8 +648,8 @@ describe('枠の回復の1節（quotaRecoveryFor）の逐語固定', () => {
       ---
       ⚠️ この報告が受信箱へ積まれた時点で mgr-a は \`running\` でしたが、この断り書きを組んだ時点では \`done\` です（報告が名乗った前提は動いています。中身が要らなくなったとは限りません）。"
     `);
-    // 状況・前提・回復の 3 本（5 時間枠の印が無い報告は畳みの判定で list() を引かない）
-    expect(s.listCalls()).toBe(3);
+    // 状況・前提・回復で共有して 1 本（5 時間枠の印が無い報告は畳みの判定で list() を引かない）
+    expect(s.listCalls()).toBe(1);
   });
 
   it('起点の違う束に枠の知らせが 2 通混ざる → 名指す担当は両方（束の全件から集める）。積まれた時刻は早い方', async () => {
@@ -682,18 +682,43 @@ describe('枠の回復の1節（quotaRecoveryFor）の逐語固定', () => {
     `);
   });
 
-  it('枠の知らせでない報告・外部には list() を足さない（外部の枠の知らせは状況と回復の 2 本）', async () => {
+  it('枠の知らせでない報告・外部には list() を足さない（外部の枠の知らせも状況と共有して 1 本）', async () => {
     const plain = rig();
     plain.clone.post(report('evt-1', 'mgr-a'));
     await firstInput(plain);
     await plain.clone.stop();
-    expect(plain.listCalls()).toBe(2);
+    expect(plain.listCalls()).toBe(1);
 
     const external = rig();
     external.clone.post(poolQuotaStop('evt-2', ['mgr-a']));
     await firstInput(external);
     await external.clone.stop();
-    expect(external.listCalls()).toBe(2);
+    expect(external.listCalls()).toBe(1);
+  });
+
+  it('1 ターンの準備の中で 1 回取った一覧を共有する: 呼びごとに中身が変わる一覧でも、状況・回復・前提は同じ一覧を見る', async () => {
+    let calls = 0;
+    const s = rig({
+      list: () => {
+        calls += 1;
+        // 1 回目: 走行中で枠の印なし（回復）。2 回目以降（引かれたら）: 止まった印つきの done
+        return Promise.resolve([
+          calls === 1
+            ? summary({ status: 'running' })
+            : summary({ status: 'done', usageStoppedAt: REPORTED_AT }),
+        ]);
+      },
+    });
+    s.clone.post(
+      report('evt-1', 'mgr-a', { synthesized: true, quotaStop: true, statusAtDelivery: 'running' }),
+    );
+    const input = await firstInput(s);
+    await s.clone.stop();
+
+    expect(calls).toBe(1);
+    expect(situationOf(input)).toContain('走行中 1 / 返事待ち 0');
+    expect(input).toContain('すべて回復している');
+    expect(input).not.toContain('この報告が受信箱へ積まれた時点で');
   });
 });
 
@@ -815,7 +840,7 @@ describe('戻っていた担当の知らせの畳み（recoveredFoldFor）の、
     week.clone.post(report('evt-w', 'mgr-a', { synthesized: true, quotaStop: true }));
     await firstInput(week);
     await week.clone.stop();
-    expect(week.listCalls()).toBe(3);
+    expect(week.listCalls()).toBe(1);
   });
 });
 
@@ -862,16 +887,16 @@ describe('3 本は投げを握らない（受信箱のループが落ちる。`.
 
   const DEAD = "rejected: TypeError: Cannot use 'in' operator to search for 'detail' in undefined";
 
-  it('validityFor（2 本目の list()）: 落ちたループは stop() が拒否で返す。モデルへは渡らず、行は未読のまま', async () => {
-    const result = await loopDeath(report('evt-1', 'mgr-a', { statusAtDelivery: 'running' }), 1);
+  it('validityFor（状況と共有した 1 本目の list()）: 落ちたループは stop() が拒否で返す。モデルへは渡らず、行は未読のまま', async () => {
+    const result = await loopDeath(report('evt-1', 'mgr-a', { statusAtDelivery: 'running' }), 0);
     expect(result.outcome).toBe(DEAD);
     expect(result.lines.join('')).toContain('クローンの受信箱のループが例外で終わりました');
     expect(result.inputs).toEqual([]);
     expect(result.pending).toBe(1);
   });
 
-  it('quotaRecoveryFor（2 本目の list()）: 同じく落ちる', async () => {
-    const result = await loopDeath(poolQuotaStop('evt-1', ['mgr-a']), 1);
+  it('quotaRecoveryFor（状況と共有した 1 本目の list()）: 同じく落ちる', async () => {
+    const result = await loopDeath(poolQuotaStop('evt-1', ['mgr-a']), 0);
     expect(result.outcome).toBe(DEAD);
     expect(result.lines.join('')).toContain('クローンの受信箱のループが例外で終わりました');
     expect(result.inputs).toEqual([]);
