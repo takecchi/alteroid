@@ -833,6 +833,57 @@ describe('describeSituation', () => {
   });
 });
 
+describe('describeSituation: 背景処理待ちの行に畳んだ報告の本数と最長の待ちを足す', () => {
+  const NOW = Date.parse('2026-09-05T02:00:00.000Z');
+  const held = (withheldReports: number, since: string) => ({
+    tasks: 2,
+    withheldReports,
+    breakdown: 'local_agent×2',
+    since,
+  });
+  const countsLine = (managers: ManagerSummary[]): string =>
+    describeSituation({ managers, runners: [], at: NOW })
+      .split('\n')
+      .find((line) => line.startsWith('委譲 全')) ?? '';
+
+  it('⭐ 畳んだ報告が 0 本なら、本数だけの行のまま1文字も変えない', () => {
+    const line = countsLine([
+      summary('a', 'done', true, held(0, '2026-09-05T00:00:00.000Z')),
+      summary('b', 'running', true),
+    ]);
+    expect(line).toContain(
+      '走行中 1 / 返事待ち 0 / 背景処理待ち 1 / 手が空いている 0 / その他 0。',
+    );
+    expect(line).not.toContain('畳んだ報告');
+  });
+
+  it('⭐ 1 本以上なら『（うち畳んだ報告 M 本・最長 X）』が付く', () => {
+    const line = countsLine([summary('a', 'done', true, held(2, '2026-09-05T01:25:00.000Z'))]);
+    expect(line).toContain('背景処理待ち 1（うち畳んだ報告 2 本・最長35分） / 手が空いている 0');
+  });
+
+  it('⭐ 複数の担当は本数を合計し、最長は最も古い since にする（0 本の担当は本数に足さない）', () => {
+    const line = countsLine([
+      summary('a', 'done', true, held(2, '2026-09-05T01:40:00.000Z')),
+      summary('b', 'done', true, held(3, '2026-09-05T00:50:00.000Z')),
+      summary('c', 'done', true, held(0, '2026-09-04T00:00:00.000Z')),
+    ]);
+    expect(line).toContain('背景処理待ち 3（うち畳んだ報告 5 本・最長1時間10分）');
+  });
+
+  it('経過は切り捨てで、1 分未満は 0分、未来や読めない時刻は最長を出さない', () => {
+    expect(countsLine([summary('a', 'done', true, held(1, '2026-09-05T01:59:59.000Z'))])).toContain(
+      '（うち畳んだ報告 1 本・最長0分）',
+    );
+    expect(countsLine([summary('a', 'done', true, held(1, '2026-09-05T03:00:00.000Z'))])).toContain(
+      '背景処理待ち 1（うち畳んだ報告 1 本） /',
+    );
+    expect(countsLine([summary('a', 'done', true, held(1, 'いつか'))])).toContain(
+      '背景処理待ち 1（うち畳んだ報告 1 本） /',
+    );
+  });
+});
+
 describe('describeSituationUnavailable', () => {
   it('0 で埋めず、数えられなかったと名乗る', () => {
     const text = describeSituationUnavailable(new Error('list() が壊れている'));
