@@ -1,4 +1,4 @@
-import { verifyCodexChatgptAuthContract } from '@alteroid/core';
+import { verifyCodexChatgptAuthContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';

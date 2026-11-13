@@ -1,9 +1,8 @@
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { captureStderr, renderMemoryDocuments } from '@alteroid/core';
 import {
-  captureStderr,
-  renderMemoryDocuments,
   verifyAuthRecordsContract,
   verifyAuthListOrderContract,
   verifyAuthTieByteOrderContract,
@@ -52,7 +51,7 @@ import {
   verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import type { JournalEntry } from '@alteroid/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

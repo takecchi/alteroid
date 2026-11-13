@@ -1,4 +1,4 @@
-import { verifyInboxStoreContract } from '@alteroid/core';
+import { verifyInboxStoreContract } from '@alteroid/core/contracts';
 import { afterEach, describe, it } from 'vitest';
 
 import { createPgStoresFromDb } from './index.js';

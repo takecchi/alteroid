@@ -1,8 +1,8 @@
+import { UnreadableTaskError } from '@alteroid/core';
 import {
-  UnreadableTaskError,
   verifyTaskRemoveForConversationContract,
   verifyTaskStoreContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import type { Task } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

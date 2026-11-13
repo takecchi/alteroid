@@ -230,11 +230,12 @@ describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
     // tools.ts からは import が消えたので、行を差し替えた。別の族が増えて同じ import をするときも、そのファイル名で名指しで足す（広いパターンにしない）。
     'clone-tools-self.ts': ['./codex-chatgpt-auth.js'],
     'index.ts': [
-      './codex-chatgpt-auth-contract.js',
       './codex-chatgpt-auth.js',
       './codex-chatgpt-auth-service.js',
       './codex-device-login.js',
     ],
+    // 契約の歯の再 export は本番の入口 index.ts ではなく副入口 contracts.ts に置く
+    'contracts.ts': ['./codex-chatgpt-auth-contract.js'],
     'agent-provider-selection.ts': ['./codex-provider.js'],
     'agent-provider-selection.test.ts': ['./codex-provider.js'],
   };

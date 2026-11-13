@@ -1,7 +1,7 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { verifyCodexChatgptAuthContract } from '@alteroid/core';
+import { verifyCodexChatgptAuthContract } from '@alteroid/core/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

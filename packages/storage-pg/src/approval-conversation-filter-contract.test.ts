@@ -1,4 +1,5 @@
-import { captureStderr, verifyApprovalConversationFilterContract } from '@alteroid/core';
+import { captureStderr } from '@alteroid/core';
+import { verifyApprovalConversationFilterContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { sql } from 'drizzle-orm';

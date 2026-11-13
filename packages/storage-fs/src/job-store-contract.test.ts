@@ -1,4 +1,4 @@
-import { verifyJobStoreContract } from '@alteroid/core';
+import { verifyJobStoreContract } from '@alteroid/core/contracts';
 import { describe, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

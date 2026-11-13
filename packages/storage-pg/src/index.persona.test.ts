@@ -1,5 +1,5 @@
+import { renderMemoryDocuments } from '@alteroid/core';
 import {
-  renderMemoryDocuments,
   verifyPersonaCreatedAtContract,
   verifyPersonaDescribedAtContract,
   verifyPersonaDescribedBytesContract,
@@ -7,7 +7,7 @@ import {
   verifyPersonaNulContract,
   verifyPersonaProtectionStatusContract,
   verifyPersonaWriteContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  countUnreadConversations,
-  loadConversationReadView,
-  verifyConversationReadStoreContract,
-} from './conversation-read.js';
+import { countUnreadConversations, loadConversationReadView } from './conversation-read.js';
+import { verifyConversationReadStoreContract } from './conversation-read-contract.js';
 import { collectConversations, countUnread, effectiveReadThrough } from './conversation.js';
 import type { Exchange } from './conversation.js';
 import type { ConversationReadView } from './conversation-read.js';

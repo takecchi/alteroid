@@ -1,7 +1,7 @@
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { verifyPluginStoreContract } from '@alteroid/core';
+import { verifyPluginStoreContract } from '@alteroid/core/contracts';
 import type { PluginInput } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 

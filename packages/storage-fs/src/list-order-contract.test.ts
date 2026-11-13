@@ -1,4 +1,4 @@
-import { verifyListOrderContract } from '@alteroid/core';
+import { verifyListOrderContract } from '@alteroid/core/contracts';
 import { describe, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

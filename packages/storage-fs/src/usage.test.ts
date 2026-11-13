@@ -4,16 +4,18 @@ import { join } from 'node:path';
 import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
-  verifyUsageNulContract,
-  verifyUsageQueryContract,
-  verifyUsageResetsContract,
-  verifyUsageRunnerContract,
   type UsageAccumulation,
   type UsageLayer,
   type UsageSite,
   type UsageSnapshot,
   type UsageTotals,
 } from '@alteroid/core';
+import {
+  verifyUsageNulContract,
+  verifyUsageQueryContract,
+  verifyUsageResetsContract,
+  verifyUsageRunnerContract,
+} from '@alteroid/core/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
