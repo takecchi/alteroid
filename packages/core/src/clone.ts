@@ -682,6 +682,10 @@ class Clone implements CloneHost {
   readonly #driver: AgentCloneDriver;
   // 最初の本セッションのターンの終わりで立てる（文脈占有が取れたかに関わらず）: 取れなかった回の次に出すと「最初のターン」の観測でなくなるため。プロセスの起動で数え直す（#4921）
   #firstTurnToolSearchSettled = false;
+  // ターンの終わりの文脈占有の観測を、`done` の後ろで1本ずつ直列に走らせる鎖（前の観測が終わってから次を始める）。末尾は決して拒否されない
+  #contextUsageChain: Promise<void> = Promise.resolve();
+  // 鎖に積んだが終わっていない観測の数。セッションを閉じる・差し替える経路が「待つべきか」を同期で見るため
+  #contextUsagePending = 0;
   readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
   readonly #cwd: string | undefined;
   readonly #attachmentLimits: TurnAttachmentLimits | undefined;
@@ -1767,6 +1771,8 @@ class Clone implements CloneHost {
     // 割り込ませたら、読み切ってから畳む: 割り込みだけ足すと待ち行列に残った非人間が1件もモデルへ届かず、器に未読が残るため（`clone-turn-queue.test.ts` が押さえる）
     // `#stopped` は読み切りの後で立てる: 先に立てると `#inputStream` が入力の generator を畳んで蒸留の次のターンが永久に完了せず、`#read` の `finally` が丸ごと飛んで宙吊りのターンを誰も解放しないため（`#stopped` は新しい仕事を受けない印ではなく、それは `#inbox.closed` が持つ）
     await this.#sdkSession.pumpLoop;
+    // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: 閉じた後だと `getContextUsage` が失敗に化け、`context_usage` の行が偽の失敗になるか欠けるため。待ちは観測の期限（`CONTEXT_USAGE_READ_TIMEOUT_MS`）が上限
+    await this.#whenContextUsageIdle();
 
     this.#sdkSession.markStopped();
     this.#progress.clearAll();
@@ -4050,6 +4056,11 @@ class Clone implements CloneHost {
           this.#sdkSession.wantsReopen) &&
         this.#sdkSession.turn === null
       ) {
+        // 入力を閉じる（SDK のプロセスが終わる）前に、走っている文脈占有の観測の完了を待つ（取り消さない）。待つ間に状態が変わりうるので、待ったら境界の判定からやり直す
+        if (this.#contextUsagePending > 0) {
+          await this.#whenContextUsageIdle();
+          continue;
+        }
         // 文脈窓のほう（`#recycleForContextWindow`）では知らせない: 鍵と無関係で、鳴らすと「トークンが戻った」という嘘の合図が入るため。知らせの失敗は握る: セッションの作り直しを巻き添えにしないため。
         const recycledForToken = this.#sdkSession.takeTokenRecycle();
         // 閉じたことを残す: 鍵の印はここで下ろすので、残さないと古いセッションが終わりきるまでの間、次のターンが閉じたセッションへ積まれる
@@ -4827,19 +4838,69 @@ class Clone implements CloneHost {
   }
 
   /**
+   * ターンの終わりの文脈占有の観測を、`done` を待たせずに後ろで走らせる（鎖の末尾へ積む）。観測の回数も `context_usage` の行も変えない。
+   * 直列にする: 前のターンの観測が10sの期限に当たっている間に次のターンの観測を重ねると、control channel へ要求が溜まるため。
+   * 投げない: 失敗は握って跡を残し、末尾の Promise は拒否されない（unhandled rejection を出さない）。
+   * `q` はターンの終わりの時点のセッション: 鎖が回ってきたときに差し替わっていたら聞かない（死んだ・別のセッションへ聞いて、偽の失敗の行を書かないため）。
+   */
+  #scheduleContextUsageObservation(job: {
+    q: AgentCloneSession | null;
+    sessionId: string | null;
+    succeeded: boolean;
+    usage: AgentTurnUsage | undefined;
+    firstTurnEligible: boolean;
+  }): void {
+    this.#contextUsagePending += 1;
+    this.#contextUsageChain = this.#contextUsageChain
+      .then(async () => {
+        if (job.q === null || this.#sdkSession.query !== job.q) return;
+        const contextUsage = await this.#observeContextUsage();
+        // 差し替わった後のセッションの欄を、前のセッションの値で上書きしない（`#forgetObservedFacts` が戻した `null` を守る）
+        if (this.#sdkSession.query === job.q) this.#lastContextUsage = contextUsage ?? null;
+
+        // `turn_usage` に相乗りさせない: `#usage.recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
+        if (contextUsage !== undefined) {
+          await this.#journal({
+            type: 'context_usage',
+            layer: 'clone',
+            site: 'session',
+            managerId: CLONE_ACTOR_ID,
+            ...(job.sessionId === null ? {} : { sessionId: job.sessionId }),
+            turnSucceeded: job.succeeded,
+            contextUsage,
+          });
+        }
+        await this.#noteFirstTurnToolSearch(contextUsage, job.usage, job.firstTurnEligible);
+      })
+      .catch((error: unknown) => {
+        noteDroppedRecord('ターンの終わりの文脈占有の観測', 'clone', error);
+      })
+      .finally(() => {
+        this.#contextUsagePending -= 1;
+      });
+  }
+
+  /** 積んだ観測がすべて終わるまで待つ。待つ間に積まれた分も待つ。投げない（鎖の末尾は拒否されない）。 */
+  async #whenContextUsageIdle(): Promise<void> {
+    for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
+      await tail;
+      if (tail === this.#contextUsageChain) return;
+    }
+  }
+
+  /**
    * 起動後の最初の本セッションのターンの終わりで、ToolSearch が実際に効いたかを1回だけ渡す（#4921。起動時の見込みは #4269）。
    * 蒸留のターンは数えない（本セッションの最初のターンではなく、文脈も別）。投げない: 観測であって仕事ではなく、ターンの終わりを止めないため。
    */
   async #noteFirstTurnToolSearch(
     contextUsage: ContextUsageObservation | undefined,
     usage: AgentTurnUsage | undefined,
-    succeeded: boolean,
+    eligible: boolean,
   ): Promise<void> {
     if (this.#firstTurnToolSearchSettled) return;
-    const turn = this.#sdkSession.turn;
-    if (turn?.kind !== 'normal') return;
-    // #4926: 失敗したターン（枠・拒否・result の失敗）と文脈が取れなかった回では印を立てず、次の成功したターンへ回す
-    if (!succeeded || turn.rejected != null) return;
+    // #4926: 蒸留のターン・失敗したターン（枠・拒否・result の失敗）と文脈が取れなかった回では印を立てず、次の成功したターンへ回す
+    // `eligible` はターンの終わりの時点で決めた値（観測は `done` の後ろで走り、そのとき `#sdkSession.turn` はもう次のターンかもしれない）
+    if (!eligible) return;
     if (contextUsage === undefined || contextUsage.error !== undefined) return;
     this.#firstTurnToolSearchSettled = true;
     if (this.#onFirstTurnToolSearch === undefined) return;
@@ -5229,32 +5290,23 @@ class Clone implements CloneHost {
     this.#closeModelPhase(timer, event);
     const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
       timer === null ? fn() : timer.time(`finalize.${name}`, fn);
-    const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());
-    // `undefined`（未観測）は `null` へ寄せる: `CloneRuntimeFacts.lastContextUsage` の3値を保つため。
-    this.#lastContextUsage = contextUsage ?? null;
-
-    // `turn_usage` に相乗りさせない: `#usage.recordUsage` は失敗したターン（`usage === undefined`）で早期 return し、文脈占有が残らなくなるため。
-    if (contextUsage !== undefined) {
-      await this.#journal({
-        type: 'context_usage',
-        layer: 'clone',
-        site: 'session',
-        managerId: CLONE_ACTOR_ID,
-        ...(this.#sdkSession.sdkSessionId === null
-          ? {}
-          : { sessionId: this.#sdkSession.sdkSessionId }),
-        turnSucceeded: event.succeeded,
-        contextUsage,
-      });
-    }
+    // 文脈占有の観測（SDK への1往復。最大 `CONTEXT_USAGE_READ_TIMEOUT_MS`）は待たず、`done` の後ろで直列に走らせる（積むだけで、ここでは `await` しない）。
+    // 失敗したターンでも積む（成否で絞らない）。ターンの終わりの時点の値（セッション・id・成否・最初のターンの資格）をここで控える
+    const endingTurn = this.#sdkSession.turn;
+    this.#scheduleContextUsageObservation({
+      q: this.#sdkSession.query,
+      sessionId: this.#sdkSession.sdkSessionId,
+      succeeded: event.succeeded,
+      usage: event.usage,
+      firstTurnEligible:
+        endingTurn?.kind === 'normal' && event.succeeded && endingTurn.rejected == null,
+    });
 
     const compactions = this.#sdkSession.turn?.compactions ?? [];
 
     await finalizeStep('usage', () =>
       this.#usage.recordUsage(event.usage, 'session', 'cumulative', { compactions }),
     );
-
-    await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
 
     // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
     for (const denial of event.denials) {

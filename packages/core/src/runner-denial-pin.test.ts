@@ -938,7 +938,7 @@ describe('出来事が出る周回（同期のまま保つ）', () => {
         },
         "resultFirst": {
           "seen": 3,
-          "ticks": 4,
+          "ticks": 3,
         },
         "visibleAtFirst": 3,
       }

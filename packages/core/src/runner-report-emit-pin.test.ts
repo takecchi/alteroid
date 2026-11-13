@@ -841,8 +841,8 @@ describe('report が見える周回数（出し箱が空なら await を挟ま�
     const emptyRounds = await roundsUntilReport(empty);
     expect({ noOutbox: noneRounds, emptyOutbox: emptyRounds }).toMatchInlineSnapshot(`
       {
-        "emptyOutbox": 3,
-        "noOutbox": 3,
+        "emptyOutbox": 2,
+        "noOutbox": 2,
       }
     `);
   });
@@ -1027,8 +1027,8 @@ describe('report の後で起こす（#wakeForFinishedBackgroundTaskOutputs）',
           "session",
           "tool_use",
           "tool_use",
-          "context_usage",
           "report",
+          "context_usage",
           "closed",
         ],
       }

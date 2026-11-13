@@ -528,7 +528,8 @@ describe('分類できなかった失敗（noteUnclassifiedFailure と、鍵の�
 });
 
 describe('出来事が出る周回数と、emit が投げたときの伝わり方', () => {
-  it('usage_notice と report が見える周回数（`await #observeContextUsage` の後の同じ周回）', async () => {
+  // 文脈占有の観測は `report` の後ろの鎖へ移ったので、`await #observeContextUsage` の1周が無くなり、3 周回 → 2 周回で見える
+  it('usage_notice と report が見える周回数（同じ周回）', async () => {
     const rig = await open();
     result(rig, { text: ORG_SPEND_LIMIT, isError: true });
     const seenAt: Record<string, number> = {};
@@ -540,8 +541,8 @@ describe('出来事が出る周回数と、emit が投げたときの伝わり�
     }
     expect(seenAt).toMatchInlineSnapshot(`
       {
-        "report": 3,
-        "usage_notice": 3,
+        "report": 2,
+        "usage_notice": 2,
       }
     `);
   });
@@ -565,8 +566,8 @@ describe('出来事が出る周回数と、emit が投げたときの伝わり�
         "stderr": false,
         "types": [
           "session",
-          "context_usage",
           "usage_notice",
+          "context_usage",
           "closed",
         ],
       }

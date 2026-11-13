@@ -51,7 +51,7 @@ const MARKERS: Readonly<Record<ScannedSource, Readonly<Record<string, readonly s
   'manager.ts': {},
   'runner.ts': {
     '#applyTurnEnded': [
-      "this.#emit({type: 'context_usage', managerId: this.#id,",
+      'this.#scheduleContextUsage(event);',
       'this.#markProgressed();',
       'answered: failure === undefined',
       'this.#wakeForFinishedBackgroundTaskOutputs();',
