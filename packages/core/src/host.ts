@@ -175,8 +175,6 @@ export interface CloneHost {
 
   // セッションを起こさない読み（身元を捕まえない）。値は返さない: 鍵は在るか無いかと出所だけ。
   anthropicRoute(): string[];
-  // `anthropicRoute` と同じ重ねを読む。値は返さない（名前と出所だけ）
-  toolSearchRoute(): string;
 
   // init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない
   pluginLoad(): ClonePluginLoadObservation | undefined;

@@ -9,7 +9,6 @@ import type {
   AgentEvent,
   AgentRuntimeFacts,
   AgentTurnEnded,
-  AgentTurnUsage,
 } from './agent-events.js';
 import type {
   AgentContextOutcome,
@@ -50,14 +49,11 @@ import {
 import { resolveTokenSavingExcerpt } from './token-saving-switches.js';
 import {
   describeAnthropicRoute,
-  describeToolSearch,
   inspectAnthropicRoute,
-  inspectToolSearch,
   type AnthropicRouteLayer,
 } from './anthropic-route-env.js';
 import { collectRunnerModelLines, collectRunnerRouteLines } from './manager-models.js';
 import { distillSucceededEntry } from './distill-gap.js';
-import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import {
@@ -549,11 +545,6 @@ export interface CloneOptions {
   dailyReportRetryDelaysMs?: readonly number[];
   restoreUnreadRetryDelaysMs?: readonly number[];
   contextUsageTimeoutMs?: number;
-  /**
-   * 起動後の最初の本セッションのターン（蒸留を除く）で文脈占有が取れたとき、ToolSearch が実際に効いたかの1行を、プロセスの起動につき1回だけ渡す（#4921）。
-   * 出し先（標準出力・日誌）はデーモンが持つ: 起動時の1行（`toolSearchRoute`、#4269）と同じ層から並べて出すため。
-   */
-  onFirstTurnToolSearch?: (line: string) => Promise<void>;
   /** 人間の「止める」操作が `interrupt` の答えを待つ期限（既定 {@link CLONE_INTERRUPT_TIMEOUT_MS}。#4664）。試験が短くするための口。 */
   interruptTimeoutMs?: number;
   profile?: ProfileApplier;
@@ -681,9 +672,6 @@ class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #permissionRuleService: DelegatedPermissionRuleService | undefined;
   readonly #driver: AgentCloneDriver;
-  // 最初の本セッションのターンの終わりで立てる（文脈占有が取れたかに関わらず）: 取れなかった回の次に出すと「最初のターン」の観測でなくなるため。プロセスの起動で数え直す（#4921）
-  #firstTurnToolSearchSettled = false;
-  readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
   readonly #cwd: string | undefined;
   readonly #attachmentLimits: TurnAttachmentLimits | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
@@ -987,7 +975,7 @@ class Clone implements CloneHost {
    * 消費の台帳（`clone-usage-ledger.ts`）。`usage` ストアへ積み、`turn_usage` の行と数え直し・失敗の跡を日誌へ残す。状態は持たない（読むだけ）。
    * 口は呼ばれるまで読まない関数で組む（`#stores`・`#provider` は constructor の中で入り、`#sdkSession` はこの後ろで作る）。
    * 呼び元 `stop()`・`#read`・`#distillFromTranscript`・`#applyTurnEnded` の呼び方は元のまま: 協力者のメソッドは `async` のまま移し、外側を包み直さない。
-   * 観測（`#observeDistillQuota`・`#observeContextUsage`・`#noteFirstTurnToolSearch`）は台帳ではないので、ここへ移していない。
+   * 観測（`#observeDistillQuota`・`#observeContextUsage`）は台帳ではないので、ここへ移していない。
    */
   readonly #usage = new CloneUsageLedger({
     journal: (entry) => this.#journal(entry),
@@ -1058,7 +1046,6 @@ class Clone implements CloneHost {
       dailyReportRetryDelaysMs,
       restoreUnreadRetryDelaysMs,
       contextUsageTimeoutMs,
-      onFirstTurnToolSearch,
       interruptTimeoutMs,
       profile,
       profileService,
@@ -1113,7 +1100,6 @@ class Clone implements CloneHost {
     );
     this.#restoreUnreadRetryDelays = restoreUnreadRetryDelaysMs ?? RESTORE_UNREAD_RETRY_DELAYS_MS;
     this.#contextUsageTimeoutMs = contextUsageTimeoutMs ?? CONTEXT_USAGE_READ_TIMEOUT_MS;
-    this.#onFirstTurnToolSearch = onFirstTurnToolSearch;
     this.#interruptTimeoutMs = interruptTimeoutMs ?? CLONE_INTERRUPT_TIMEOUT_MS;
     this.#env = envSource;
     this.#childEnvBase = childEnvBase ?? envSource;
@@ -4576,10 +4562,6 @@ class Clone implements CloneHost {
     return describeAnthropicRoute(inspectAnthropicRoute(this.#childEnvLayers()));
   }
 
-  toolSearchRoute(): string {
-    return describeToolSearch(inspectToolSearch(this.#childEnvLayers()));
-  }
-
   /**
    * 正本を、マネージャー側と同じ1本の解決（`resolveCredentialRows`）へ通してから重ねる。
    * `#childEnv()` は同期なので、非同期の読み出しではなく同期の写し（`vaultSnapshot()`）を覗く。
@@ -4822,30 +4804,6 @@ class Clone implements CloneHost {
       return contextUsageObservationOf(usage, startedAt);
     } catch (error) {
       return failedContextUsageObservation(error, startedAt);
-    }
-  }
-
-  /**
-   * 起動後の最初の本セッションのターンの終わりで、ToolSearch が実際に効いたかを1回だけ渡す（#4921。起動時の見込みは #4269）。
-   * 蒸留のターンは数えない（本セッションの最初のターンではなく、文脈も別）。投げない: 観測であって仕事ではなく、ターンの終わりを止めないため。
-   */
-  async #noteFirstTurnToolSearch(
-    contextUsage: ContextUsageObservation | undefined,
-    usage: AgentTurnUsage | undefined,
-    succeeded: boolean,
-  ): Promise<void> {
-    if (this.#firstTurnToolSearchSettled) return;
-    const turn = this.#sdkSession.turn;
-    if (turn?.kind !== 'normal') return;
-    // #4926: 失敗したターン（枠・拒否・result の失敗）と文脈が取れなかった回では印を立てず、次の成功したターンへ回す
-    if (!succeeded || turn.rejected != null) return;
-    if (contextUsage === undefined || contextUsage.error !== undefined) return;
-    this.#firstTurnToolSearchSettled = true;
-    if (this.#onFirstTurnToolSearch === undefined) return;
-    try {
-      await this.#onFirstTurnToolSearch(describeFirstTurnToolSearch(contextUsage, usage));
-    } catch (error) {
-      noteDroppedRecord('ToolSearch の最初のターンの観測', 'clone', error);
     }
   }
 
@@ -5257,8 +5215,6 @@ class Clone implements CloneHost {
         compactions,
       }),
     );
-
-    await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);
 
     // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載る。生の合図と `result` の両方を読む（SDK は前者を best-effort としている）。
     for (const denial of event.denials) {

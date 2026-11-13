@@ -1866,9 +1866,6 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     anthropicRoute() {
       throw new Error('spec 生成専用のスタブ');
     },
-    toolSearchRoute() {
-      throw new Error('spec 生成専用のスタブ');
-    },
     pluginLoad() {
       throw new Error('spec 生成専用のスタブ');
     },
