@@ -397,7 +397,8 @@ describe('返事待ちの task の読み出し（#waitingReplyLinesFor）が投�
 
     expect(noticeOf(input)).not.toContain(WAITING_MARK);
     expect(noticeOf(input)).toContain('いま届いたこの一件は task `evt-返事です` として積んだ');
-    expect(noticeOf(input)).toContain('全文は `task_list`。並べ替えは `task_move`。');
+    expect(noticeOf(input)).toContain('全部は task_list）');
+    expect(noticeOf(input)).not.toContain('全文は `task_list`');
     expect(stderr.filter((line) => line.includes('返事待ちの task の断り書き')))
       .toMatchInlineSnapshot(`
       [
@@ -451,7 +452,8 @@ describe('返事待ちの task の読み出し（#waitingReplyLinesFor）が投�
 
     expect(noticeOf(input)).not.toContain(WAITING_MARK);
     expect(noticeOf(input)).toContain('いま届いたこの一件は task `evt-返事です` として積んだ');
-    expect(noticeOf(input)).toContain('全文は `task_list`。並べ替えは `task_move`。');
+    expect(noticeOf(input)).toContain('全部は task_list）');
+    expect(noticeOf(input)).not.toContain('全文は `task_list`');
     expect(stderr.filter((line) => line.includes('返事待ちの task の断り書き')))
       .toMatchInlineSnapshot(`
       [
@@ -593,7 +595,7 @@ describe('待ち行列の断り書きの枝（#taskQueueNoticeFor）', () => {
     expect(distill).not.toContain('全文は `task_list`');
   });
 
-  it('報告の回（Task を積まない回）は、積んだ行も積めなかった行も無く、先頭と固定の 1 文だけが出る', async () => {
+  it('報告の回（Task を積まない回）は、積んだ行も積めなかった行も無く、先頭だけが出る（末尾の再掲は無い）', async () => {
     const s = setup();
     s.clone.post(humanMessage('1回目'));
     await s.waitForEvents((events) => doneCount(events) >= 1);
@@ -612,7 +614,6 @@ describe('待ち行列の断り書きの枝（#taskQueueNoticeFor）', () => {
     expect(noticeOf(report)).toMatchInlineSnapshot(`
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "

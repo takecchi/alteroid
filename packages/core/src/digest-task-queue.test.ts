@@ -252,8 +252,8 @@ describe('digest に旧台帳の節・件数の行は出ない（台帳の撤去
   });
 });
 
-describe('counts 形（定期の依頼の tick・日報以外の件数の形）は、待ち行列の件数の1行だけ', () => {
-  it('先頭の描画（task の行・案内・節）は出さず、件数の1行だけ', async () => {
+describe('counts 形（定期の依頼の tick・日報以外の件数の形）は、待ち行列を何も載せない（断り書きの先頭が持つ）', () => {
+  it('先頭の描画（task の行・案内・節）も件数の行も出さない', async () => {
     const stores = createMemoryStores();
     await seedTasks(stores, [
       makeTask('t1', { status: 'needs_decision', origin: 'human' }),
@@ -264,9 +264,7 @@ describe('counts 形（定期の依頼の tick・日報以外の件数の形）�
       shape: 'counts',
     });
 
-    expect(counts).toContain(
-      '- 待ち行列: 開いている 2 件（queued 1 / waiting 0 / needs_decision 1）',
-    );
+    expect(counts).not.toContain('待ち行列: 開いている');
     expect(counts).not.toContain('- t1（');
     expect(counts).not.toContain('先頭が先にやるもの');
     expect(counts).not.toContain('## 待ち行列');

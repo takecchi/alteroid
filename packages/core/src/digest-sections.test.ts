@@ -25,11 +25,7 @@ import { excerptLine } from './excerpt.js';
 import type { ManagerAwaitingBackground } from './manager.js';
 import type { Job, JournalEntry, ScheduledRequest, Task } from './schema.js';
 import type { TaskList } from './store.js';
-import {
-  describeTaskQueueCount,
-  describeTaskQueueHead,
-  TASK_QUEUE_HEAD_LIMIT,
-} from './task-tools.js';
+import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 
 // B1（`buildActivityDigest` の節ごとの切り出し）の純関数が、切り出し前の式と 1 文字も違わないことの歯。
 // 「移し替えで 1 文字も変えていない」ことの歯であって、文面の正しさの保証ではない（文面そのものは digest-full-text-pin.test.ts が全文で固定している）。
@@ -326,7 +322,7 @@ function legacyCountsDigest(input: CountsDigestInput): string {
       ` / 聞かずに決めたこと ${decisionsCount} / 記憶の更新 ${memoryUpdatesCount}` +
       ` / 外部イベント ${externalsCount}` +
       ` / 人間からの発言 ${humanTurnsCount}`,
-    `- ${describeTaskQueueCount(taskList)}`,
+    // 待ち行列の件数の行は外した（断り書きの先頭が同じ行を持つため）。切り出し前の形からこの1行だけ差し引いてある
     ...(unreadableLine === ''
       ? []
       : [`- 読めない行（壊れた行。上の件数には入っていない）: ${unreadableLine}`]),
@@ -661,6 +657,7 @@ describe('旧式との 1 文字比べ（B1: buildActivityDigest の節ごとの�
       }
     }
     expect(compared).toBe(3 * 2 * 2 * 4);
-    expect(seen.size).toBe(compared);
+    // 待ち行列の件数の行を外したので、開いている件の有無（list の2通り）は出力に現れない。読めない行の件数（unreadable）の違いは今も現れる
+    expect(seen.size).toBe(compared / 2);
   });
 });
