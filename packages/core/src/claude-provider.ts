@@ -46,7 +46,6 @@ import type {
 import { splitInProcessMcpServers } from './clone-mcp-config-file.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
-import { notePhase } from './loop-stall.js';
 import type { PermissionModeName } from './permission-mode.js';
 import type { ReportLanguageMode } from './report-language.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
@@ -100,43 +99,6 @@ function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRec
   };
 }
 
-/**
- * ループの停止の見張り（#4485）に、どのフックを処理していたかを残す。入口と出口の2つを打つ: 入口の印が遅れて現れれば、止めていたのはフックに届く前
- * （SDK が子の stdout の1行を読んで解析する所など）で、入口と出口の間が開いていれば、フックの中の処理である。
- * 道具の出力の大きさ（文字数）を添える: SDK はフックの入力を子の stdout の1行として受け取るので、その行の大きさの目安になる。
- * 大きさは最上位の文字列の欄だけを数える（`JSON.stringify` しない: 印のために重い処理を足さないため）。
- */
-function noteHookPhase(event: string, input: unknown): void {
-  const raw = input as { tool_name?: unknown; tool_response?: unknown } | null | undefined;
-  const tool = typeof raw?.tool_name === 'string' ? `:${raw.tool_name}` : '';
-  const chars = toolResponseChars(raw?.tool_response);
-  notePhase(`sdk-hook:${event}${tool}${chars === undefined ? '' : `:${String(chars)}ch`}`);
-}
-
-function toolResponseChars(response: unknown): number | undefined {
-  if (typeof response === 'string') return response.length;
-  if (response === null || typeof response !== 'object') return undefined;
-  let total: number | undefined;
-  for (const value of Object.values(response)) {
-    if (typeof value === 'string') total = (total ?? 0) + value.length;
-  }
-  return total;
-}
-
-// フックの呼び出しを入口と出口の phase の印で挟む。`phaseEvent` が undefined なら印なしで `run` だけ。`run` の例外は握らず、出口の印は例外でも残す
-async function withHookPhase<R>(
-  phaseEvent: string | undefined,
-  input: unknown,
-  run: () => Promise<R> | R,
-): Promise<R> {
-  if (phaseEvent !== undefined) noteHookPhase(phaseEvent, input);
-  try {
-    return await run();
-  } finally {
-    if (phaseEvent !== undefined) notePhase(`sdk-hook-done:${phaseEvent}`);
-  }
-}
-
 // 未知の kind が渡ったときの倒れ先: 投げずに `noteBackgroundFailure` で跡だけ残し、安全側（`{ continue: true }`）を返す
 function continueOnUnknownKind(
   what: string,
@@ -153,14 +115,13 @@ function continueOnUnknownKind(
 
 // 観測フックの共通の形: 中立の記録へ写して渡し、常に `{ continue: true }` を返す。投げた例外は握らない。
 // `await` を保つ: PreCompact は compaction がこのフックの返り値を待つので、退避・蒸留の完了を待ってから返す意味を変えないため
-// `phaseEvent` を渡すと、呼び出しの前後に phase の印を残す（道具の監査だけ）。`signal` は PreCompact の記録だけが使う
+// `signal` は PreCompact の記録だけが使う
 function wrapObservationHook<T>(
   hook: AgentObservationHook<T>,
   toRecord: (input: unknown, signal: AbortSignal | undefined) => T,
-  phaseEvent?: string,
 ): HookCallback {
   return async (input, _toolUseId, options) => {
-    await withHookPhase(phaseEvent, input, () => hook(toRecord(input, options?.signal)));
+    await hook(toRecord(input, options?.signal));
     return { continue: true };
   };
 }
@@ -228,9 +189,7 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
 // `default` 節で投げない: このフックは SDK のツール実行の経路に載っており、例外を投げるとそのターン全体が壊れるため。安全側（`{ continue: true }`）へ倒し、`noteBackgroundFailure` で跡だけ残す
 function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
   return async (input) => {
-    const decision = await withHookPhase('PreToolUse', input, () =>
-      hook(toAgentPreToolRecord(input)),
-    );
+    const decision = await hook(toAgentPreToolRecord(input));
     switch (decision.kind) {
       case 'continue':
         // 書き換えは `permissionDecision` を付けずに返す: 確認の流れをそのままにして入力だけを変えるため
@@ -338,7 +297,7 @@ function wrapContextHook<T>(
   toRecord: (input: unknown) => T,
 ): HookCallback {
   return async (input) => {
-    const outcome = await withHookPhase(hookEventName, input, () => hook(toRecord(input)));
+    const outcome = await hook(toRecord(input));
     switch (outcome.kind) {
       case 'continue':
         return { continue: true };
@@ -502,7 +461,7 @@ function cloneBaseOptions(
 function postToolUseFailureMatchers(hook: AgentObservationHook<AgentToolAuditFailureRecord>) {
   return [
     {
-      hooks: [wrapObservationHook(hook, toAgentToolAuditFailureRecord, 'PostToolUseFailure')],
+      hooks: [wrapObservationHook(hook, toAgentToolAuditFailureRecord)],
     },
   ];
 }
@@ -583,9 +542,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
     hooks: {
-      PostToolUse: [
-        { hooks: [wrapObservationHook(onPostToolUse, toAgentToolAuditRecord, 'PostToolUse')] },
-      ],
+      PostToolUse: [{ hooks: [wrapObservationHook(onPostToolUse, toAgentToolAuditRecord)] }],
       // 蒸留の失敗も記録する: 蒸留は `memory_write` を叩く経路で、失敗を記録しないと「記憶が書かれなかった」が静かに落ちるため
       PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
     },

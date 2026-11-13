@@ -869,43 +869,43 @@ describe('同期のまま保つ（note が送られる周回と、決定が返�
             "note: Bash の呼び出しを確認に上げた（manager:mgr-1・形=tail-f）。",
           ],
           "settled": "ask",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "deny": {
           "eventsAtCall": [
             "note: Bash の呼び出しを弾いた（manager:mgr-1・形=tail-f）。\`ta",
           ],
           "settled": "deny",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "exception": {
           "eventsAtCall": [],
           "settled": "ask",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "notBash": {
           "eventsAtCall": [],
           "settled": "undefined",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "pass": {
           "eventsAtCall": [],
           "settled": "undefined",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "releaseProd": {
           "eventsAtCall": [
             "note: Bash の呼び出しを確認に上げた（manager:mgr-1・形=gh-relea",
           ],
           "settled": "ask",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
         "shape": {
           "eventsAtCall": [
             "note: Bash の呼び出しを弾いた（manager:mgr-1・形=fd-dup）。記述子",
           ],
           "settled": "deny",
-          "ticksToSettle": 3,
+          "ticksToSettle": 2,
         },
       }
     `);

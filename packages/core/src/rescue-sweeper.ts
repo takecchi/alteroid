@@ -1,5 +1,4 @@
 import { noteDroppedRecord } from './dropped-record.js';
-import { notePhase } from './loop-stall.js';
 import type { ManagerRecord } from './manager.js';
 import {
   pruneRescueLedger,
@@ -78,8 +77,6 @@ export class RescueSweeper {
         return;
       }
       this.#sweptAt = startedAt;
-      // 後始末の前後に印を打つ（#4485）: 退避 ref を消していた日に印の無い停止が出たので、止めていたのがこの周回かを分けるため
-      notePhase(`rescue-sweep:start:${String(jobs.length)}`);
       // 1回あたりの上限（本数と時間）。GitHub 障害の初回などで削除が溜まっていても、
       // 残りは次の回へ回す。
       const budget = {
@@ -99,7 +96,6 @@ export class RescueSweeper {
       }
     } finally {
       this.#sweeping = false;
-      notePhase('rescue-sweep:done');
     }
   }
 
