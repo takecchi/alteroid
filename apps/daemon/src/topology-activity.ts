@@ -303,6 +303,36 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
   }
 }
 
+/**
+ * 地図の流れ（`/topology/stream`）が、日誌の追記を組み直しの契機にするかの分類。
+ * - `always`: 契機にする。担当・runner・ターン・鍵の変化は日誌の行と並んで起きるが、どの行がそれに当たるかを種別だけでは言い切れないため、効かないと確かめていない種別はここに置く。
+ * - `when-mapped`: `mapJournalEntry` が線か札に写す行だけ契機にする（写さない行は署名に入る何も変えない）。最多の `tool_use` だけがこれ。
+ * 日誌に種別が足されると `satisfies` が落ち、分類を決めるまで進めない（足し忘れて静かに古くならない）。
+ */
+export const JOURNAL_ENTRY_TOPOLOGY_TRIGGER = {
+  exchange: 'always',
+  decision: 'always',
+  escalation: 'always',
+  tool_use: 'when-mapped',
+  memory_update: 'always',
+  daily_report: 'always',
+  external_event: 'always',
+  turn_usage: 'always',
+  token_rotation: 'always',
+  subagent_stall: 'always',
+  context_usage: 'always',
+  turn_timing: 'always',
+  http_timing: 'always',
+  github_observation: 'always',
+  conversation_deleted: 'always',
+} as const satisfies Record<JournalEntry['type'], 'always' | 'when-mapped'>;
+
+export function journalEntryMayChangeTopology(entry: JournalEntry): boolean {
+  if (JOURNAL_ENTRY_TOPOLOGY_TRIGGER[entry.type] === 'always') return true;
+  const mapped = mapJournalEntry(entry);
+  return mapped.links.length > 0 || mapped.workers.length > 0;
+}
+
 function later(current: string | undefined, next: string): string {
   if (current === undefined) return next;
   const a = Date.parse(current);

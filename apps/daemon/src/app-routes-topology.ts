@@ -11,6 +11,7 @@ import { describeRoute, resolver } from 'hono-openapi';
 import { z } from 'zod';
 import { topologyResponseSchema } from './openapi.js';
 import { describeProbeError, topologySignature } from './topology.js';
+import { journalEntryMayChangeTopology } from './topology-activity.js';
 import { Hono } from 'hono';
 import type { AppContext } from './app-context.js';
 import type { AppDeps } from './app.js';
@@ -195,8 +196,10 @@ export function topologyRoutes(ctx: AppContext, deps: AppDeps) {
             let closed = false;
             let dirty = false;
 
+            // 地図に効く追記だけで組み直す（最多の `tool_use` は線か札に写るものだけ）。外れた分は周期（`topologyTickMs`）の安全網が拾うので、地図の更新が最大その分遅れうるのは表示だけ。
             const unsubscribeJournal =
-              deps.journalEvents?.subscribe(() => {
+              deps.journalEvents?.subscribe((entry) => {
+                if (!journalEntryMayChangeTopology(entry)) return;
                 dirty = true;
                 wake?.();
               }) ?? (() => undefined);
