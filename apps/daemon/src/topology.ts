@@ -3,6 +3,7 @@ import {
   isManagerInFlight,
   type CloneHost,
   type ManagerModels,
+  type ManagerPool,
   type ManagerSummary,
   type RunnerRegistry,
   type UnreadableJob,
@@ -366,10 +367,10 @@ export function createStorageHealthTracker(options: StorageHealthOptions): Stora
 
 interface TopologyServiceDeps {
   clone: Pick<CloneHost, 'usageBlocked' | 'activeTurn'> & {
-    managers: { list(): Promise<ManagerSummary[]> };
+    // 一覧と読めない行を、台帳の 1 回の scan で受ける（`list()` と `unreadableJobs()` を続けて呼ぶと 2 回走る）
+    managers: Pick<ManagerPool, 'listWithUnreadable'>;
   };
   runners?: Pick<RunnerRegistry, 'entries'>;
-  unreadableJobs: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
   modelsOf: (manager: ManagerSummary) => ManagerModels;
@@ -395,8 +396,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
 
   async function build(): Promise<TopologySnapshot> {
     const nowMs = now();
-    const managers = await deps.clone.managers.list();
-    const unreadable = await deps.unreadableJobs();
+    const { managers, unreadable } = await deps.clone.managers.listWithUnreadable();
     // 読めなくても地図は出す: ラベルは飾りで、無ければ id だけを出せば足りるため
     const tokenLabels = await deps.tokenLabels?.().catch(() => undefined);
     const cloneTokenId = deps.cloneTokenId?.();

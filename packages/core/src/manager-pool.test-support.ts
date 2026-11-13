@@ -9,8 +9,8 @@ const notImplemented = (): never => {
  * （`start` など）は投げる。試験が見る口だけ `overrides` で上書きする。
  * 口を足すとき、偽を1つずつ直さずここへ既定を足す。
  *
- * `get` / `runningManagerPinning` の既定は、同じ偽の `list` / `runningManagerOwning`（上書き後のもの）へ寄せる:
- * 偽が1件読みを別に持たない限り、一覧・広い保護と同じ答えになる。
+ * `get` / `listWithUnreadable` / `runningManagerPinning` の既定は、同じ偽の `list` / `runningManagerOwning`（上書き後のもの）へ寄せる:
+ * 偽が1件読み・読めない行を別に持たない限り、一覧・広い保護と同じ答え（読めない行は空）になる。
  * `transcriptTail` / `runnerPidsSaturation` / `runnerHasCapability` は省略可能のままなので既定を置かない
  * （持たない偽は、呼ぶ側が全文・材料なし・`false` に倒す）。
  */
@@ -20,6 +20,7 @@ export function fakeManagerPool(overrides: Partial<ManagerPool> = {}): ManagerPo
     send: notImplemented,
     abort: notImplemented,
     list: () => Promise.resolve([]),
+    listWithUnreadable: async () => ({ managers: await pool.list(), unreadable: [] }),
     get: async (managerId) => (await pool.list()).find((entry) => entry.managerId === managerId),
     denials: () => [],
     runners: notImplemented,

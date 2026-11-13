@@ -1731,6 +1731,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     list() {
       throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
     },
+    listWithUnreadable() {
+      throw new Error('spec 生成専用のスタブ: マネージャー一覧は持たない');
+    },
     get() {
       throw new Error('spec 生成専用のスタブ: マネージャーは1件も読まない');
     },

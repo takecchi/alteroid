@@ -1,4 +1,4 @@
-import type { JournalEntry, ManagerSummary } from '@alteroid/core';
+import { fakeManagerPool, type JournalEntry, type ManagerSummary } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { topologyResponseSchema } from './openapi.js';
@@ -339,11 +339,14 @@ describe('読めなかった委譲の行（#2705）', () => {
     );
   });
 
-  it('サービスは unreadableJobs の口から読んで載せる。0件なら載せない', async () => {
+  it('サービスは listWithUnreadable の口から読んで載せる。0件なら載せない', async () => {
     const make = (rows: typeof bad) =>
       createTopologyService({
-        clone: { usageBlocked: false, activeTurn: () => null, managers: { list: async () => [] } },
-        unreadableJobs: async () => rows,
+        clone: {
+          usageBlocked: false,
+          activeTurn: () => null,
+          managers: { listWithUnreadable: async () => ({ managers: [], unreadable: rows }) },
+        },
         modelsOf: () => ({}),
         activity: createTopologyActivityTracker(),
         storage: { current: () => ({ state: 'unknown' }) },
@@ -357,8 +360,11 @@ describe('読めなかった委譲の行（#2705）', () => {
 describe('createTopologyService', () => {
   function service(list: () => Promise<ManagerSummary[]>, now: () => number) {
     return createTopologyService({
-      clone: { usageBlocked: false, activeTurn: () => null, managers: { list } },
-      unreadableJobs: () => Promise.resolve([]),
+      clone: {
+        usageBlocked: false,
+        activeTurn: () => null,
+        managers: { listWithUnreadable: async () => ({ managers: await list(), unreadable: [] }) },
+      },
       modelsOf: () => ({}),
       activity: createTopologyActivityTracker(),
       storage: { current: () => ({ state: 'unknown' }) },
@@ -379,6 +385,29 @@ describe('createTopologyService', () => {
     clock += 1500;
     await svc.snapshot({ maxAgeMs: 1000 });
     expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it('build は listWithUnreadable() の 1 回だけで、list() は呼ばない（台帳の scan は build あたり 1 回）', async () => {
+    const calls: string[] = [];
+    const pool = fakeManagerPool({
+      list: async () => {
+        calls.push('list');
+        return [];
+      },
+      listWithUnreadable: async () => {
+        calls.push('listWithUnreadable');
+        return { managers: [], unreadable: [] };
+      },
+    });
+    const svc = createTopologyService({
+      clone: { usageBlocked: false, activeTurn: () => null, managers: pool },
+      modelsOf: () => ({}),
+      activity: createTopologyActivityTracker(),
+      storage: { current: () => ({ state: 'unknown' }) },
+      now: () => NOW,
+    });
+    await svc.snapshot();
+    expect(calls).toEqual(['listWithUnreadable']);
   });
 
   it('走っているターンが無い clone は idle、runners 未配線は空', async () => {

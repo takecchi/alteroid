@@ -121,6 +121,7 @@ import type {
   LastUnpushedWorkObservation,
   TextMarkup,
   UnpushedWorkObservationSource,
+  UnreadableJob,
   WorkspaceLocator,
   ExternalOutput,
 } from './schema.js';
@@ -900,6 +901,11 @@ export interface ManagerPool {
    */
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
   list(): Promise<ManagerSummary[]>;
+  /**
+   * `list()` と、台帳の読めない行（`JobStore.listUnreadableJobs()`）を、台帳の 1 回の scan で返す（地図の build 用）。
+   * 結果は 2 つの口を別々に呼んだものと同じで、`list()` が書く計器も同じ条件・回数で通る。
+   */
+  listWithUnreadable(): Promise<{ managers: ManagerSummary[]; unreadable: UnreadableJob[] }>;
   /**
    * 1件だけ読む（#5089）。`list()` の該当の1件と同じ像を返す（ただし一覧の並べ替えと、一覧のついでに書く計器は無い）。
    * 無ければ `undefined`。台帳の行が読めなければ `UnreadableJobError`。
@@ -3267,7 +3273,23 @@ class Pool implements ManagerPool {
     return this.#summarize({ job, waiting: [], attached: false }, context);
   }
 
-  async list(): Promise<ManagerSummary[]> {
+  // `async` を付けない: 付けると返す Promise をもう一枚包み、解けるまでの microtask の周回が増える（周回数の pin が見ている）
+  list(): Promise<ManagerSummary[]> {
+    return this.#listSummaries(() => this.#stores.jobs.listJobs());
+  }
+
+  async listWithUnreadable(): Promise<{ managers: ManagerSummary[]; unreadable: UnreadableJob[] }> {
+    let unreadable: UnreadableJob[] = [];
+    const managers = await this.#listSummaries(async () => {
+      const read = await this.#stores.jobs.listJobsWithUnreadable();
+      unreadable = read.unreadable;
+      return read.jobs;
+    });
+    return { managers, unreadable };
+  }
+
+  // `list()` と `listWithUnreadable()` の共通の本体。台帳の読み方だけが違い、計器（`#noteVanishedRunnerGauge`）を含む残りは同じ道を通る。
+  async #listSummaries(readJobs: () => Promise<readonly Job[]>): Promise<ManagerSummary[]> {
     await this.#ensureConnected();
 
     const context = this.#summaryContext();
@@ -3278,7 +3300,7 @@ class Pool implements ManagerPool {
     }
     // `live: false` を決め打ちしない: `#retire` が `#records` から外した後の「台帳にしか無い」は
     // 「runner に宛先が無い」とは限らず、決め打つと外した瞬間に `live: true` だった委譲が `false` へ化ける。
-    for (const job of await this.#stores.jobs.listJobs()) {
+    for (const job of await readJobs()) {
       if (known.has(job.id)) continue;
       known.set(job.id, this.#summarize({ job, waiting: [], attached: false }, context));
     }
