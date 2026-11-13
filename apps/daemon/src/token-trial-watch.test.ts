@@ -795,6 +795,26 @@ describe('token-trial-watch: 周期（骨組みへ載せ替えた後も同じ）
     watch.stop();
   });
 
+  it('tickMs を渡さない既定は 5 分: 60 秒では試さず、5 分で試す', async () => {
+    const stores = await seedCooling();
+    const trial = fakeTrial({ verdict: 'undecidable', reason: 'x' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
+      onOutcome: () => Promise.resolve(),
+      now: () => AT,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(trial.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 60_001);
+    expect(trial.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(trial.calls).toEqual(['a']);
+    watch.stop();
+  });
+
   it('終わってから tickMs 待って次の回が来る（毎回 tickMs 間隔）', async () => {
     const stores = await seedCooling();
     let reads = 0;
