@@ -1587,6 +1587,20 @@ const MAX_MANAGER_ID_ATTEMPTS = 5;
 const HELLO_WAIT_MS = 5_000;
 const HELLO_POLL_MS = 50;
 
+/**
+ * runner の名乗り1つぶん。欄が無いのは「名乗っていない（旧い runner・まだ受けていない）」。
+ * `capabilities` が無いことは「まだ `hello` を受けていない」、空集合は「名乗ったが何も持たない（旧い runner）」
+ * ——どちらも能力を持たないものとして扱う。`anthropic_route`・`manager_peers` は `hello` より先に届いても
+ * その欄だけ入る（`hello` 済みかどうかは `capabilities` の有無で見る）。
+ */
+interface RunnerHelloRecord {
+  readonly capabilities?: ReadonlySet<string> | undefined;
+  readonly models?: { manager?: string; worker?: string } | undefined;
+  readonly anthropicRoute?: readonly string[] | undefined;
+  readonly managerPeers?: readonly RunnerManagerPeer[] | undefined;
+  readonly managerPeersClosed?: readonly RunnerManagerPeerClosed[] | undefined;
+}
+
 /** `work` が拒否で終わっても true（失敗は別の経路が跡を残す）。**待ちのタイマーは必ず畳む**（残すとプロセスが終わらない）。 */
 async function settledWithin(work: Promise<unknown> | undefined, ms: number): Promise<boolean> {
   if (work === undefined) return true;
@@ -1642,20 +1656,12 @@ class Pool implements ManagerPool {
    */
   readonly #vanishedRunnerGaugeLastCount = new Map<string, number>();
   /**
-   * **鍵が無いことは「まだ名乗りを受けていない」、空集合は「名乗ったが何も持たない（旧い runner）」**
-   * ——どちらも能力を持たないものとして扱う。
+   * runner の名乗り（`hello` と、その後の `anthropic_route`・`manager_peers`）を runnerId ごとに1つの record で持つ。
+   * 欄は別々に置き換わる（`hello` は全部、後の2つは自分の欄だけ）ので、欄ごとの更新・削除の忘れを1か所の組み立てに寄せる。
    */
-  readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
-  /** どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
-  readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
-  /** 名乗らない旧い runner は持たない。 */
-  readonly #runnerAnthropicRoutes = new Map<string, readonly string[]>();
+  readonly #runnerHello = new Map<string, RunnerHelloRecord>();
   readonly #attachmentStager: AttachmentStager;
   readonly #staleTokenFold: StaleTokenFold;
-  /** 名乗らない器は持たない。 */
-  readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
-  /** 名乗らない器は持たない。 */
-  readonly #runnerManagerPeersClosed = new Map<string, readonly RunnerManagerPeerClosed[]>();
   /**
    * `#rateLimits` はアカウント単位の事実で、誰が止まったかを言わない。鍵が通る状態へ戻ったときに起こし直す相手を決めるには、
    * どの委譲がそれで止まったかが要る。
@@ -3523,8 +3529,9 @@ class Pool implements ManagerPool {
     if (!this.runnerHasCapability(runnerId, RUNNER_CAPABILITY_MANAGER_PEERS)) {
       return { status: 'unknown' };
     }
-    const peers = this.#runnerManagerPeers.get(runnerId) ?? [];
-    const closed = this.#runnerManagerPeersClosed.get(runnerId);
+    const record = this.#runnerHello.get(runnerId);
+    const peers = record?.managerPeers ?? [];
+    const closed = record?.managerPeersClosed;
     return {
       status: 'named',
       peers: peers.map((peer) => ({
@@ -3537,41 +3544,39 @@ class Pool implements ManagerPool {
     };
   }
 
-  /** hello と `manager_peers` の名乗りを丸ごと置き換える（送られなかった欄は消す。持ち越さない）。 */
-  #setRunnerManagerPeers(
-    runnerId: string,
+  /** peer の2欄の組み立て: 送られなかった欄・空の欄は持たない。 */
+  static #peerFields(
     peers: readonly RunnerManagerPeer[] | undefined,
     closed: readonly RunnerManagerPeerClosed[] | undefined,
-  ): void {
-    if (peers === undefined || peers.length === 0) this.#runnerManagerPeers.delete(runnerId);
-    else this.#runnerManagerPeers.set(runnerId, peers);
-    if (closed === undefined || closed.length === 0)
-      this.#runnerManagerPeersClosed.delete(runnerId);
-    else this.#runnerManagerPeersClosed.set(runnerId, closed);
+  ): Pick<RunnerHelloRecord, 'managerPeers' | 'managerPeersClosed'> {
+    return {
+      managerPeers: peers === undefined || peers.length === 0 ? undefined : peers,
+      managerPeersClosed: closed === undefined || closed.length === 0 ? undefined : closed,
+    };
   }
 
   runnerHasCapability(runnerId: string, capability: string): boolean {
-    return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
+    return this.#runnerHello.get(runnerId)?.capabilities?.has(capability) ?? false;
   }
 
   /** `hello` を受けるまで少し待つ（`connect` は `hello` を待たずに返る）。受けていれば true。 */
   async #awaitHello(runnerId: string): Promise<boolean> {
     for (
       let waited = 0;
-      !this.#runnerCapabilities.has(runnerId) && waited < HELLO_WAIT_MS;
+      this.#runnerHello.get(runnerId)?.capabilities === undefined && waited < HELLO_WAIT_MS;
       waited += HELLO_POLL_MS
     ) {
       await new Promise((resolve) => setTimeout(resolve, HELLO_POLL_MS));
     }
-    return this.#runnerCapabilities.has(runnerId);
+    return this.#runnerHello.get(runnerId)?.capabilities !== undefined;
   }
 
   runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined {
-    return this.#runnerModels.get(runnerId);
+    return this.#runnerHello.get(runnerId)?.models;
   }
 
   runnerReportedAnthropicRoute(runnerId: string): readonly string[] | undefined {
-    return this.#runnerAnthropicRoutes.get(runnerId);
+    return this.#runnerHello.get(runnerId)?.anthropicRoute;
   }
 
   autoFoldOnPlacementPressure(
@@ -5262,26 +5267,24 @@ class Pool implements ManagerPool {
       this.#farewellRunners.delete(event.runnerId);
       if (this.#stopped) return true;
       // 前の名乗りを持ち越さない: 同じ runnerId の器が入れ替わって版が下がりうる。
-      this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
+      // 5欄を丸ごと置き換える（送られなかった欄は消える）
+      this.#runnerHello.set(event.runnerId, {
+        capabilities: new Set(event.capabilities ?? []),
+        models:
+          event.managerModel === undefined && event.workerModel === undefined
+            ? undefined
+            : {
+                ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
+                ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
+              },
+        anthropicRoute: event.anthropicRoute,
+        ...Pool.#peerFields(event.managerPeers, event.managerPeersClosed),
+      });
       this.#attachmentStager.noteHello(
         event.runnerId,
         event.attachmentBodyLimit,
         event.attachmentStageLimit,
       );
-      if (event.managerModel === undefined && event.workerModel === undefined) {
-        this.#runnerModels.delete(event.runnerId);
-      } else {
-        this.#runnerModels.set(event.runnerId, {
-          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
-          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
-        });
-      }
-      if (event.anthropicRoute === undefined) {
-        this.#runnerAnthropicRoutes.delete(event.runnerId);
-      } else {
-        this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
-      }
-      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       // 初回だけ素通りにしない: 起動時に掴んだ器と SSE の繋がった先が違う場合（畳まれつつある旧 runner がまだ `/health` に答える間）に取り直しが起きない。
       void this.#reattachCore.reattach(event.runnerId);
       return true;
@@ -5289,13 +5292,19 @@ class Pool implements ManagerPool {
 
     if (event.type === 'anthropic_route') {
       if (this.#stopped) return true;
-      this.#runnerAnthropicRoutes.set(event.runnerId, event.anthropicRoute);
+      this.#runnerHello.set(event.runnerId, {
+        ...this.#runnerHello.get(event.runnerId),
+        anthropicRoute: event.anthropicRoute,
+      });
       return true;
     }
 
     if (event.type === 'manager_peers') {
       if (this.#stopped) return true;
-      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
+      this.#runnerHello.set(event.runnerId, {
+        ...this.#runnerHello.get(event.runnerId),
+        ...Pool.#peerFields(event.managerPeers, event.managerPeersClosed),
+      });
       return true;
     }
 
