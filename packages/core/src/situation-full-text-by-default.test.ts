@@ -29,7 +29,8 @@ function situation(managers: ManagerSummary[]): string {
   });
 }
 
-const READINGS_HEAD = '**「手が空いている」は「空き枠」ではない**';
+const READINGS_HEAD =
+  '**区分の読み方** — 「手が空いている」は空き枠でも、終わった／枠が空いたでもない';
 const INVARIANT_HEAD = '**⚠️ 枠を理由に仕事を見送らないこと。**';
 const UNCHANGED_HEAD = '[system] いまの全体: 前のターンと変化なし';
 

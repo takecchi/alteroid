@@ -312,7 +312,7 @@ export type ManagerOrigin =
  * 起点の会話が無い委譲に別の手順を書かない: task_add はこのターンの起点の会話へ、無ければ新しい会話へ器が結ぶ（`task_add` の `getWorkConversationId() ?? randomUUID()`）ので、クローンの手順は同じになるため（#5469）。
  */
 export const ORIGIN_NO_TASK_GUIDE =
-  '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。' +
+  '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す。' +
   '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
 
 /** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */

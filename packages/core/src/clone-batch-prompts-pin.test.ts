@@ -65,7 +65,7 @@ describe('定数', () => {
       学びや判断の基準になったことがあれば記憶へ移すこと。"
     `);
     expect(ORIGIN_NO_TASK_GUIDE).toMatchInlineSnapshot(
-      `"（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
+      `"（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
     );
   });
 });
@@ -187,7 +187,7 @@ describe('humanTurnText', () => {
 describe('describeManagerOrigin', () => {
   it('台帳の起点の4形', () => {
     expect(describeManagerOrigin({ kind: 'job', conversationId: 'c1' })).toMatchInlineSnapshot(
-      `"起点の会話: c1（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
+      `"起点の会話: c1（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
     );
     expect(describeManagerOrigin({ kind: 'job', conversationId: 'c1', taskId: 't1' }))
       .toMatchInlineSnapshot(`
@@ -195,7 +195,7 @@ describe('describeManagerOrigin', () => {
       結び付いた task: t1（task_say で書ける。task_list で読める）"
     `);
     expect(describeManagerOrigin({ kind: 'job', conversationId: null })).toMatchInlineSnapshot(
-      `"起点の会話: 無し（会話の外で起こした委譲）（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す〔宛先の会話は器が決める: 起点の会話があればそこ、無ければ新しい会話〕。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
+      `"起点の会話: 無し（会話の外で起こした委譲）（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して \`task_say\` で書く。無ければ task_add で足す。書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）"`,
     );
     expect(describeManagerOrigin({ kind: 'missing', conversationId: null })).toMatchInlineSnapshot(
       `"起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）"`,
