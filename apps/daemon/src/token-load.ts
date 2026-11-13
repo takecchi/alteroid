@@ -1,12 +1,12 @@
 import {
   fetchAccountUsage,
   reasonOf,
-  writeStderrLine,
   type AccountUsageState,
   type AgentToken,
   type UsageProbeQuery,
 } from '@alteroid/core';
 
+import { startPeriodicRun } from './periodic-runner.js';
 import { USAGE_POLL_INTERVAL_MS } from './usage-poller.js';
 
 /** 鍵1本ぶんの最後の観測。`GET /tokens` の `loads` の1行（#6633）。 */
@@ -82,25 +82,15 @@ function measurable(token: AgentToken): token is AgentToken & { value: string } 
  */
 export function startTokenLoadSampling(options: TokenLoadSamplingOptions): TokenLoadSampler {
   const interval = options.intervalMs ?? USAGE_POLL_INTERVAL_MS;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let running: Promise<void> | null = null;
+  // 周回の途中で止められたかを、1本ごとの境で見る
   let stopped = false;
-
-  const stop = () => {
-    stopped = true;
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-  options.signal?.addEventListener('abort', stop, { once: true });
 
   const sampleRound = async (): Promise<void> => {
     const tokens = await options.tokens();
     options.book.retain(new Set(tokens.map((token) => token.id)));
     const active = options.activeTokenId();
     for (const token of tokens) {
-      if (stopped) return;
+      if (stopped || options.signal?.aborted === true) return;
       if (token.id === active || !measurable(token)) continue;
       let state: AccountUsageState;
       try {
@@ -118,29 +108,17 @@ export function startTokenLoadSampling(options: TokenLoadSamplingOptions): Token
     }
   };
 
-  const sampleOnce = (): Promise<void> => {
-    if (running !== null) return running;
-    running = sampleRound().finally(() => {
-      running = null;
-    });
-    return running;
+  // 重ねない・止める・次の予約は `startPeriodicRun` が持つ（投げても次を予約する）
+  const periodic = startPeriodicRun({
+    intervalMs: interval,
+    signal: options.signal,
+    run: sampleRound,
+  });
+  return {
+    sampleOnce: periodic.refresh,
+    stop: () => {
+      stopped = true;
+      periodic.stop();
+    },
   };
-
-  // 投げても次を予約する: 1周の失敗（プールが読めない等）で観測が永久に止まらないため
-  const runThenSchedule = () => {
-    void sampleOnce()
-      .catch((error: unknown) => {
-        writeStderrLine(
-          `alteroidd: 鍵ごとの枠の観測の回が失敗しました（次の回は予約します）: ${reasonOf(error)}\n`,
-        );
-      })
-      .then(() => {
-        if (stopped) return;
-        timer = setTimeout(runThenSchedule, interval);
-        timer.unref?.();
-      });
-  };
-
-  runThenSchedule();
-  return { sampleOnce, stop };
 }
