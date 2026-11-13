@@ -2586,6 +2586,10 @@ class RunnerSession {
   readonly #mcpConfigTmpRoot: string;
   readonly #liveMcpConfigDirs: Set<string>;
   readonly #contextUsageTimeoutMs: number;
+  // ターンの終わりの文脈占有の観測を、`report` の後ろで1本ずつ直列に走らせる鎖（前の観測が終わってから次を始める）。末尾は決して拒否されない
+  #contextUsageChain: Promise<void> = Promise.resolve();
+  // 鎖に積んだが終わっていない観測の数（入力を閉じる前に待つべきかを同期で見るため）
+  #contextUsagePending = 0;
   readonly #sessionAllowRulesTimeoutMs: number;
   readonly #rescueMaxWorktrees: number | undefined;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
@@ -3160,6 +3164,9 @@ class RunnerSession {
     // 鍵の付け替えの畳みで CLI の背景処理（peer は数えない。預けて続くため）が残っていたら、その木を撃つ側へ回す（#5044）。閉じる前に数える
     const abandonTree =
       options.keepPeers === true && this.#sdkSession.liveBackgroundTasks.length > 0;
+
+    // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: 閉じた後だと `context_usage` が偽の失敗になるか欠ける。待ちは観測の期限（`CONTEXT_USAGE_READ_TIMEOUT_MS`）が上限
+    await this.#whenContextUsageIdle();
 
     // `result` を待たずに渡す: この経路で畳まれたぶんは台帳に1行も残らず、渡し損ねたら二度と取れないため
     await this.#flushUsage();
@@ -4077,6 +4084,11 @@ class RunnerSession {
       // `#stopped` に相乗りしない: runner セッション全体の停止で、混ぜるとトークンを回したらマネージャーが止まるため
       // `#read` は `#endedInputForTokenRotation` だけを見る: 意図（`#recycleForToken`）と混ぜると、SDK 自身の閉じを畳み直しと誤認して嘘の `note` を出すため
       if (this.#sdkSession.wantsTokenRecycle && this.#atTokenRecycleBoundary()) {
+        // 入力を閉じる（CLI が終わる）前に、走っている文脈占有の観測の完了を待つ（取り消さない）。待つ間に境界が崩れうるので、待ったら判定からやり直す
+        if (this.#contextUsagePending > 0) {
+          await this.#whenContextUsageIdle();
+          continue;
+        }
         this.#sdkSession.consumeTokenRecycleAtBoundary();
         // 入力を閉じる前に読む: 閉じた後は CLI が終わり、SDK が resume の一時ディレクトリごと生ログを消すため
         this.#rotationSeed = await this.#readTranscriptInResumeConfigDir();
@@ -4361,9 +4373,8 @@ class RunnerSession {
   async #applyTurnEnded(event: Extract<AgentEvent, { type: 'turn_ended' }>): Promise<void> {
     // `clone.ts` の `#apply` の `case 'turn_ended'` と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
     // の文脈占有が測れなくなる。
-    const contextUsage = await this.#observeContextUsage();
-
-    this.#emitContextUsage(event, contextUsage);
+    // 文脈占有の観測（SDK への1往復。最大 `CONTEXT_USAGE_READ_TIMEOUT_MS`）は待たず、`report` の後ろで直列に走らせる（積むだけで `await` しない）。
+    this.#scheduleContextUsage(event);
 
     // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
     const {
@@ -4432,20 +4443,44 @@ class RunnerSession {
     return;
   }
 
-  /** `#applyTurnEnded` の、文脈占有を送る段（`#applyTurnEnded` から出した。`await` を含まないので同期）。 */
-  #emitContextUsage(
-    event: Extract<AgentEvent, { type: 'turn_ended' }>,
-    contextUsage: ContextUsageObservation | undefined,
-  ): void {
-    // 成否分岐の外で無条件に emit する: 文脈占有は `usage`（成功したターンだけ）に載せず、失敗したターンも残すため
-    if (contextUsage !== undefined) {
-      this.#emit({
-        type: 'context_usage',
-        managerId: this.#id,
-        sessionId: this.#resumeState.sessionId,
-        turnSucceeded: event.succeeded,
-        contextUsage,
+  /**
+   * `#applyTurnEnded` の、文脈占有の観測を鎖へ積む段（`await` を含まないので同期）。観測の回数も `context_usage` の出来事も変えない。
+   * 直列にする: 前のターンの観測が期限に当たっている間に次を重ねると、control channel へ要求が溜まるため。
+   * 投げない: 失敗は握って跡を残し、末尾の Promise は拒否されない。
+   * `session` はターンの終わりの時点のもの: 鎖が回ってきたときに差し替わっていたら聞かない（死んだ・別のセッションへ聞いて偽の失敗を出さないため）。`sessionId` もここで控える。
+   */
+  #scheduleContextUsage(event: Extract<AgentEvent, { type: 'turn_ended' }>): void {
+    const session = this.#sdkSession.query;
+    const sessionId = this.#resumeState.sessionId;
+    this.#contextUsagePending += 1;
+    this.#contextUsageChain = this.#contextUsageChain
+      .then(async () => {
+        if (session === null || this.#sdkSession.query !== session) return;
+        const contextUsage = await this.#observeContextUsage();
+        // 成否分岐の外で無条件に emit する: 文脈占有は `usage`（成功したターンだけ）に載せず、失敗したターンも残すため
+        if (contextUsage !== undefined) {
+          this.#emit({
+            type: 'context_usage',
+            managerId: this.#id,
+            sessionId,
+            turnSucceeded: event.succeeded,
+            contextUsage,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        noteBackgroundFailure('ターンの終わりの文脈占有の観測', `managerId=${this.#id}`, error);
+      })
+      .finally(() => {
+        this.#contextUsagePending -= 1;
       });
+  }
+
+  /** 積んだ観測がすべて終わるまで待つ。待つ間に積まれた分も待つ。投げない（鎖の末尾は拒否されない）。 */
+  async #whenContextUsageIdle(): Promise<void> {
+    for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
+      await tail;
+      if (tail === this.#contextUsageChain) return;
     }
   }
 
@@ -4751,6 +4786,8 @@ class RunnerSession {
     if (this.#peerBinding !== undefined) this.#holdPeerNotices(this.#peerBinding);
     // 量をここでも1行にまとめる: `stop()` は `#finish` を通らず、片方だけにすると存在は残るが量だけが失われ、落ちていることに気づく手がかりが出力に無いため
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
+    // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: `closed` より後に `context_usage` が出ない・偽の失敗にならないため
+    await this.#whenContextUsageIdle();
     // `close()` より先に読む: 閉じた後の control channel からは何も取れないため
     await this.#flushUsage();
     this.#settleAll(reason);

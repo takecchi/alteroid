@@ -160,7 +160,8 @@ const reportIds = (events: readonly RunnerEvent[]): string[] =>
   reportsOf(events).flatMap((e) => (e.reportId === undefined ? [] : [e.reportId]));
 
 describe('呼び元 #applyTurnEnded の周回（emit を同期で呼ぶ）', () => {
-  it('result を 3 本続けて積んだとき、各 report が見える周回数（切り出し前と同じ 3 / 8 / 13）', async () => {
+  // 文脈占有の観測を `report` の後ろの鎖へ移したので、先頭の `await #observeContextUsage` の1周が無くなり、切り出し前の 3 / 8 / 13 から各 1 周回減って 2 / 7 / 12（間隔 5 は同じ）
+  it('result を 3 本続けて積んだとき、各 report が見える周回数（2 / 7 / 12。間隔は切り出し前と同じ）', async () => {
     const rig = await open();
     result(rig.started, 'r1');
     result(rig.started, 'r2');
@@ -172,9 +173,9 @@ describe('呼び元 #applyTurnEnded の周回（emit を同期で呼ぶ）', () 
     }
     expect(seenAt).toMatchInlineSnapshot(`
       {
-        "r1": 3,
-        "r2": 8,
-        "r3": 13,
+        "r1": 2,
+        "r2": 7,
+        "r3": 12,
       }
     `);
   });

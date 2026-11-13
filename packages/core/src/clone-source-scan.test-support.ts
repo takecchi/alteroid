@@ -235,14 +235,10 @@ export const INLINED_BY_FILE: Readonly<
   'clone.ts': INLINED_BY_METHOD,
   'manager.ts': {},
   'runner.ts': {
-    // SDK の `turn_ended` の1件（`RunnerSession#apply` から出した先）: 文脈占有を送る段と、成功したターンの使用量を送る段。
-    // どちらも `await` を含まないので同期のメソッドへ出し、呼び出しにも `await` を付けない
+    // SDK の `turn_ended` の1件（`RunnerSession#apply` から出した先）: 成功したターンの使用量を送る段。
+    // `await` を含まないので同期のメソッドへ出し、呼び出しにも `await` を付けない
+    // （文脈占有の送出は `#scheduleContextUsage` の鎖の中へ移り、`report` の後ろで出る。差し戻す段は無い）
     '#applyTurnEnded': [
-      {
-        name: '#emitContextUsage',
-        call: 'this.#emitContextUsage(event, contextUsage);',
-        trailing: '',
-      },
       {
         name: '#emitAnsweredUsage',
         call: 'this.#emitAnsweredUsage(event, failure);',
