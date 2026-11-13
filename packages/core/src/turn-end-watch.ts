@@ -45,12 +45,6 @@ export class TurnEndWatch {
   readonly #probedAt = new Map<string, number>();
   /** 届かなかった報告を生ログから拾って配ったターンの終わり（`turnEndedAt`）を委譲ごとに覚える（#5195）: 同じターンの終わりを見回りのたびに配らない。担当を外しても消さない（起こし直した後に同じ行を配り直さないため） */
   readonly #undeliveredRecovered = new Map<string, string>();
-  /**
-   * 見回りの末尾の段（#5160）を日誌へ書いた印（種類と委譲）。プロセス内だけ。
-   * `forget()` で消さない: 「委譲・種類ごとにプロセスにつき1回」が日誌の約束で、畳んだ委譲を起こし直した後に同じ段へ入っても書き直さない。
-   * 1件は短い文字列で、増えるのは段に入った委譲1本につき高々2件。
-   */
-  readonly #tailJournaled = new Set<string>();
 
   constructor(deps: TurnEndWatchDeps) {
     this.#deps = deps;
@@ -272,7 +266,6 @@ export class TurnEndWatch {
           runner.runnerId,
           RUNNER_CAPABILITY_TRANSCRIPT_TAIL,
         );
-        await this.#journalTranscriptTailStage(job.id, runner.runnerId, claimsTail);
         if (claimsTail) {
           const live = await tailOf(job.id, maxChars).catch(() => null);
           if (live !== null && live.length > 0) {
@@ -302,29 +295,5 @@ export class TurnEndWatch {
             'runner が末尾の口（transcript-tail）を名乗っていないので、全文は取らずに読まなかった（退避にも本文が無い）',
         }
       : { kind: 'missing' };
-  }
-
-  /**
-   * 2の段に入ったことを、委譲ごと・種類ごとにデーモンのプロセスにつき1回だけ日誌へ書く（#5160）。60秒ごとの見回りで書き続けない。
-   * 前例は `#journalRescueSkips`（`decision`・プロセス内だけの記憶で重ねて書かない）。
-   * 本番でこの段に入る委譲があるかを、日誌（`journal_read`）から確かめるための計器。
-   */
-  async #journalTranscriptTailStage(
-    managerId: string,
-    runnerId: string,
-    claimsTail: boolean,
-  ): Promise<void> {
-    const key = `${claimsTail ? 'taken' : 'withheld'}\0${managerId}`;
-    if (this.#tailJournaled.has(key)) return;
-    this.#tailJournaled.add(key);
-    await this.#deps.journal({
-      type: 'decision',
-      decision: claimsTail
-        ? `見回りが、生ログの末尾を pg の預かりに見つけられず、runner の末尾の口から取った（委譲 ${managerId}・runner ${runnerId}）`
-        : `見回りが、生ログの末尾を pg の預かりに見つけられず、runner が末尾の口（transcript-tail）を名乗っていないので、全文は取らずに読めないとした（委譲 ${managerId}・runner ${runnerId}）`,
-      grounds:
-        '#5160。pg の預かりの末尾が無いか空のときだけ、この段に入る。' +
-        '同じ委譲・同じ種類は、デーモンのプロセスにつき1回だけ書く。',
-    });
   }
 }
