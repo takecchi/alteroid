@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr, verifyApprovalConversationFilterContract } from '@alteroid/core';
+import { captureStderr } from '@alteroid/core';
+import { verifyApprovalConversationFilterContract } from '@alteroid/core/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

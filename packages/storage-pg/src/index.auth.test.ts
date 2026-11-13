@@ -8,7 +8,7 @@ import {
   verifyAuthRevokeAccessTokenContract,
   verifyAuthVerifiedEmailContract,
   verifyAuthWriteValidationContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

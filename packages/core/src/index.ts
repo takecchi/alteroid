@@ -138,27 +138,12 @@ export { deleteConversation, isConversationDeleted } from './conversation-delete
 export {
   countUnreadConversations,
   loadConversationReadView,
-  verifyConversationReadStoreContract,
   type ConversationBaselineResult,
   type ConversationOutboundIndex,
   type ConversationOutboundIndexRead,
   type ConversationReadPosition,
   type ConversationReadRead,
 } from './conversation-read.js';
-/** 3実装（インメモリ / `storage-fs` / `storage-pg`）それぞれの歯が契約を呼ぶ: 1つで測って3つとも測ったことにしない。 */
-export { verifyJournalStoreWithContract } from './journal-with-contract.js';
-export { verifyJournalStoreDeletedConversationContract } from './journal-deleted-conversation-contract.js';
-export { verifyJournalStoreWithdrawnContract } from './journal-withdrawn-contract.js';
-export { verifyJournalStoreToolUseCountContract } from './journal-tool-use-count-contract.js';
-export { verifyJournalStoreConversationIdsAfterContract } from './journal-conversation-ids-after-contract.js';
-export { verifyJournalStoreConversationPrefixContract } from './journal-conversation-prefix-contract.js';
-export { verifyJournalStoreOrderContract } from './journal-order-with-contract.js';
-export { verifyConversationPageContract } from './conversation-page-contract.js';
-export { verifyJournalStoreQueryEdgeContract } from './journal-query-edge-contract.js';
-/** インメモリは読めない行を持てないので対象外（`UnreadableJournalEntryError` の doc）。 */
-export { verifyJournalStoreUnreadableGetContract } from './journal-unreadable-get-contract.js';
-export { verifyJournalStoreHumanActionContract } from './journal-human-action-contract.js';
-export { verifyJournalStoreHorizonContract } from './journal-horizon-contract.js';
 /** 判定条件を `journal_read` と `GET /journal` の2箇所に書き写さない。 */
 export { journalWindowCrossesHorizon } from './journal-horizon.js';
 /** `since` / `until` の扱いは3実装で食い違う（pg は時刻比較、fs・インメモリは文字列比較）ので、入口で正規化する。 */
@@ -191,7 +176,6 @@ export {
 } from './approval-settled.js';
 /** 日誌の器を包むときは口を並べて渡さずこれを通す: 並べると、器に足した任意の速い口を包みが黙って落とす（#5140）。 */
 export { wrapJournalStore } from './journal-wrap.js';
-export { verifyJournalStorePageContract } from './journal-page-contract.js';
 export {
   conversationIdsAfterFromPages,
   conversationIdsWithPrefixFromPages,
@@ -216,9 +200,6 @@ export {
   BOOT_TOOL_SEARCH_EVENT_SOURCE,
   BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE,
 } from './distill-gap.js';
-export { verifyJournalStoreSearchContract } from './journal-search-contract.js';
-export { verifyJournalStoreConversationIdContract } from './journal-conversation-id-contract.js';
-export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { isArchiveRefId } from './archive-ref.js';
 export { assertArchivableSessionId } from './archive-session-id.js';
 // Task（#5469 P2）。状態遷移・並び・行の操作は純関数で、メモリ・fs・pg の3実装が共有する
@@ -245,8 +226,6 @@ export type {
   TaskRow,
   TaskSetStatusResult,
 } from './task.js';
-export { verifyTaskStoreContract } from './task-store-contract.js';
-export { verifyTaskRemoveForConversationContract } from './task-remove-for-conversation-contract.js';
 export { TASK_TITLE_MAX, describeTaskPlacement } from './task-tools.js';
 export { scheduleReplaceEntry } from './schedule-replace.js';
 export {
@@ -259,15 +238,7 @@ export {
   removeArchiveJournalFirst,
   removeInboxChunkJournalFirst,
 } from './removal-journal-first.js';
-export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
-export { verifyPluginStoreContract } from './plugin-store-contract.js';
-export { verifyProfileStoreContract } from './profile-store-contract.js';
-export { verifyPermissionGrantStoreContract } from './permission-grant-contract.js';
-export { verifyPracticeStoreContract } from './practice-contract.js';
-export { verifyListOrderContract } from './list-order-contract.js';
-export { verifyApprovalConversationFilterContract } from './approval-conversation-filter-contract.js';
 export { compareCodeUnits } from './code-unit-order.js';
-export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 export {
   classifyArchiveContinuity,
   classifyArchiveContinuityYielding,
@@ -786,9 +757,6 @@ export {
   assertValidCredentialNames,
 } from './credential-input.js';
 export { assertValidActiveToken, prepareTokensForReplace } from './token-pool-input.js';
-export { verifyCredentialVaultContract } from './credential-contract.js';
-export { verifyTokenPoolContract } from './token-pool-contract.js';
-export { verifyCodexChatgptAuthContract } from './codex-chatgpt-auth-contract.js';
 export * from './codex-chatgpt-auth.js';
 export {
   createCodexChatgptAuthService,
@@ -805,10 +773,6 @@ export {
   stripNulFromUsageRecord,
   stripNulFromUsageQuery,
 } from './usage-input.js';
-export { verifyUsageNulContract } from './usage-nul-contract.js';
-export { verifyUsageRunnerContract } from './usage-runner-contract.js';
-export { verifyUsageResetsContract } from './usage-resets-contract.js';
-export { verifyUsageQueryContract } from './usage-query-contract.js';
 /** fs の保存先とインメモリの器が、使用量台帳の絞り込み・鍵・並び・足し込みを1か所で共有する。 */
 export {
   addUsageTotals,
@@ -824,30 +788,6 @@ export {
 export { prepareMcpServersForWrite } from './mcp-servers.js';
 export { assertProfileRowWritable } from './profile-input.js';
 export { preparePermissionGrantForPut } from './permission-grant-input.js';
-export { verifySessionRegistryNulContract } from './session-registry-nul-contract.js';
-export { verifySessionRegistryGraveQueueContract } from './session-registry-grave-queue-contract.js';
-export { verifyPersonaNulContract } from './persona-nul-contract.js';
-export {
-  verifyPersonaWriteContract,
-  verifyPersonaIfMatchContract,
-  verifyPersonaProtectionStatusContract,
-  verifyPersonaCreatedAtContract,
-  verifyPersonaDescribedAtContract,
-  verifyPersonaDescribedBytesContract,
-} from './persona-contract.js';
-export type {
-  PersonaProtectionStatusHooks,
-  PersonaCreatedAtHooks,
-  PersonaDescribedBytesHooks,
-} from './persona-contract.js';
-export { verifyScheduleNulContract } from './schedule-nul-contract.js';
-export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
-export { verifyScheduleRunContract } from './schedule-run-contract.js';
-export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
-export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
-export { verifyJobNulContract } from './job-nul-contract.js';
-export { verifyJobStoreContract } from './job-store-contract.js';
-export { verifyInboxStoreContract } from './inbox-store-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 export {
   prepareAccessTokenForWrite,
@@ -855,20 +795,6 @@ export {
   prepareIdentityForWrite,
   prepareLoginRequestForWrite,
 } from './auth-input.js';
-export { verifyAuthNulContract } from './auth-nul-contract.js';
-export {
-  verifyAuthRecordsContract,
-  verifyAuthListOrderContract,
-  verifyAuthTieByteOrderContract,
-  verifyAuthRevokeAccessTokenContract,
-  verifyAuthAccountFieldsContract,
-  verifyAuthLoginRequestContract,
-  verifyAuthConcurrentWritesContract,
-  verifyAuthVerifiedEmailContract,
-  verifyAuthLogoutRaceContract,
-  verifyAuthWriteValidationContract,
-} from './auth-contract.js';
-export type { MakeAuthStore } from './auth-contract.js';
 
 export {
   compareIntegrationKeyOrder,
@@ -886,7 +812,6 @@ export {
   type RevokeIntegrationKeyOutcome,
   type UnreadableIntegrationKey,
 } from './integration-key.js';
-export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
   EVENT_IDEMPOTENCY_KEY_MAX_LENGTH,
   assertEventReceiptWritable,
@@ -894,7 +819,6 @@ export {
   type EventReceipt,
   type EventReceiptStore,
 } from './event-receipt.js';
-export { verifyEventReceiptStoreContract } from './event-receipt-contract.js';
 export { attachmentTooLargeMessage } from './attachment-wording.js';
 export {
   ATTACHMENT_EMPTY_MESSAGE,
@@ -957,7 +881,6 @@ export {
   attachmentMetaSchema,
   attachmentUsageSchema,
 } from './attachment-schema.js';
-export { verifyAttachmentStoreContract } from './attachment-contract.js';
 export { fetchManagerOutbox } from './manager-outbox-fetch.js';
 export {
   attachmentCopiesDir,

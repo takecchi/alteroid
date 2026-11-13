@@ -1,5 +1,5 @@
 import type { AuthAccount } from '@alteroid/core';
-import { verifyAuthTieByteOrderContract } from '@alteroid/core';
+import { verifyAuthTieByteOrderContract } from '@alteroid/core/contracts';
 import { sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 

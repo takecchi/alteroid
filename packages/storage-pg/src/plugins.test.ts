@@ -1,4 +1,4 @@
-import { verifyPluginStoreContract } from '@alteroid/core';
+import { verifyPluginStoreContract } from '@alteroid/core/contracts';
 import type { PluginInput } from '@alteroid/core';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

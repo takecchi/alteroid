@@ -34,6 +34,8 @@ export default defineConfig({
     'src/github-ci-format.ts',
     'src/token-cooldown-ms.ts',
     'src/mcp-servers-schema.ts',
+    // 契約の歯（`verify*Contract`）。試験だけが呼ぶので、本番の入口 index.ts から外してここに置く
+    'src/contracts.ts',
     // 副作用だけの小さな入口（`UV_THREADPOOL_SIZE` を置く）。デーモンと runner が最初の import にする。何も import しない: 先に評価させるため（#4890）
     'src/threadpool-size.ts',
   ],

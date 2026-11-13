@@ -3,13 +3,15 @@ import {
   createManagerPool,
   createRunnerRegistry,
   scanJournalPages,
+  UnreadableJournalEntryError,
+} from '@alteroid/core';
+import {
   verifyJournalStoreHorizonContract,
   verifyConversationPageContract,
   verifyJournalStoreOrderContract,
   verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreUnreadableGetContract,
-  UnreadableJournalEntryError,
   verifyJournalStoreSearchContract,
   verifyJournalStoreConversationIdContract,
   verifyJournalStoreDeletedConversationContract,
@@ -26,7 +28,7 @@ import {
   verifyScheduleRunContract,
   verifyScheduleUnreadableContract,
   verifyStoreIsolationContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import {
   readConversationPage,
   type Job,

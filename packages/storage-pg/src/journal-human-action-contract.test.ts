@@ -1,4 +1,4 @@
-import { verifyJournalStoreHumanActionContract } from '@alteroid/core';
+import { verifyJournalStoreHumanActionContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createPgStoresFromDb, type PgStores } from './index.js';

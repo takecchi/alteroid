@@ -1,11 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { UnreadableTaskError } from '@alteroid/core';
 import {
-  UnreadableTaskError,
   verifyTaskRemoveForConversationContract,
   verifyTaskStoreContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

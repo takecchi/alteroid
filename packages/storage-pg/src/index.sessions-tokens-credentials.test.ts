@@ -1,15 +1,14 @@
+import { captureStderr, NulNotAllowedError } from '@alteroid/core';
 import {
-  captureStderr,
   verifyConversationReadStoreContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
-  NulNotAllowedError,
   verifyMcpServerStoreContract,
   verifyMcpServersIfMatchContract,
   verifySessionRegistryGraveQueueContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
-} from '@alteroid/core';
+} from '@alteroid/core/contracts';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

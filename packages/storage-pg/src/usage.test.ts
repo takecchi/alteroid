@@ -1,16 +1,18 @@
 import {
   USAGE_ESTIMATE_NOTICE,
   ZERO_USAGE,
-  verifyUsageNulContract,
-  verifyUsageQueryContract,
-  verifyUsageResetsContract,
-  verifyUsageRunnerContract,
   type UsageAccumulation,
   type UsageLayer,
   type UsageSite,
   type UsageSnapshot,
   type UsageTotals,
 } from '@alteroid/core';
+import {
+  verifyUsageNulContract,
+  verifyUsageQueryContract,
+  verifyUsageResetsContract,
+  verifyUsageRunnerContract,
+} from '@alteroid/core/contracts';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

@@ -1,4 +1,5 @@
-import { captureStderr, verifyTranscriptArchiveContract } from '@alteroid/core';
+import { captureStderr } from '@alteroid/core';
+import { verifyTranscriptArchiveContract } from '@alteroid/core/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
