@@ -1999,25 +1999,28 @@ class Clone implements CloneHost {
           return '';
         }),
     );
+    // 担当の一覧はこの準備の間 1 回だけ引いて、3 本の断り書きで共有する（ターンごとに作り直す。`Clone` の状態に覚えない）
+    const listManagers = this.#turnNotices.listOnce();
     // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
     this.#notices.set(
       'situation',
       await timer
-        .time('prepare.situation', () => this.#turnNotices.situationFor(batch))
+        .time('prepare.situation', () => this.#turnNotices.situationFor(batch, listManagers))
         .catch((error: unknown) => {
           noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
           return describeSituationUnavailable(error);
         }),
     );
     const validityNotice = await timer.time('prepare.validity', () =>
-      this.#turnNotices.validityFor(batch),
+      this.#turnNotices.validityFor(batch, listManagers),
     );
     // 欄を増やさず `validity` に並べる: どちらも「積まれた時点の前提がいまも当てはまるか」の断りで、読む位置も同じでよいため。
     // 述語 B の計器は `validityNotice` だけで判定する: 回復の1節で鳴らすと、状態の食い違いを数える計器が別の事実で嵩増しされるため
     this.#notices.set(
       'validity',
-      (await timer.time('prepare.quotaRecovery', () => this.#turnNotices.quotaRecoveryFor(batch))) +
-        validityNotice,
+      (await timer.time('prepare.quotaRecovery', () =>
+        this.#turnNotices.quotaRecoveryFor(batch, listManagers),
+      )) + validityNotice,
     );
     if (validityNotice !== '' && event.type === 'manager_message') {
       await this.#noteRedeliveryPredicateHitB(event.managerId);
