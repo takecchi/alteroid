@@ -91,17 +91,6 @@ export interface DenialReasonSnapshot {
 }
 
 /**
- * `deniedAt` を持つ理由: `denialKey` は道具×層の組でしかなく、新しい拒否で上書きされても
- * 鍵は変わらない。照合用に古い `deniedAt` を残し、一致しなければ新しいエピソードとして
- * `stage` を 0 から数え直す（同じ鍵が再び長く止まったら新しい注意に値する）。
- */
-export interface DenialRenotifyState {
-  readonly deniedAt: string;
-  /** `DENIAL_RENOTIFY_DELAYS_MS.length` に達したらそれ以上は出さない（出し切りは日誌に1行残す）。 */
-  stage: number;
-}
-
-/**
  * 1件も欄が無ければ `undefined`: 空オブジェクトだと「観測したが空だった」と
  * 「観測していない」が区別できなくなる。
  */

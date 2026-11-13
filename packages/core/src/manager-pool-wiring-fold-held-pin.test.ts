@@ -388,7 +388,6 @@ describe('Pool の constructor の配線: AutoFold・DenialRenotifier・RescueSw
         },
         "DenialRenotifier": {
           "emitReport": "function",
-          "journalExchange": "function",
           "now": "function",
           "records": "Map",
           "stopped": "function",
@@ -468,7 +467,6 @@ describe('Pool の constructor の配線: AutoFold・DenialRenotifier・RescueSw
         },
         "DenialRenotifier": {
           "emitReport": "emitReport/2",
-          "journalExchange": "bound #journalExchange/2",
           "now": "now/0",
           "stopped": "stopped/0",
         },
@@ -845,26 +843,6 @@ describe('Pool の constructor の配線: AutoFold・DenialRenotifier・RescueSw
         },
       ]
     `);
-  });
-
-  it('journalExchange の口（DenialRenotifier）は exchange（with=manager）を日誌へ書き、Promise を返す', async () => {
-    const { stores } = await open();
-    const returned = fnOf('DenialRenotifier', 'journalExchange')('outbound', '拒否の知らせ直し');
-    expect(returned).toBeInstanceOf(Promise);
-    await returned;
-    const hits = (await stores.journal.list({ types: ['exchange'] })).filter(
-      (entry) => (entry as unknown as Record<string, unknown>).text === '拒否の知らせ直し',
-    ) as unknown as Record<string, unknown>[];
-    expect(hits.map((entry) => ({ with: entry.with, role: entry.role, text: entry.text })))
-      .toMatchInlineSnapshot(`
-        [
-          {
-            "role": "outbound",
-            "text": "拒否の知らせ直し",
-            "with": "manager",
-          },
-        ]
-      `);
   });
 
   it('persist の口（3 つ）は像の updatedAt を時計で書き直して台帳へ書く', async () => {
@@ -1291,11 +1269,6 @@ describe('Pool の constructor の配線: AutoFold・DenialRenotifier・RescueSw
     await mark('AutoFold', 'list', fnOf('AutoFold', 'list')() as Promise<unknown>);
     await mark('AutoFold', 'journal', fnOf('AutoFold', 'journal')(decision) as Promise<unknown>);
     await mark(
-      'DenialRenotifier',
-      'journalExchange',
-      fnOf('DenialRenotifier', 'journalExchange')('inbound', 'x') as Promise<unknown>,
-    );
-    await mark(
       'RescueSweeper',
       'journal',
       fnOf('RescueSweeper', 'journal')(decision) as Promise<unknown>,
@@ -1382,9 +1355,6 @@ describe('Pool の constructor の配線: AutoFold・DenialRenotifier・RescueSw
           "journal": 2,
           "list": 9,
           "runnerIdOf": 1,
-        },
-        "DenialRenotifier": {
-          "journalExchange": 2,
         },
         "HeldMessages": {
           "journal": 2,

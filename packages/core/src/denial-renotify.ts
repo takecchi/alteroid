@@ -1,18 +1,16 @@
 import { decodeDenialKey, DENIAL_REPLY_ROUTE } from './denial-key.js';
 import { noteDroppedRecord } from './dropped-record.js';
-import { EXCHANGE_KIND_THINNING_PREFIX } from './exchange-kind.js';
 import { laterIso } from './later-iso.js';
 import type { ManagerRecord } from './manager.js';
 import { codeSpan } from './markdown-span.js';
 import { ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
 
 /**
- * **配列の長さがそのまま知らせ直しの上限回数（1回）を兼ねる。**
- * 1回目は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）。かつてあった30分後の2回目は外した:
+ * 知らせ直しは拒否1件につき1回だけ。遅延は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）。かつてあった30分後の2回目は外した:
  * 無音の通知（`SilenceWatch`。`permission_denied` も進捗に数え、無音30分で1通）と同じ時刻に2通届くため。
  * ここが数えるのは新設した通知の回数であって、道具の実行回数でもターン数でもない（暴走を機械的に止めるものではない）。
  */
-const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [ONE_SHOT_ALLOW_TTL_MS];
+const DENIAL_RENOTIFY_DELAY_MS = ONE_SHOT_ALLOW_TTL_MS;
 
 interface DenialRenotifierDeps {
   records: ReadonlyMap<string, ManagerRecord>;
@@ -20,8 +18,6 @@ interface DenialRenotifierDeps {
   stopped: () => boolean;
   /** `Pool#emit(managerId, 'report', text)` を束ねたもの。 */
   emitReport: (managerId: string, text: string) => void;
-  /** `Pool#journalExchange` を束ねたもの（呼び出しの形は `exchange-kind-coverage.test.ts` が数える）。 */
-  journalExchange: (role: 'inbound' | 'outbound', text: string) => Promise<void>;
 }
 
 /**
@@ -33,14 +29,12 @@ export class DenialRenotifier {
   readonly #now: DenialRenotifierDeps['now'];
   readonly #stopped: DenialRenotifierDeps['stopped'];
   readonly #emitReport: DenialRenotifierDeps['emitReport'];
-  readonly #journalExchange: DenialRenotifierDeps['journalExchange'];
 
   constructor(deps: DenialRenotifierDeps) {
     this.#records = deps.records;
     this.#now = deps.now;
     this.#stopped = deps.stopped;
     this.#emitReport = deps.emitReport;
-    this.#journalExchange = deps.journalExchange;
   }
 
   renotifyStalled(): void {
@@ -88,16 +82,11 @@ export class DenialRenotifier {
     }
 
     // 同じ鍵に新しい拒否が来ていたら古いエピソードの帳面は使わない: 新しい拒否は新しい注意に値する。
-    const existing = record.deniedRenotify?.get(key);
-    const stage = existing?.deniedAt === deniedAt ? existing.stage : 0;
-    const delayMs = DENIAL_RENOTIFY_DELAYS_MS[stage];
-    if (delayMs === undefined) return; // 出し切って黙っている（stage が上限に達した）
+    if (record.deniedRenotify?.get(key) === deniedAt) return; // 出し済みで黙っている
 
-    const dueAt = deniedAtMs + delayMs;
-    if (now < dueAt) return; // まだこの段の時間に達していない
+    if (now < deniedAtMs + DENIAL_RENOTIFY_DELAY_MS) return; // まだ時間に達していない
 
-    const nextStage = stage + 1;
-    (record.deniedRenotify ??= new Map()).set(key, { deniedAt, stage: nextStage });
+    (record.deniedRenotify ??= new Map()).set(key, deniedAt);
     // 実際に配る直前に更新する: `#choosePending` が読むのは届いた知らせ直しであって、知らせ直そうとした事実ではない。
     record.lastDenialRenotify = { at: new Date(now).toISOString(), key };
 
@@ -110,21 +99,12 @@ export class DenialRenotifier {
     this.#emitReport(
       managerId,
       `[${managerId}] ${codeSpan(tool)} の拒否（${actorLabel}）から${String(elapsedMinutes)}分、` +
-        `動きが無い（知らせ直し ${String(nextStage)}/${String(DENIAL_RENOTIFY_DELAYS_MS.length)} 回目。` +
-        'issue #1105 C）。' +
+        '動きが無い（知らせ直し。issue #1105 C）。' +
         (reason?.inputHead === undefined
           ? ''
           : `\n拒否より前に見た入力の先頭（伏せ字・最大160字）: ${codeSpan(reason.inputHead)}`) +
         DENIAL_REPLY_ROUTE +
         '\n全件は日誌に残っている（`journal_read` で辿れる）。',
     );
-
-    if (nextStage === DENIAL_RENOTIFY_DELAYS_MS.length) {
-      void this.#journalExchange(
-        'inbound',
-        `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] ${tool} の拒否（${actorLabel}）の知らせ直しを` +
-          `${String(nextStage)}回とも出したので、これ以上は黙る（issue #1105 C）。`,
-      );
-    }
   }
 }
