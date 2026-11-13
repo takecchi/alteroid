@@ -11,12 +11,7 @@ import {
   type BuildRevision,
   type BuildTime,
 } from './revision.js';
-import type { JournalEntry } from './schema.js';
-
-// `clone.ts` から import しない: あちらが `self.ts` を import しており循環になるため
-type ContextUsageObservation = NonNullable<
-  Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']
->;
+import type { ContextUsageObservation } from './schema.js';
 
 const SELF_MCP_SERVERS_EXCERPT = 400;
 

@@ -14,7 +14,7 @@ import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 // clone.ts と runner.ts の `#observeContextUsage`（SDK の答えを ContextUsageObservation へ写す処理）の振る舞いを固定する。
-// 観測は、clone は日誌の `context_usage` の行、runner は `turn_usage` / `context_usage` の `contextUsage` の値そのもの。
+// 観測は、clone は日誌の `context_usage` の行、runner（デーモン側で受けた行）も `context_usage` の `contextUsage` の値そのもの。`turn_usage` には載せない。
 // `durationMs` は揺れるので、数値であることだけ確かめて固定から落とす。
 
 const FULL: AgentContextUsage = {
@@ -207,7 +207,8 @@ async function runnerObservations(answer: () => Promise<AgentContextUsage>) {
   });
   await pool.stop();
   return {
-    turnUsage: expectDuration(usage.contextUsage),
+    // 同じ観測を `turn_usage` にも書いていたころの二重書きは落とした: 載るのは `context_usage` の行だけ
+    turnUsageHasContext: 'contextUsage' in usage,
     contextUsage: expectDuration(context.contextUsage),
   };
 }
@@ -220,7 +221,7 @@ describe('文脈占有の観測の写し（clone と runner の #observeContextU
 
     it(`runner: ${scene}`, async () => {
       const seen = await runnerObservations(answer);
-      expect(seen.turnUsage).toEqual(seen.contextUsage);
+      expect(seen.turnUsageHasContext).toBe(false);
       expect(seen.contextUsage).toMatchSnapshot();
     });
   }

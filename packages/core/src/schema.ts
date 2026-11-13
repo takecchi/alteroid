@@ -636,7 +636,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         toCostUsd: z.number().nonnegative(),
       })
       .optional(),
-    contextUsage: contextUsageObservationSchema.optional(),
+    // `contextUsage` は持たない: 同じ観測が毎ターン `context_usage` の行に書かれる（失敗したターンも残る唯一の記録）。古い行に残る欄は `z.object` が黙って捨てるので読み込みは落ちない
     // 配列にする: 1ターンに複数回（manual と auto が同じターンで両方）を排除する根拠が無いため。空配列は作らず、起きなければキーごと省く
     compactions: z
       .array(
@@ -647,18 +647,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         }),
       )
       .optional(),
-    // 台帳には `result.usage` を使わない: 「メインループだけ」で、per-turn が合計か直近1回ぶんかをこの文言が決めていないため（台帳は `modelUsage` を使う）
-    /**
-     * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage]
-     */
-    mainLoopUsage: z
-      .object({
-        inputTokens: z.number().int().nonnegative(),
-        outputTokens: z.number().int().nonnegative(),
-        cacheReadInputTokens: z.number().int().nonnegative(),
-        cacheCreationInputTokens: z.number().int().nonnegative(),
-      })
-      .optional(),
+    // `mainLoopUsage` は持たない: 読み手がおらず、同じ値は `turn_timing.tokens` にある。古い行に残る欄は `z.object` が黙って捨てる
   }),
   // `turn_usage` に相乗りさせない: 消費の行は増分がある回にしか書かれず、失敗したターン・増分がゼロだった回の文脈占有が落ちるため
   z.object({

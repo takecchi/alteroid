@@ -658,7 +658,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     case 'external_event':
       return `external_event ${size(entry.source, 'source')} ${size(entry.summary)}`;
     // `models` はモデル id ごとの件数だけ載せ、中身の数値までは載せない。
-    // `contextUsage` には下の `case 'context_usage'` と同じ判断が掛かる（理由はそちらに1箇所だけ書く）。
     case 'turn_usage':
       return (
         `turn_usage layer=${tag(entry.layer)} site=${tag(entry.site)} ` +

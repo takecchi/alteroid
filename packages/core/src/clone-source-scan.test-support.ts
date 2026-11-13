@@ -245,7 +245,7 @@ export const INLINED_BY_FILE: Readonly<
       },
       {
         name: '#emitAnsweredUsage',
-        call: 'this.#emitAnsweredUsage(event, failure, contextUsage);',
+        call: 'this.#emitAnsweredUsage(event, failure);',
         trailing: '',
       },
       // 報告の組み立てから送出・後始末（`RunnerReportEmitter#emit`。別ファイル）。引数は前半が算出した値で、本体の字面は元のまま。

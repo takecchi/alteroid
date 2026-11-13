@@ -1431,15 +1431,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionId: { emit: 'tag', token: 'sessionId' },
       models: { emit: 'raw', token: 'models' },
       reset: { emit: 'raw', token: 'reset' },
-      contextUsage: {
-        emit: 'never',
-        why: "#981 で決めた（入れ子のどの階層も跡へ出さない）。理由は `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いてある。",
-      },
       compactions: {
-        emit: 'never',
-        why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。#981 で「自由文を1つも持たない」ことは確かめたので、残るのは出す価値の判断だけである。',
-      },
-      mainLoopUsage: {
         emit: 'never',
         why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。#981 で「自由文を1つも持たない」ことは確かめたので、残るのは出す価値の判断だけである。',
       },
@@ -1851,14 +1843,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         },
       },
       reset: { fromCostUsd: 5, toCostUsd: 3 },
-      contextUsage: FULL_CONTEXT_USAGE,
       compactions: [{ trigger: 'manual', preTokens: 1000 }],
-      mainLoopUsage: {
-        inputTokens: 1,
-        outputTokens: 2,
-        cacheReadInputTokens: 3,
-        cacheCreationInputTokens: 4,
-      },
     },
     token_rotation: {
       type: 'token_rotation',
@@ -2099,7 +2084,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     );
   });
 
-  it('turn_usage.contextUsage / context_usage.contextUsage の入れ子は、秘密・目印・欄名のどれも跡に現れない（#981）', () => {
+  it('context_usage.contextUsage の入れ子は、秘密・目印・欄名のどれも跡に現れない（#981）', () => {
     const contextUsageFieldNames = [
       ...Object.keys(CONTEXT_USAGE_SHAPE_PLAN),
       ...Object.keys(CONTEXT_USAGE_CATEGORY_SHAPE_PLAN),
@@ -2108,7 +2093,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       ...Object.keys(CONTEXT_USAGE_MESSAGE_TOOL_SHAPE_PLAN),
     ];
 
-    for (const type of ['turn_usage', 'context_usage'] as const) {
+    for (const type of ['context_usage'] as const) {
       const shape = journalEntryShape(FULL_FIXTURES[type]);
 
       expect(shape, `${type}: contextUsage 配下の自由文（SECRET）`).not.toContain(SECRET);

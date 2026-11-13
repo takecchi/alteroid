@@ -65,12 +65,10 @@ export const GROUNDS_NOT_DELIVERED =
   'クローンが「根拠なし」と書いたのではない）';
 
 // 型を写さず `JournalEntry` の union から取り出す: 写した側が古いままでも気づけないため
-type ContextUsageRow = NonNullable<Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']>;
+type ContextUsageRow = Extract<JournalEntry, { type: 'context_usage' }>['contextUsage'];
 
-// 欄が無い回は 0 を置かず空文字を返す: 「測ったが 0 だった」と「測っていない」を混ぜないため
 // SDK の語をそのまま使わない: `memoryFiles` は `CLAUDE.md` 系で、alteroid の記憶はシステムプロンプト側に入り取り違えるため
-function describeContextLine(context: ContextUsageRow | undefined): string {
-  if (context === undefined) return '';
+function describeContextLine(context: ContextUsageRow): string {
   if (context.error !== undefined) return `\n文脈: 測れなかった（${context.error}）。`;
   return (
     `\n文脈: ${context.totalTokens?.toLocaleString('en-US') ?? '不明'} トークン` +
@@ -333,8 +331,6 @@ function renderJournalEntry(
           : `\n⚠ 数え直しを挟んだ回（${formatUsd(entry.reset.fromCostUsd)} → ` +
             `${formatUsd(entry.reset.toCostUsd)}）。models は差分ではなく新しい累積の先頭 — ` +
             '他の行と足し合わせると二重に数える。';
-      const context = entry.contextUsage;
-      const contextLine = describeContextLine(context);
       const compactionLine =
         entry.compactions === undefined || entry.compactions.length === 0
           ? ''
@@ -349,9 +345,8 @@ function renderJournalEntry(
       return {
         head:
           `[turn_usage ${entry.layer}/${entry.site} ${field(entry.managerId)}]` +
-          (entry.reset === undefined ? '' : ' ⚠reset') +
-          (context?.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
-        body: `${modelLines}${resetLine}${contextLine}${compactionLine}`,
+          (entry.reset === undefined ? '' : ' ⚠reset'),
+        body: `${modelLines}${resetLine}${compactionLine}`,
       };
     }
     case 'context_usage': {
