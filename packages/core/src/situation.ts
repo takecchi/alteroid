@@ -6,7 +6,7 @@ import {
   describeInboxBacklogQueuedInMemory,
   foldInboxBacklogByType,
 } from './inbox-backlog.js';
-import { formatMinutesAgo } from './format-elapsed.js';
+import { formatDurationMinutes, formatMinutesAgo } from './format-elapsed.js';
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
 import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
@@ -376,6 +376,26 @@ function describeSituationInboxBacklog(
   );
 }
 
+// 畳んだ報告が 1 本も無いときは空文字で、行は本数だけのまま（事実だけを出し、指図は足さない）。
+// M は担当をまたいだ畳んだ報告の本数の合計で、N（背景処理待ちの担当の数）とは数えるものが違う。
+// 最長は `since`（畳み始めの時刻。flush の経過の言い方・manager_list と同じ起点）の最も古いものからの経過で、`lastAt` ではない。
+// 時刻が読めない・未来のときは、嘘の分を出さず最長だけ省く。
+function describeWithheldReportsClause(managers: readonly ManagerSummary[], at: number): string {
+  let reports = 0;
+  let oldest: number | undefined;
+  for (const manager of managers) {
+    const held = manager.awaitingBackground;
+    if (held === undefined || held.withheldReports <= 0) continue;
+    reports += held.withheldReports;
+    const since = Date.parse(held.since);
+    if (Number.isNaN(since) || since > at) continue;
+    if (oldest === undefined || since < oldest) oldest = since;
+  }
+  if (reports === 0) return '';
+  const longest = oldest === undefined ? '' : `・最長${formatDurationMinutes(at - oldest)}`;
+  return `（うち畳んだ報告 ${String(reports)} 本${longest}）`;
+}
+
 export function describeSituation(input: {
   readonly managers: readonly ManagerSummary[];
   readonly runners: readonly { readonly state: RunnerLiveness }[];
@@ -402,6 +422,7 @@ export function describeSituation(input: {
   const inboxQueuedLine = describeInboxBacklogQueuedInMemory(input.queuedInMemory);
   const at = input.at ?? Date.now();
   // at をそのまま渡す: ここで Date.now() を引き直すと、節が名乗る時刻とこの本数の観測時刻がずれるため
+  const withheldReportsClause = describeWithheldReportsClause(input.managers, at);
   const recentStarts = countRecentManagerStarts(input.managers, at);
   const latestStart = latestManagerStartAt(input.managers);
   const lastStartClause =
@@ -411,7 +432,7 @@ export function describeSituation(input: {
   // 経過の句だけ引数にする: 経過は時刻の流れだけで毎回変わる部分で、本数の部分と分けて読めるようにするため
   const delegationLineWith = (startClause: string): string =>
     `委譲 全 ${counts.total} 本: 走行中 ${counts.running} / 返事待ち ${counts.waitingHuman} / ` +
-    `背景処理待ち ${counts.awaitingBackground} / 手が空いている ${counts.idle} / ` +
+    `背景処理待ち ${counts.awaitingBackground}${withheldReportsClause} / 手が空いている ${counts.idle} / ` +
     (counts.lost === 0 ? '' : `${LOST_LABEL} ${counts.lost} / `) +
     `その他 ${counts.other}。話しかけられる ${counts.reachable} 本。` +
     // 横断する軸は分割の後ろに置く: 区分の並びの中へ差し込むと、足せば total になる数の列に別の軸が混ざるため
