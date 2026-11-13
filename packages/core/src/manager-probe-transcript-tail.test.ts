@@ -328,14 +328,9 @@ describe('見回りの2の段: runner の末尾の口（transcript-tail）だけ
     return transcriptTail(h.managerId, maxChars);
   }
 
-  async function stageLines(h: Awaited<ReturnType<typeof harnessOf>>): Promise<string[]> {
+  async function decisionsOf(h: Awaited<ReturnType<typeof harnessOf>>): Promise<string[]> {
     const entries = await h.stores.journal.list({ types: ['decision'] });
-    return entries.flatMap((entry) =>
-      entry.type === 'decision' &&
-      entry.decision.includes('生ログの末尾を pg の預かりに見つけられず')
-        ? [entry.decision]
-        : [],
-    );
+    return entries.flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []));
   }
 
   it('名乗る runner では transcriptTail だけが呼ばれ、transcript は呼ばれない', async () => {
@@ -422,54 +417,21 @@ describe('見回りの2の段: runner の末尾の口（transcript-tail）だけ
     await h.close();
   });
 
-  it('日誌の1行は、委譲ごと・種類ごとに、プロセスにつき1回だけ書かれる', async () => {
+  it('2の段に入っても（名乗る・名乗らないのどちらも）、decision を日誌に書かない', async () => {
     const h = await harnessOf(null);
     h.runner.liveTranscript = endTurnLine(TAIL_LINE_SAMPLE);
 
     await tailOf(h);
     await tailOf(h);
-    await tailOf(h);
-    const taken = await stageLines(h);
-    expect(taken).toEqual([
-      `見回りが、生ログの末尾を pg の預かりに見つけられず、runner の末尾の口から取った（委譲 ${h.managerId}・runner runner-primary）`,
-    ]);
+    expect(await decisionsOf(h)).toEqual([]);
 
-    // 種類が変われば（名乗りが外れた runner を見たら）同じ委譲でももう1行書く。以降は重ねない
     await h.runner.emit({
       type: 'hello',
       runnerId: h.runner.runnerId,
       capabilities: [],
     });
     await tailOf(h);
-    await tailOf(h);
-    const both = await stageLines(h);
-    expect(both).toHaveLength(2);
-    expect(both).toContain(
-      `見回りが、生ログの末尾を pg の預かりに見つけられず、runner が末尾の口（transcript-tail）を名乗っていないので、全文は取らずに読めないとした（委譲 ${h.managerId}・runner runner-primary）`,
-    );
-    await h.close();
-  });
-
-  it('日誌の1行は、委譲が違えば別に書かれる', async () => {
-    const h = await harnessOf(null, { capabilities: [] });
-    const second = await h.pool.start({ request: '別の調べ', cwd: '/work/project' });
-    await tailOf(h);
-    const transcriptTail = h.pool.transcriptTail?.bind(h.pool);
-    if (transcriptTail === undefined) throw new Error('口が無い');
-    await transcriptTail(second.managerId, 1000);
-    await transcriptTail(second.managerId, 1000);
-
-    expect(await stageLines(h)).toHaveLength(2);
-    await h.close();
-  });
-
-  it('pg の預かりに末尾があれば、2の段へ入らず日誌も書かない', async () => {
-    const h = await harnessOf(endTurnLine('預かりの末尾'));
-    await nameSession(h);
-
-    await tailOf(h);
-
-    expect(await stageLines(h)).toEqual([]);
+    expect(await decisionsOf(h)).toEqual([]);
     await h.close();
   });
 
