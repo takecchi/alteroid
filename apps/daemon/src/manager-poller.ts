@@ -5,9 +5,14 @@ import { startPeriodicRun } from './periodic-runner.js';
 // `Registry#beat()` に相乗りしない: 生ログは最大 1.7MB で読みに行くコストが heartbeat と桁違いに重いため。
 const MANAGER_POLL_INTERVAL_MS = 60_000;
 
+// task-follow を回す間隔。猶予（`TASK_FOLLOW_GRACE_MS`、30 分）に対し、60 秒ごとに全委譲と全 task を読む必要は無い（直しが最大 +4 分遅れるだけ）。
+const TASK_FOLLOW_INTERVAL_MS = 5 * 60_000;
+
 interface PollStage {
   /** stderr の段の名前 */
   readonly label: string;
+  /** 周回より長く空ける段の最小間隔。無ければ周回ごと。 */
+  readonly everyMs?: number;
   readonly run: () => Promise<unknown> | undefined;
 }
 
@@ -75,18 +80,33 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     { label: 'silence', run: () => options.managers.noteSilentManagers() },
     { label: 'held-messages', run: () => options.managers.deliverHeldMessages() },
     // 報告由来の `done` で waiting のまま残した task を、猶予（30 分）を過ぎてから倒す。冪等で、台帳を数えるだけなので連鎖の末尾に置く
-    { label: 'task-follow', run: () => options.managers.repairStrandedTasks() },
+    // 周回は 60 秒のまま、この段だけ 5 分ごと（`everyMs`）
+    {
+      label: 'task-follow',
+      everyMs: TASK_FOLLOW_INTERVAL_MS,
+      run: () => options.managers.repairStrandedTasks(),
+    },
   ];
 
+  // `everyMs` を持つ段の、直前に走らせた周回の頭の時刻。周回の頭で測る: 周回の間隔は 60 秒以上なので、5 周目で必ず 5 分に届く
+  const lastRunAt = new Map<string, number>();
+  const due = (stage: PollStage, roundAt: number): boolean => {
+    if (stage.everyMs === undefined) return true;
+    const last = lastRunAt.get(stage.label);
+    if (last !== undefined && roundAt - last < stage.everyMs) return false;
+    lastRunAt.set(stage.label, roundAt);
+    return true;
+  };
+
   const probe = (): Promise<void> => {
+    const roundAt = Date.now();
+    const run = (stage: PollStage): Promise<void> =>
+      due(stage, roundAt) ? step(stage.label, stage.run) : Promise.resolve();
     for (const stage of detachedStages) {
-      void step(stage.label, stage.run);
+      void run(stage);
     }
     const [head, ...rest] = chainedStages;
-    return rest.reduce(
-      (previous, stage) => previous.then(() => step(stage.label, stage.run)),
-      step(head.label, head.run),
-    );
+    return rest.reduce((previous, stage) => previous.then(() => run(stage)), run(head));
   };
 
   // 重ねない・止める・次の予約は `startPeriodicRun` が持つ: 走っている間の `refresh` は同じ回を返す

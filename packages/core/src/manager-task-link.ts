@@ -176,7 +176,7 @@ export class ManagerTaskLink {
    * 終わった委譲にしか結び付いていないのに `waiting` のままの task を `needs_decision` へ直す（#5469 P3）。
    * 終端の同期に失敗した、または同期の前にデーモンが落ちた task が戻れなくなるのを防ぐ。さらに、報告由来の `done`（ターンの終わり）で
    * `sync` が見送った task を、猶予を過ぎてから倒す本体でもある。`Pool#restore()` が呼ばれるたび（起動のほか、takeOver・トークンの回復）と、
-   * 見回りの 8 段目（`repairStrandedTasks()`。60 秒ごと）から走るので、何度走っても同じ結果になるよう書いてある。
+   * 見回りの 8 段目（`repairStrandedTasks()`。5 分ごと）から走るので、何度走っても同じ結果になるよう書いてある。
    * 猶予（`TASK_FOLLOW_GRACE_MS`）: 最後に終端へ入った委譲が `done` なら、その `endedAt` から猶予を過ぎるまで直さない
    * （`manager_send` が間に合えば `running` へ戻って task は動かない）。`failed`・`lost`・`stopped` は猶予 0。
    * `done` の中の `closed(done)`（セッションが畳まれた）は台帳の上で報告由来と見分けられないので、ここでは猶予を掛ける: 即時に倒すのは
