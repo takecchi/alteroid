@@ -75,7 +75,6 @@ import {
   DAEMON_FORCED_EXIT_MS,
 } from '@alteroid/core';
 import { codexLoginEnvOf } from './codex-login-env.js';
-import { reportBootToolSearch, reportBootToolSearchObserved } from './boot-tool-search.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
@@ -874,8 +873,6 @@ export async function main(): Promise<void> {
       wake?.();
     },
     onWorkerToolEvent: (event) => workerToolBus.emit(event),
-    // 起動時の `reportBootToolSearch`（見込み）の隣に、最初のターンの観測（実際）を出す（#4921）
-    onFirstTurnToolSearch: (line) => reportBootToolSearchObserved(stores, line),
     onUsageObservation: async (observation) => {
       // 成功の観測は `observe` へ渡さない: あちらは枠の観測しか扱わず、成功は別の生産者（`reconsider` の `turn_success`）へ振るため。
       if (observation.succeeded === true) {
@@ -915,7 +912,6 @@ export async function main(): Promise<void> {
   // 写しを読み直してから見る: 非同期で読むため、空のまま見ると正本に置かれた接続先を見落とす。
   await credentialService.fingerprints().catch(() => undefined);
   for (const line of clone.anthropicRoute()) process.stdout.write(`alteroidd: ${line}\n`);
-  await reportBootToolSearch(stores, clone.toolSearchRoute());
 
   const managerPoller = startManagerPolling({
     managers: clone.managers,

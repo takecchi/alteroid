@@ -27,9 +27,9 @@ function isDistillSucceededEntry(entry: JournalEntry): boolean {
 /** デーモンが起動のたびに、クローンを作る前に書く器の実寸の記録（`apps/daemon` の `reportBootFootprint`）の source。 */
 export const BOOT_FOOTPRINT_EVENT_SOURCE = 'boot-storage-footprint';
 
-/** デーモンが起動のたびに書く、クローンの子の env で ToolSearch が止まる見込みかの記録（`apps/daemon` の `reportBootToolSearch`）の source。 */
+/** 過去のデーモンが起動のたびに書いていた、クローンの子の env で ToolSearch が止まる見込みかの記録の source。いまは書かない（#4269 は閉じた）が、日誌に古い行が残るので、活動として数えないために残す。 */
 export const BOOT_TOOL_SEARCH_EVENT_SOURCE = 'boot-tool-search';
-/** 起動後の最初の本セッションのターンで ToolSearch が実際に効いたかの観測（起動時の `boot-tool-search` の隣に並べて探せる名前。#4921）の source。 */
+/** 過去のデーモンが書いていた、起動後の最初の本セッションのターンで ToolSearch が実際に効いたかの観測（#4921）の source。いまは書かない。古い行を活動として数えないために残す。 */
 export const BOOT_TOOL_SEARCH_OBSERVED_EVENT_SOURCE = 'boot-tool-search-observed';
 /** デーモンが起動のたびに、起動の後に作る日誌の索引を作り終えたとき書く、索引ごとの結果（`apps/daemon` の `createDeferredIndexesReporter`）の source。 */
 export const BOOT_DEFERRED_INDEXES_EVENT_SOURCE = 'boot-deferred-indexes';

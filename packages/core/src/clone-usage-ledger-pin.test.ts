@@ -89,7 +89,6 @@ interface BuildOptions {
   readonly sdk?: Parameters<typeof fakeSdk>[1];
   readonly provider?: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
-  readonly onFirstTurnToolSearch?: (line: string) => Promise<void>;
   readonly stores?: Stores;
 }
 
@@ -104,9 +103,6 @@ function build(options: BuildOptions = {}) {
     env: {},
     ...(options.provider === undefined ? {} : { provider: options.provider }),
     ...(options.tokenIdentity === undefined ? {} : { tokenIdentity: options.tokenIdentity }),
-    ...(options.onFirstTurnToolSearch === undefined
-      ? {}
-      : { onFirstTurnToolSearch: options.onFirstTurnToolSearch }),
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
@@ -693,7 +689,7 @@ describe('無報告のターン（capabilities.usage === false）', () => {
 });
 
 describe('#applyTurnEnded の中の並び', () => {
-  it('文脈占有の行（context_usage）が turn_usage より先に載り、台帳への積みは ToolSearch の観測より先', async () => {
+  it('文脈占有の行（context_usage）が turn_usage より先に載り、台帳への積みは1回', async () => {
     const stores = createMemoryStores();
     const log: string[] = [];
     spyUsage(stores, log);
@@ -703,14 +699,10 @@ describe('#applyTurnEnded の中の並び', () => {
         modelUsage: () => usageOf('claude-fable-5', 0.5),
         getContextUsage: () => CONTEXT_USAGE,
       },
-      onFirstTurnToolSearch: () => {
-        log.push('toolSearch');
-        return Promise.resolve();
-      },
     });
     await turn(s, 'やあ', 1);
 
-    expect(log).toEqual(['record', 'toolSearch']);
+    expect(log).toEqual(['record']);
     const all = (await s.stores.journal.list({ limit: 200 })).reverse();
     expect(
       all.flatMap((row) =>

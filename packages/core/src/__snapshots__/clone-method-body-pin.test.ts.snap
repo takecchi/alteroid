@@ -10,7 +10,6 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "this.#lastContextUsage = contextUsage ?? null;",
   "if (contextUsage !== undefined) {await this.#journal({type: 'context_usage', layer: 'clone', site: 'session', managerId: CLONE_ACTOR_ID, ...(this.#sdkSession.sdkSessionId === null ? {} : {sessionId: this.#sdkSession.sdkSessionId}), turnSucceeded: event.succeeded, contextUsage});} const compactions = this.#sdkSession.turn?.compactions ?? [];",
   "await finalizeStep('usage', () => this.#usage.recordUsage(event.usage, 'session', 'cumulative', {contextUsage, compactions}));",
-  "await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);",
   "for (const denial of event.denials) {await this.#denials.noteDenial(denial, 'result');} const turn = this.#sdkSession.turn;",
   "const failure = event.failure ?? turn?.rejected ?? undefined;",
   "if (turn) await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));",

@@ -259,7 +259,6 @@ export function setup(
   env: NodeJS.ProcessEnv = {},
   cloneOptions: {
     contextUsageTimeoutMs?: number;
-    onFirstTurnToolSearch?: (line: string) => Promise<void>;
     permissionRuleService?: DelegatedPermissionRuleService;
     managers?: ManagerPool;
     inboxSettleMs?: number;

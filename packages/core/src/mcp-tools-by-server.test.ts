@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeFirstTurnToolSearch } from './boot-tool-search-observed.js';
 import {
   foldMcpToolsByServer,
   MCP_SERVER_OTHER,
@@ -95,37 +94,5 @@ describe('contextUsageObservationSchema の mcpToolsByServer', () => {
       mcpToolsByServer: [{ name: 'pixellab', count: 110, tokens: 100_000 }],
     };
     expect(contextUsageObservationSchema.parse(row)).toEqual(row);
-  });
-});
-
-describe('describeFirstTurnToolSearch の上位サーバ', () => {
-  const categories = [{ name: 'MCP tools (deferred)', tokens: 130_000, kind: 'deferred' }];
-
-  it('トークンの大きい上位3サーバを名前とトークンで1行に出す（4つ目以降と「ほか」は出さない）', () => {
-    const line = describeFirstTurnToolSearch(
-      {
-        durationMs: 1,
-        categories,
-        mcpToolsByServer: [
-          { name: 'pixellab', count: 110, tokens: 98_000 },
-          { name: 'alteroid-manager', count: 5, tokens: 20_000 },
-          { name: 'alteroid-peer', count: 3, tokens: 9_000 },
-          { name: 'small', count: 1, tokens: 500 },
-          { name: MCP_SERVER_OTHER, count: 9, tokens: 99_999 },
-        ],
-      },
-      undefined,
-    );
-    expect(line).toContain(
-      'MCP の道具の上位サーバ（トークン）: pixellab 98,000・alteroid-manager 20,000・alteroid-peer 9,000',
-    );
-    expect(line).not.toContain('small');
-    expect(line).not.toContain(MCP_SERVER_OTHER);
-  });
-
-  it('内訳が無い回（古い行・SDK が返さなかった回）は上位サーバの文を書かない', () => {
-    const line = describeFirstTurnToolSearch({ durationMs: 1, categories }, undefined);
-    expect(line).not.toContain('上位サーバ');
-    expect(line).toContain('MCP の道具は deferred');
   });
 });
