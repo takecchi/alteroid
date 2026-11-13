@@ -6,11 +6,10 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "const mainLoop = event.usage?.mainLoopUsage;",
   "timer?.turnEnded({succeeded: event.succeeded, ...(mainLoop === undefined ? {} : {tokens: {input: mainLoop.inputTokens, cacheRead: mainLoop.cacheReadInputTokens, cacheCreation: mainLoop.cacheCreationInputTokens, output: mainLoop.outputTokens}}), ...(event.timing === undefined && event.usage?.numTurns === undefined ? {} : {sdk: {...event.timing, ...(event.usage?.numTurns === undefined ? {} : {numTurns: event.usage.numTurns})}})});",
   "const finalizeStep = <T>(name: string, fn: () => Promise<T>): Promise<T> => timer === null ? fn() : timer.time(\`finalize.\${name}\`, fn);",
-  "const contextUsage = await finalizeStep('contextUsage', () => this.#observeContextUsage());",
-  "this.#lastContextUsage = contextUsage ?? null;",
-  "if (contextUsage !== undefined) {await this.#journal({type: 'context_usage', layer: 'clone', site: 'session', managerId: CLONE_ACTOR_ID, ...(this.#sdkSession.sdkSessionId === null ? {} : {sessionId: this.#sdkSession.sdkSessionId}), turnSucceeded: event.succeeded, contextUsage});} const compactions = this.#sdkSession.turn?.compactions ?? [];",
+  "const endingTurn = this.#sdkSession.turn;",
+  "this.#scheduleContextUsageObservation({q: this.#sdkSession.query, sessionId: this.#sdkSession.sdkSessionId, succeeded: event.succeeded, usage: event.usage, firstTurnEligible: endingTurn?.kind === 'normal' && event.succeeded && endingTurn.rejected == null});",
+  "const compactions = this.#sdkSession.turn?.compactions ?? [];",
   "await finalizeStep('usage', () => this.#usage.recordUsage(event.usage, 'session', 'cumulative', {compactions}));",
-  "await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);",
   "for (const denial of event.denials) {await this.#denials.noteDenial(denial, 'result');} const turn = this.#sdkSession.turn;",
   "const failure = event.failure ?? turn?.rejected ?? undefined;",
   "if (turn) await finalizeStep('reply', () => this.#journalReply(turn, failure !== undefined));",
@@ -275,8 +274,8 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
 
 exports[`clone.ts の長いメソッドの中身を、出した先を差し戻した形で固定する（段を別のメソッドへ出す前後で変わらないことの歯） > runner.ts #applyTurnEnded: 出した先を差し戻した中身が変わらない 1`] = `
 [
-  "const contextUsage = await this.#observeContextUsage();",
-  "if (contextUsage !== undefined) {this.#emit({type: 'context_usage', managerId: this.#id, sessionId: this.#resumeState.sessionId, turnSucceeded: event.succeeded, contextUsage});} const {said, rejected, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn} = this.#turnTally.takeAtResult();",
+  "this.#scheduleContextUsage(event);",
+  "const {said, rejected, openedWorkersThisTurn, workerRejectionsThisTurn, failedWorkerNotificationsThisTurn, failedWorkerNotificationsNamingLimitThisTurn} = this.#turnTally.takeAtResult();",
   "for (const denial of event.denials) this.#denialNotice.noteDenial(denial, 'result');",
   "const failure = event.failure ?? rejected ?? undefined;",
   "if (event.succeeded) {this.#markProgressed();",

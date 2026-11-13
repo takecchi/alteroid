@@ -551,6 +551,11 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
         '2つ目のターンの終わり',
       );
 
+      // 観測は `done` の後ろで走る（期限の 50ms を過ぎてから行が書かれる）ので、行が書かれるのを待つ
+      await waitFor(
+        async () => (await s.stores.journal.list({ types: ['context_usage'] })).length >= 2,
+        '2ターンぶんの context_usage の行',
+      );
       const context = await contextUsageOf(s);
       expect(context.error).toContain('返らなかった');
       expect(context.totalTokens).toBeUndefined();

@@ -659,7 +659,8 @@ describe('無報告のターン（capabilities.usage === false）', () => {
 });
 
 describe('#applyTurnEnded の中の並び', () => {
-  it('文脈占有の行（context_usage）が turn_usage より先に載り、台帳への積みは ToolSearch の観測より先', async () => {
+  // 文脈占有の観測は `done` の後ろの鎖で走る（`clone-context-usage-after-done.test.ts`）ので、`context_usage` の行は `turn_usage` より後になる
+  it('文脈占有の行（context_usage）は turn_usage より後に載り、台帳への積みは ToolSearch の観測より先', async () => {
     const stores = createMemoryStores();
     const log: string[] = [];
     spyUsage(stores, log);
@@ -676,13 +677,14 @@ describe('#applyTurnEnded の中の並び', () => {
     });
     await turn(s, 'やあ', 1);
 
-    expect(log).toEqual(['record', 'toolSearch']);
+    // 観測は `done` の後ろなので、ToolSearch の観測が渡るのを待つ（その前に `context_usage` の行は書き終わっている）
+    await vi.waitFor(() => expect(log).toEqual(['record', 'toolSearch']));
     const all = (await s.stores.journal.list({ limit: 200 })).reverse();
     expect(
       all.flatMap((row) =>
         row.type === 'context_usage' || row.type === 'turn_usage' ? [row.type] : [],
       ),
-    ).toEqual(['context_usage', 'turn_usage']);
+    ).toEqual(['turn_usage', 'context_usage']);
     await s.clone.stop();
   });
 

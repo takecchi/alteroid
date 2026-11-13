@@ -171,9 +171,9 @@ describe('呼び元 #applyTurnEnded の呼ぶ位置と周回', () => {
           "report",
         ],
         "seenAt": {
-          "report": 6,
-          "usage": 6,
-          "usage_notice": 6,
+          "report": 5,
+          "usage": 5,
+          "usage_notice": 5,
         },
       }
     `);
