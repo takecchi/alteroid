@@ -18,7 +18,9 @@ import {
 } from '@alteroid/core';
 import { startPeriodicRun } from './periodic-runner.js';
 
-const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
+// 見回りの粒度。試しの間隔は鍵ごとに 30 分（`TOKEN_TRIAL_INTERVAL_MS`）、偽陽性の確認窓は 15 分なので、60 秒ごとに鍵と現役の指名を読む必要は無い
+// （試しが最大 +4 分遅れるだけ。窓の判定は時刻の比較で、見回りの粒度に依らない）。
+const TOKEN_TRIAL_WATCH_TICK_MS = 5 * 60_000;
 
 // `transition === 'rejected'` だけを見ない: 試しはデーモンの中の1ターンで `#rateLimits` の記憶が書き換わらず、同じ鍵の再拒否は `statusNow: 'rejected'` だけで届くため。
 // 世代の照合（`freshness === 'current'`）は要求しない: 古い観測が紛れても間隔が伸びるだけで、倒れる向きは安全側（試す回数が減る）のため。
