@@ -686,6 +686,8 @@ class Clone implements CloneHost {
   #contextUsageChain: Promise<void> = Promise.resolve();
   // 鎖に積んだが終わっていない観測の数。セッションを閉じる・差し替える経路が「待つべきか」を同期で見るため
   #contextUsagePending = 0;
+  // `stop()` が閉じる前の最後の待ち（`#closeContextUsage`）を抜けた後は true。以後に届いた `turn_ended` は観測を積まない（積むと、閉じたセッションへ聞いて偽の失敗の行になる）
+  #contextUsageClosed = false;
   readonly #onFirstTurnToolSearch: ((line: string) => Promise<void>) | undefined;
   readonly #cwd: string | undefined;
   readonly #attachmentLimits: TurnAttachmentLimits | undefined;
@@ -1772,7 +1774,8 @@ class Clone implements CloneHost {
     // `#stopped` は読み切りの後で立てる: 先に立てると `#inputStream` が入力の generator を畳んで蒸留の次のターンが永久に完了せず、`#read` の `finally` が丸ごと飛んで宙吊りのターンを誰も解放しないため（`#stopped` は新しい仕事を受けない印ではなく、それは `#inbox.closed` が持つ）
     await this.#sdkSession.pumpLoop;
     // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: 閉じた後だと `getContextUsage` が失敗に化け、`context_usage` の行が偽の失敗になるか欠けるため。待ちは観測の期限（`CONTEXT_USAGE_READ_TIMEOUT_MS`）が上限
-    await this.#whenContextUsageIdle();
+    // 待ちを抜けたら以後の `turn_ended` は観測を積まない（`#closeContextUsage`）
+    await this.#closeContextUsage();
 
     this.#sdkSession.markStopped();
     this.#progress.clearAll();
@@ -4850,6 +4853,8 @@ class Clone implements CloneHost {
     usage: AgentTurnUsage | undefined;
     firstTurnEligible: boolean;
   }): void {
+    // 閉じかけなら積まない: 誰にも待たれない観測が `closeQuery()` の後に走り、偽の失敗の行を書くため
+    if (this.#contextUsageClosed) return;
     this.#contextUsagePending += 1;
     this.#contextUsageChain = this.#contextUsageChain
       .then(async () => {
@@ -4885,6 +4890,20 @@ class Clone implements CloneHost {
     for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
       await tail;
       if (tail === this.#contextUsageChain) return;
+    }
+  }
+
+  /**
+   * `stop()` が閉じる前の最後の待ち。`#whenContextUsageIdle` と同じ待ちに、待ちを抜ける同じ同期の区間で「閉じかけ」の印を立てる。
+   * 待ちの後に別に立てない: 抜けてから立てるまでの間に `turn_ended` が届くと、積んだ観測を誰も待たない。
+   */
+  async #closeContextUsage(): Promise<void> {
+    for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
+      await tail;
+      if (tail === this.#contextUsageChain) {
+        this.#contextUsageClosed = true;
+        return;
+      }
     }
   }
 
