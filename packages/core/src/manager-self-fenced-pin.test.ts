@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import {
+  EVENT_SETTLED,
+  EVENT_SETTLED_LAG,
+  trackEventSettled,
+} from './manager-event-settled.test-support.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
@@ -10,14 +15,15 @@ import {
 import type { InboxEvent, Job, JobLease } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-// 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: `closeSelfFenced` の完了が何周で戻るかを数えるため。見張りの本体は使わない。
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('./loop-stall.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./loop-stall.js')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
+// 出来事の処理の完了を `phases` へ記す: `closeSelfFenced` の完了が何周で戻るかを数えるため（仕組みは test-support の注記）。
+const phases: string[] = [];
+let settledTracker: { restore(): void } | undefined;
+beforeAll(() => {
+  settledTracker = trackEventSettled(phases);
+});
+afterAll(() => {
+  settledTracker?.restore();
+});
 
 // `Pool#handleEvent` の `case 'closed'` のうち、自己失効の `closed`（`selfFenced: true`。切り出し前は `Pool` の `#closeSelfFenced`、
 // いまは `manager-self-fenced.ts`）を、外から見える結果（日誌の全文と `with/role`・待ちの取り下げ・台帳の行・貸し出しの返却・
@@ -184,7 +190,9 @@ async function open(
       emit?.(event);
       for (let i = 1; i <= 200; i += 1) {
         await Promise.resolve();
-        if (seen.settled < 0 && phases.includes('runner-event-settled:closed')) seen.settled = i;
+        if (seen.settled < 0 && phases.includes(EVENT_SETTLED)) {
+          seen.settled = i - EVENT_SETTLED_LAG;
+        }
         if (seen.put < 0 && order.some((entry) => entry.startsWith('put:'))) seen.put = i;
         if (seen.journal < 0 && order.includes('journal')) seen.journal = i;
         if (seen.post < 0 && order.includes('post')) seen.post = i;

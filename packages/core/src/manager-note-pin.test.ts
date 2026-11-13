@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import {
+  EVENT_SETTLED,
+  EVENT_SETTLED_LAG,
+  trackEventSettled,
+} from './manager-event-settled.test-support.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
@@ -10,14 +15,15 @@ import {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-// 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: `note` の処理の完了が何周で戻るかを数えるため。見張りの本体は使わない。
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('./loop-stall.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./loop-stall.js')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
+// 出来事の処理の完了を `phases` へ記す: `note` の処理の完了が何周で戻るかを数えるため（仕組みは test-support の注記）。
+const phases: string[] = [];
+let settledTracker: { restore(): void } | undefined;
+beforeAll(() => {
+  settledTracker = trackEventSettled(phases);
+});
+afterAll(() => {
+  settledTracker?.restore();
+});
 
 // `Pool#handleEvent` の `case 'note'` が呼ぶ 3 つの段（`#markWorkerLimitStopped`・`#journalNote`・`#emitNoteNotices`。
 // 切り出し前は `Pool` の中、いまは `manager-note.ts`）を、外から見える結果だけで縛る:
@@ -197,8 +203,8 @@ async function open(spec: Spec = {}) {
       const sequence: string[] = [];
       for (let i = 1; i <= 200; i += 1) {
         await Promise.resolve();
-        if (seen['settled'] === -1 && phases.includes('runner-event-settled:note')) {
-          seen['settled'] = i;
+        if (seen['settled'] === -1 && phases.includes(EVENT_SETTLED)) {
+          seen['settled'] = i - EVENT_SETTLED_LAG;
         }
         for (; seenOrder < order.length; seenOrder += 1) {
           const label = order[seenOrder] as string;

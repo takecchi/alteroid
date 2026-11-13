@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { sha256Hex } from './auth.js';
 import { createManagerPool } from './manager.js';
+import {
+  EVENT_SETTLED,
+  EVENT_SETTLED_LAG,
+  trackEventSettled,
+} from './manager-event-settled.test-support.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
@@ -14,14 +19,15 @@ import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { createMemoryStores } from './testing.js';
 import { WithheldReportsStore } from './withheld-reports-store.js';
 
-// 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: 処理の完了が何周で戻るかを数えるため。見張りの本体は使わない。
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('./loop-stall.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./loop-stall.js')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
+// 出来事の処理の完了を `phases` へ記す: 処理の完了が何周で戻るかを数えるため（仕組みは test-support の注記）。
+const phases: string[] = [];
+let settledTracker: { restore(): void } | undefined;
+beforeAll(() => {
+  settledTracker = trackEventSettled(phases);
+});
+afterAll(() => {
+  settledTracker?.restore();
+});
 
 /*
  * `Pool#handleEvent` の `case 'report'` の段4（`Pool#deliverReport`: 報告をクローンへ配るか畳むかを決めて配る）を、
@@ -254,7 +260,7 @@ async function open(spec: Spec = {}) {
       for (let i = 1; i <= 200; i += 1) {
         state.hop = i;
         await Promise.resolve();
-        if (settled < 0 && phases.includes('runner-event-settled:report')) settled = i;
+        if (settled < 0 && phases.includes(EVENT_SETTLED)) settled = i - EVENT_SETTLED_LAG;
       }
       return {
         calls: log.filter((e) => e.hop > 0).map((e) => `${e.kind}@${String(e.hop)}`),
@@ -269,7 +275,7 @@ async function open(spec: Spec = {}) {
       for (let i = 1; i <= 200; i += 1) {
         state.hop = i;
         await Promise.resolve();
-        if (settled < 0 && phases.includes('runner-event-settled:report')) settled = i;
+        if (settled < 0 && phases.includes(EVENT_SETTLED)) settled = i - EVENT_SETTLED_LAG;
       }
       return {
         calls: log.map((entry) => `${entry.kind}@${String(entry.hop)}`),

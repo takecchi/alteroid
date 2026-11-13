@@ -197,7 +197,6 @@ import { UsageRecordOrder, type UsageRecordTicket } from './usage.js';
 import type { UsageReceiver } from './usage-receiver.js';
 import type { UsageWake } from './usage-wake.js';
 import { WithheldReportsStore } from './withheld-reports-store.js';
-import { notePhase } from './loop-stall.js';
 import {
   abortTextsOf,
   composeFoldNotice,
@@ -4828,8 +4827,6 @@ class Pool implements ManagerPool {
       usageTicket?.release();
       releaseMirrorTurn?.();
       fetchGate.release();
-      // 非同期の続き（台帳の読み書き・日誌）まで終えた印（#4485）: `runner-event-handled` は同期の部分が返った印で、止まった窓がその後に印なしで続くと、続きの中か外かを分けられないため
-      notePhase(`runner-event-settled:${event.type}`);
     }
   }
 
@@ -5767,9 +5764,6 @@ class Pool implements ManagerPool {
     const fingerprint =
       identity === undefined && observation.succeeded !== true ? heldFingerprint : undefined;
     const observedBy = identity ?? (fingerprint === undefined ? undefined : { fingerprint });
-    // 回し手へ渡す前後に印を打つ（#4485）: 利用上限で担当が一斉に落ちた回（2026-10-13T16:52Z〜）に、`rate_limit` の後で
-    // 印の無い停止が続いた。回し手（鍵の回転の判断・配布・セッションの作り直し）が止めていたなら、窓に `-done` が無いまま残る
-    notePhase(`manager:token-rotation:${managerId}`);
     try {
       await this.#onUsageObservation({
         ...observation,
@@ -5778,7 +5772,6 @@ class Pool implements ManagerPool {
     } catch (error) {
       noteDroppedRecord('認証トークンの切替', `manager ${managerId}`, error);
     }
-    notePhase(`manager:token-rotation-done:${managerId}`);
   }
 
   #movedAwayFrom(record: ManagerRecord, fromRunnerId: string): boolean {

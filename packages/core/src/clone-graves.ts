@@ -11,7 +11,6 @@ import {
 import { noteDroppedRecord, reasonOf } from './dropped-record.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX, EXCHANGE_KIND_RECOVERY_PREFIX } from './exchange-kind.js';
 import { MAX_PENDING_GRAVES } from './grave-queue.js';
-import { notePhase } from './loop-stall.js';
 import type { JournalEntryInput } from './schema.js';
 import type { LostSessionGrave, Stores, TranscriptGrave } from './store.js';
 import { redactImagesInTranscriptYielding } from './transcript-image-redaction.js';
@@ -92,7 +91,6 @@ export class CloneGraves {
       distill: true,
     },
   ): Promise<ReopenArchive> {
-    notePhase(`clone:salvage:${options.why}`);
     const label = options.why === 'reopen' ? '開き直す前' : '文脈窓で畳む前';
     const path = this.#ports.transcriptPath();
     // 控えが無いときは日誌へ書かず黙って通す: 道具を使う前に落ちた回のたびにノイズが1行増えるため

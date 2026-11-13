@@ -1628,18 +1628,16 @@ describe('周回（await の位置・回数を動かさない）', () => {
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "orphan": {
           "noteSync": 1,
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "releasedBeforeWait": {
           "noteSync": 0,
@@ -1647,26 +1645,24 @@ describe('周回（await の位置・回数を動かさない）', () => {
             1,
             1,
             1,
-            1,
           ],
-          "settledAtTick": 3,
+          "settledAtTick": 2,
         },
         "releasedMidWait": {
           "firstNoteTick": 1,
-          "settledAtTick": 4,
+          "settledAtTick": 3,
         },
         "settledOnly": {
           "noteSync": 1,
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "timeout": {
           "firstNoteTick": 1,
-          "settledAtTick": 4,
+          "settledAtTick": 3,
         },
         "woken": {
           "noteSync": 0,
@@ -1675,9 +1671,8 @@ describe('周回（await の位置・回数を動かさない）', () => {
             1,
             1,
             1,
-            1,
           ],
-          "settledAtTick": 4,
+          "settledAtTick": 3,
         },
       }
     `);

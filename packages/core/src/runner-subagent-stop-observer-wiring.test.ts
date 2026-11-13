@@ -204,19 +204,19 @@ describe('呼び元の周回（await を足さない・口を async で包まな
       {
         "failed": {
           "noteSync": 1,
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "orphan": {
           "noteSync": 1,
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "releasedBeforeWait": {
           "noteSync": 0,
-          "settledAtTick": 3,
+          "settledAtTick": 2,
         },
         "woken": {
           "noteSync": 0,
-          "settledAtTick": 4,
+          "settledAtTick": 3,
         },
       }
     `);

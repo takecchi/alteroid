@@ -7,8 +7,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   describeLoopStall,
-  markStreamWrites,
-  notePhase,
   readCgroupCpuThrottle,
   readCgroupMemoryEvents,
   readCgroupPressure,
@@ -82,133 +80,17 @@ async function stalledTick(ms: number, during: () => void = () => undefined): Pr
 }
 
 describe('loop-stall（#4485）', () => {
-  it('止まった長さ・直前の印・窓の中の印（経過 ms 付き）・ヒープを返す', async () => {
+  it('止まった長さ・ヒープを返し、印の欄は持たない（印は外した）', async () => {
     await tick();
-    notePhase('test:before');
-    await stalledTick(4_000, () => {
-      now += 1_500;
-      notePhase('test:inside-a');
-      now += 2_000;
-      notePhase('test:inside-b');
-      now -= 3_500;
-    });
+    await stalledTick(4_000);
 
     expect(stalls).toHaveLength(1);
     const stall = stalls[0] as LoopStall;
     expect(stall.stalledMs).toBe(4_000);
-    expect(stall.phaseBefore).toBe('test:before');
-    expect(stall.phasesDuring).toEqual([
-      { label: 'test:inside-a', offsetMs: 1_500 },
-      { label: 'test:inside-b', offsetMs: 3_500 },
-    ]);
+    expect(stall).not.toHaveProperty('phaseBefore');
+    expect(stall).not.toHaveProperty('phasesDuring');
+    expect(stall).not.toHaveProperty('longestGap');
     expect(stall.heapUsedMb).toBeGreaterThan(0);
-  });
-
-  describe('最も長い印の無い間（longestGap）と直前の印の経過', () => {
-    // 窓は from=500 から to=500+500+stall。印は during の中で偽の時計を進めて打つ
-    it('印と印の間が最も長いとき、afterLabel がその前の印で、始まりと長さが合う', async () => {
-      notePhase('test:before'); // now=0
-      await tick(); // from は 500
-      await stalledTick(4_000, () => {
-        now += 1_500;
-        notePhase('test:a'); // +1500
-        now += 2_000;
-        notePhase('test:b'); // +3500
-        now -= 3_500;
-      });
-      // 窓は +0 から +4500。区間: 0→1500, 1500→3500（最長 2000）, 3500→4500
-      expect(stalls[0]?.longestGap).toEqual({
-        startOffsetMs: 1_500,
-        gapMs: 2_000,
-        afterLabel: 'test:a',
-      });
-    });
-
-    it('最も長い間が from から始まるとき（窓の中に印が無い場合を含む）は afterLabel が無い', async () => {
-      await tick();
-      await stalledTick(2_000);
-      expect(stalls[0]?.longestGap).toEqual({ startOffsetMs: 0, gapMs: 2_500 });
-      expect(stalls[0]?.longestGap).not.toHaveProperty('afterLabel');
-
-      await tick();
-      await stalledTick(3_000, () => {
-        now += 3_000;
-        notePhase('test:late'); // +3000 の1点だけ。窓は +0 から +3500 なので 0→3000 が最長
-        now -= 3_000;
-      });
-      expect(stalls[1]?.longestGap).toEqual({ startOffsetMs: 0, gapMs: 3_000 });
-      expect(stalls[1]?.longestGap).not.toHaveProperty('afterLabel');
-    });
-
-    it('表示の上限（30本）を超える印があっても、切った後ろ側の印で区間が決まる', async () => {
-      await tick();
-      await stalledTick(4_000, () => {
-        for (let index = 1; index <= 33; index += 1) {
-          now += 10;
-          notePhase(`test:m${String(index)}`);
-        }
-        now -= 330;
-      });
-      const stall = stalls[0] as LoopStall;
-      expect(stall.phasesDuring).toHaveLength(30);
-      expect(stall.phasesOmitted).toBe(3);
-      // 区間は 33 本目（表示されない）から窓の終わりまで: 4500 - 330
-      expect(stall.longestGap).toEqual({
-        startOffsetMs: 330,
-        gapMs: 4_170,
-        afterLabel: 'test:m33',
-      });
-    });
-
-    it('phaseBeforeAgoMs は、見張りが最後に回った時刻から直前の印までの経過。印が無ければ欄ごと無い', async () => {
-      notePhase('test:old'); // now=0
-      await tick(); // from=500
-      await stalledTick(1_000);
-      const stall = stalls[0] as LoopStall;
-      expect(stall.phaseBefore).toBe('test:old');
-      expect(stall.phaseBeforeAgoMs).toBe(500);
-
-      stop?.();
-      stop = startLoopStallWatch({
-        intervalMs: 500,
-        thresholdMs: 1_000,
-        now: () => now,
-        cpuUsage: () => ({ ...cpu }),
-        readCpuThrottle: async () => throttle,
-        readPressure: async () => undefined,
-        readMemoryEvents: async () => undefined,
-        ...noProc,
-        measureThreadpoolWait: async () => threadpoolWait,
-        onStall: (s) => stalls.push(s),
-      });
-      await tick();
-      await stalledTick(1_000);
-      expect(stalls[1]).not.toHaveProperty('phaseBefore');
-      expect(stalls[1]).not.toHaveProperty('phaseBeforeAgoMs');
-    });
-
-    it('文の形: 直前の印に経過を添え、最も長い印の無い間を出し、窓に印が無くても直前の印の処理が犯人とは言わない', async () => {
-      notePhase('test:before'); // now=0
-      await tick();
-      await stalledTick(2_000, () => {
-        now += 1_000;
-        notePhase('test:a');
-        now -= 1_000;
-      });
-      const text = describeLoopStall(stalls[0] as LoopStall);
-      expect(text).toContain('直前の印: test:before（見張りが最後に回った時刻の 500ms 前）');
-      expect(text).toContain('最も長い印の無い間: +1000ms から 1500ms（その前の印: test:a）');
-
-      await tick();
-      await stalledTick(2_000);
-      const empty = describeLoopStall(stalls[1] as LoopStall);
-      expect(empty).toContain(
-        '最も長い印の無い間: +0ms から 2500ms（その前の印: 無い。見張りが回った後）',
-      );
-      expect(empty).toContain('窓の中で通った印は無い。');
-      expect(empty).toContain('印を打たない処理');
-      expect(empty).not.toContain('見込み');
-    });
   });
 
   describe('CPU の割合・steal・メインスレッドの schedstat', () => {
@@ -297,8 +179,7 @@ describe('loop-stall（#4485）', () => {
     });
   });
 
-  it('文言に、止まった長さ・直前の印・窓の中の印が無いこと・GC・CPU・器の絞り・ヒープが載る', async () => {
-    notePhase('test:culprit');
+  it('文言に、止まった長さ・GC・CPU・器の絞り・ヒープが載り、印の文は出ない（印は外した）', async () => {
     await tick();
     // CPU を窓の半分ほど使った回にする: 眠っていた回は文の頭が変わる（下の「CPU の割合」の試験）
     await stalledTick(2_000, () => {
@@ -307,8 +188,9 @@ describe('loop-stall（#4485）', () => {
 
     const text = describeLoopStall(stalls[0] as LoopStall);
     expect(text).toContain('2000ms 止まった');
-    expect(text).toContain('直前の印: test:culprit');
-    expect(text).toContain('窓の中で通った印は無い');
+    expect(text).not.toContain('直前の印');
+    expect(text).not.toContain('窓の中の印');
+    expect(text).not.toContain('印の無い間');
     expect(text).toMatch(/窓の中の GC: \d+ 回・合計 \d+ms・最大 \d+ms/);
     expect(text).toContain('窓 2500ms の中でこのプロセスが使った CPU: user 1200ms・system 0ms');
     expect(text).toMatch(/器の CPU の絞り（直近 \d+ms）: 0ms・0 周期/);
@@ -502,34 +384,6 @@ describe('loop-stall（#4485）', () => {
     await stalledTick(900);
     await tick();
     expect(stalls).toEqual([]);
-  });
-
-  it('書き込みを包むと、書き込みの中で止まった回は「書き込みの印の後に止まり、終わりの印が窓の終わりに出る」形で残る。元へ戻せる', async () => {
-    const written: unknown[] = [];
-    const stream = {
-      write: (chunk: unknown) => {
-        written.push(chunk);
-        // 同期の書き込みがパイプの詰まりで 2 秒待った形
-        now += 2_000;
-        return true;
-      },
-    } as unknown as NodeJS.WritableStream;
-    const original = stream.write;
-    const restore = markStreamWrites(stream, 'stderr-write');
-
-    await tick();
-    await stalledTick(2_000, () => {
-      stream.write('hello');
-      now -= 2_000;
-    });
-
-    expect(written).toEqual(['hello']);
-    const stall = stalls[0] as LoopStall;
-    expect(stall.phaseBefore).toBe('stderr-write:5');
-    expect(stall.phasesDuring).toEqual([{ label: 'stderr-write-done', offsetMs: 2_000 }]);
-
-    restore();
-    expect(stream.write).toBe(original);
   });
 });
 

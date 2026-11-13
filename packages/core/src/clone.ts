@@ -273,7 +273,6 @@ import {
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import { notePhase } from './loop-stall.js';
 import { assistantFailureOf, turnFailureKindOf, type SdkFailure } from './sdk-failure.js';
 import { describeProbeError } from './usage-probe.js';
 import {
@@ -4611,7 +4610,6 @@ class Clone implements CloneHost {
 
   /** 蒸留は生存条件であり、後回しにしない: ここで記憶へ移し損ねたものは compaction のたびに人格の一部として失われる。 */
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
-    notePhase('clone:pre-compact');
     const { sessionId, transcriptPath, signal } = record;
 
     // 退避や蒸留の try より前に印を立てる: あちらが落ちても索引の載せ直しは行われなければならないため。
@@ -4930,8 +4928,6 @@ class Clone implements CloneHost {
 
   /** 中立イベント1件へ反応する。反応は層ごとに違うので、マネージャー層の `#apply` と共通化しない。 */
   async #apply(event: AgentEvent): Promise<void> {
-    // ループの停止の見張りに、何を処理していたかを残す（#4485）
-    notePhase(`clone:${event.type}`);
     switch (event.type) {
       case 'session_started': {
         return this.#applySessionStarted(event);
@@ -5512,7 +5508,6 @@ class Clone implements CloneHost {
 
   /** 日誌の書き込み失敗でクローンのセッションを殺さない。 */
   async #journal(entry: JournalEntryInput): Promise<void> {
-    notePhase(`clone-journal:${entry.type}`);
     try {
       await this.#stores.journal.append(entry);
     } catch (error) {
@@ -5667,7 +5662,6 @@ function withProjectKeyProbe(
   const listSubkeys = store.listSubkeys?.bind(store);
   return {
     append: async (key: SessionKey, entries) => {
-      notePhase(`session-store:append:${String(entries.length)}`);
       note(key.projectKey);
       // 画像の中身は pg へ書かない: 保持期限後も消えない生ログになるため
       await store.append(key, redactImagesInEntries(entries) as typeof entries);
