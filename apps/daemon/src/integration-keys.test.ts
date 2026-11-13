@@ -37,7 +37,10 @@ function fakeClone(): CloneHost {
     subscribe: () => () => undefined,
     stop: () => Promise.resolve(),
     usageBlocked: false,
-    managers: { list: () => Promise.resolve([]) },
+    managers: {
+      list: () => Promise.resolve([]),
+      listWithUnreadable: () => Promise.resolve({ managers: [], unreadable: [] }),
+    },
   } as unknown as Partial<CloneHost>);
 }
 

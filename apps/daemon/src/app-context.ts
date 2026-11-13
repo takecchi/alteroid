@@ -429,7 +429,6 @@ export function createAppContext(deps: AppDeps) {
   const topology = createTopologyService({
     clone,
     ...(deps.runners === undefined ? {} : { runners: deps.runners }),
-    unreadableJobs: () => stores.jobs.listUnreadableJobs(),
     activity: topologyActivity,
     storage: topologyStorage,
     modelsOf: (summary) => managerModelsOf(clone.managers, summary),

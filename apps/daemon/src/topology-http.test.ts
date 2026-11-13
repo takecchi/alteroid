@@ -7,10 +7,16 @@ import { createJournalBus } from './journal-bus.js';
 import { createWorkerToolBus } from './topology-activity.js';
 import { topologyResponseSchema } from './openapi.js';
 
-function fakeCloneFor(managers: ManagerSummary[], overrides: Partial<CloneHost> = {}) {
+function fakeCloneFor(
+  managers: ManagerSummary[],
+  overrides: Partial<CloneHost> = {},
+  unreadable: { id?: string; reason: string }[] = [],
+) {
   return fakeCloneHost({
     usageBlocked: false,
-    managers: { list: async () => managers } as unknown as CloneHost['managers'],
+    managers: {
+      listWithUnreadable: async () => ({ managers, unreadable }),
+    } as unknown as CloneHost['managers'],
     ...overrides,
   });
 }
@@ -37,15 +43,11 @@ function setup(
   } = {},
 ) {
   const stores = createMemoryStores();
-  if (options.unreadable !== undefined) {
-    const rows = options.unreadable;
-    stores.jobs = { ...stores.jobs, listUnreadableJobs: async () => rows };
-  }
   const bus = createJournalBus(stores.journal);
   const workerTools = createWorkerToolBus();
   const app = createApp({
     workerToolEvents: workerTools,
-    clone: fakeCloneFor(options.managers ?? [], options.clone),
+    clone: fakeCloneFor(options.managers ?? [], options.clone, options.unreadable),
     stores: { ...stores, journal: bus.journal },
     token: 'test-token',
     shutdown: () => undefined,
@@ -190,9 +192,9 @@ describe('GET /topology/stream', () => {
     const { app } = setup({
       clone: {
         managers: {
-          list: async () => {
+          listWithUnreadable: async () => {
             listCalls += 1;
-            return [fixed];
+            return { managers: [fixed], unreadable: [] };
           },
         },
       } as unknown as Partial<CloneHost>,
@@ -283,10 +285,10 @@ describe('GET /topology/stream', () => {
       clone: fakeCloneHost({
         usageBlocked: false,
         managers: {
-          list: async () => {
+          listWithUnreadable: async () => {
             listCalls += 1;
             if (failing) throw new Error('boom');
-            return [];
+            return { managers: [], unreadable: [] };
           },
         } as unknown as CloneHost['managers'],
       }),
@@ -314,9 +316,9 @@ describe('GET /topology/stream', () => {
     const { app, journal } = setup({
       clone: {
         managers: {
-          list: async () => {
+          listWithUnreadable: async () => {
             listCalls += 1;
-            return [fixed];
+            return { managers: [fixed], unreadable: [] };
           },
         },
       } as unknown as Partial<CloneHost>,
