@@ -212,7 +212,7 @@ describe('tick のターンで待ち行列の先頭を1回だけ載せる', () =
     async (_name, tick) => {
       const stores = createMemoryStores();
       await seed(stores);
-      stores.jobs.listUnreadableJobs = async () => {
+      stores.jobs.listJobsWithUnreadable = async () => {
         throw new Error('委譲の台帳が読めない');
       };
       const s = boot(stores);

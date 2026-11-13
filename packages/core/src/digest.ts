@@ -774,9 +774,8 @@ export async function buildActivityDigest(
   const sinceIso = window.since.toISOString();
   const untilIso = until.toISOString();
 
-  const jobs = await stores.jobs.listJobs();
-  // 読めない委譲の行（`listJobs()` が飛ばしたもの）を消さない
-  const unreadableJobs = await stores.jobs.listUnreadableJobs();
+  // 読めない委譲の行（`listJobs()` が飛ばしたもの）を消さない。台帳の読みは1回にする（pg は口ごとに全行の scan が走るため）
+  const { jobs, unreadable: unreadableJobs } = await stores.jobs.listJobsWithUnreadable();
   const unreadableJobNote = describeUnreadableJobs(unreadableJobs);
   // `pendingOnly` を外さない: 承認待ちキューの行を消す口が無く、全件を毎回引くと digest 1回のコストが単調に増えるため
   const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });

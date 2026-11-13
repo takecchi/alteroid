@@ -579,6 +579,9 @@ export function createMemoryStores(): Stores {
     async listUnreadableJobs() {
       return [];
     },
+    async listJobsWithUnreadable() {
+      return { jobs: [...jobs.values()].map(isolate), unreadable: [] };
+    },
     async getJob(id) {
       const found = jobs.get(id);
       return found === undefined ? null : isolate(found);

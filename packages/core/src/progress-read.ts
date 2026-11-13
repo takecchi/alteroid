@@ -77,8 +77,9 @@ export async function readProgress(
 ): Promise<ProgressView> {
   if (!Number.isFinite(windowHours) || windowHours <= 0) throw new InvalidProgressWindowError();
   const tasks = await stores.tasks.list({ includeClosed: true });
-  const jobs = await stores.jobs.listJobs();
-  const unreadableJobs = (await stores.jobs.listUnreadableJobs()).length;
+  // 台帳の読みは1回にする（pg は口ごとに全行の scan が走るため）
+  const { jobs, unreadable } = await stores.jobs.listJobsWithUnreadable();
+  const unreadableJobs = unreadable.length;
   // 「返答済み」を数えるのは未了の task だけ（`summarizeProgress` は閉じた task の `respondedAt` を読まない）。
   // 閉じた task まで導出して写すと、閉じた task が積もるほど毎回無駄になる（#5089）。
   // 返答の一覧は、返事を結べる未了の human の task が1件でもあるときだけ読む

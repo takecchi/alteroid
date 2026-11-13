@@ -95,6 +95,24 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
     expect(await stores.jobs.listUnreadableJobs()).toEqual([]);
   });
 
+  it('listJobsWithUnreadable() は listJobs() と listUnreadableJobs() を別々に呼んだ結果と同じ（読めた行・読めない行の両方）', async () => {
+    await writeRawJobsFile();
+    const stores = createFsStores(root);
+
+    let combined: Awaited<ReturnType<typeof stores.jobs.listJobsWithUnreadable>> | undefined;
+    await captureStderr(async () => {
+      combined = await stores.jobs.listJobsWithUnreadable();
+    });
+
+    expect(combined).toEqual({
+      jobs: await stores.jobs.listJobs(),
+      unreadable: await stores.jobs.listUnreadableJobs(),
+    });
+    expect(combined?.jobs.map((j) => j.id)).toEqual(['mgr-good']);
+    expect(combined?.unreadable).toEqual([{ id: 'mgr-bad', reason: '不正な欄: status' }]);
+    expect(JSON.stringify(combined)).not.toContain(BAD_JOB_RAW.summary);
+  });
+
   it('putJob() は投げない。書いた後のファイルに不正な行が元の形のまま残っている', async () => {
     await writeRawJobsFile();
     const stores = createFsStores(root);

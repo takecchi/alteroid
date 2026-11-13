@@ -496,8 +496,8 @@ describe('B1 要約の全文の固定 — マネージャーの節の畳みと�
 
   it('読めない委譲の行だけが在る（マネージャーの節に断りだけが出る。全文）', async () => {
     const stores = createMemoryStores();
-    stores.jobs.listUnreadableJobs = () =>
-      Promise.resolve([{ id: 'mgr-bad', reason: '不正な欄: status' }]);
+    stores.jobs.listJobsWithUnreadable = () =>
+      Promise.resolve({ jobs: [], unreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }] });
     expect(await digestOf(stores)).toMatchInlineSnapshot(`
       "期間: 2026-10-31T15:00:00.000Z 〜 2026-11-01T09:00:00.001Z
 
@@ -1579,7 +1579,9 @@ describe('B1 要約の全文の固定 — 件数の形（counts。定期の依�
         summary: `届いた ${String(i)}`,
       });
     }
-    stores.jobs.listUnreadableJobs = () => Promise.resolve([{ id: 'mgr-bad', reason: '不正' }]);
+    const listedJobs = await stores.jobs.listJobs();
+    stores.jobs.listJobsWithUnreadable = () =>
+      Promise.resolve({ jobs: listedJobs, unreadable: [{ id: 'mgr-bad', reason: '不正' }] });
     const original = stores.jobs.listApprovals.bind(stores.jobs);
     stores.jobs.listApprovals = async (options) => ({
       ...(await original(options)),
@@ -1906,7 +1908,8 @@ describe('B1 要約の全文の固定 — 1件だけの節と、counts の打ち
 describe('B1 要約の全文の固定 — 全体の形で読めない行の断りだけが在る', () => {
   it('読めない承認待ち・継続中の依頼・委譲が1行ずつ（件数の行の下に3行、各節に断り。全文）', async () => {
     const stores = createMemoryStores();
-    stores.jobs.listUnreadableJobs = () => Promise.resolve([{ id: 'mgr-bad', reason: '不正' }]);
+    stores.jobs.listJobsWithUnreadable = () =>
+      Promise.resolve({ jobs: [], unreadable: [{ id: 'mgr-bad', reason: '不正' }] });
     const original = stores.jobs.listApprovals.bind(stores.jobs);
     stores.jobs.listApprovals = async (options) => ({
       ...(await original(options)),
