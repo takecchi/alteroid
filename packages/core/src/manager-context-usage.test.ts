@@ -135,8 +135,8 @@ async function contextUsageRows(
   return entries.flatMap((entry) => (entry.type === 'context_usage' ? [entry] : []));
 }
 
-describe('マネージャーの turn_usage に contextUsage が載る経路（Issue #977 / #976）', () => {
-  it('増分が非空なら turn_usage.contextUsage に値が載る（既存の読み手との互換のため今も残る経路）', async () => {
+describe('マネージャーの文脈占有は context_usage の行にだけ書く（Issue #977 / #976）', () => {
+  it('⭐ 古い runner が usage に contextUsage を載せてきても、turn_usage には書かない（境界が黙って捨てる）', async () => {
     const stores = createMemoryStores();
     const s = await setup(stores);
 
@@ -147,7 +147,8 @@ describe('マネージャーの turn_usage に contextUsage が載る経路（Is
       if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
       return found;
     });
-    expect(rows[0]?.contextUsage).toEqual(SAMPLE_CONTEXT_USAGE);
+    expect(rows[0]).not.toHaveProperty('contextUsage');
+    expect(await contextUsageRows(stores)).toHaveLength(0);
 
     await s.pool.stop();
   });

@@ -96,13 +96,26 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
       expect(summarizeJournalDiagnosticsEntry(entry)).toContain('⚠ compaction 2 回');
     });
 
-    it('contextUsage.percentage があれば文脈の注記を出す', () => {
+    it('文脈の注記は出さない（文脈占有は直後の context_usage の行で見る）', () => {
       const entry: JournalDiagnosticsEntryLike = {
         type: 'turn_usage',
         layer: 'clone',
         site: 'session',
         managerId: 'clone',
         models: {},
+      };
+      expect(summarizeJournalDiagnosticsEntry(entry)).not.toContain('文脈');
+    });
+  });
+
+  describe('context_usage', () => {
+    it('contextUsage.percentage があれば文脈の注記を出す', () => {
+      const entry: JournalDiagnosticsEntryLike = {
+        type: 'context_usage',
+        layer: 'clone',
+        site: 'session',
+        managerId: 'clone',
+        turnSucceeded: true,
         contextUsage: { percentage: 30, totalTokens: 500 },
       };
       const summary = summarizeJournalDiagnosticsEntry(entry);
@@ -113,11 +126,11 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
 
     it('messageBreakdown があれば結果が大きい上位3道具を出し、「ほか」は順位に入れない', () => {
       const entry: JournalDiagnosticsEntryLike = {
-        type: 'turn_usage',
+        type: 'context_usage',
         layer: 'clone',
         site: 'session',
         managerId: 'clone',
-        models: {},
+        turnSucceeded: true,
         contextUsage: {
           percentage: 30,
           totalTokens: 500,
@@ -137,9 +150,7 @@ describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
       expect(summary).not.toContain('d 10');
       expect(summary).not.toContain('(other)');
     });
-  });
 
-  describe('context_usage', () => {
     it('turnSucceeded=false は「ターン失敗」を含む', () => {
       const entry: JournalDiagnosticsEntryLike = {
         type: 'context_usage',

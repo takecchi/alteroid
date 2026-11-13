@@ -15,12 +15,10 @@ import {
 
 // スキーマ側から引く（`clone.ts` と同じ引き方）: 二重に定義すると、どちらかを直し忘れたときに型は緑のまま日誌の形だけがずれるため
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
-type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
-/** `case 'turn_ended'` だけが渡す、ターンの境界で聞いた値。蒸留のサイドクエリは本セッションの外なので文脈占有も compaction も持たず、渡さない。 */
+/** `case 'turn_ended'` だけが渡す、ターンの境界で聞いた値。蒸留のサイドクエリは本セッションの外なので compaction を持たず、渡さない。文脈占有は `context_usage` の行に書くので、ここには載せない。 */
 export interface TurnBoundary {
-  contextUsage?: ContextUsageObservation;
   compactions?: CompactionObservation[];
 }
 
@@ -47,10 +45,6 @@ export function turnUsageEntry(input: {
       : {
           reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
         }),
-    ...(usage.mainLoopUsage === undefined ? {} : { mainLoopUsage: usage.mainLoopUsage }),
-    ...(turnBoundary?.contextUsage === undefined
-      ? {}
-      : { contextUsage: turnBoundary.contextUsage }),
     ...(turnBoundary?.compactions === undefined || turnBoundary.compactions.length === 0
       ? {}
       : { compactions: turnBoundary.compactions }),

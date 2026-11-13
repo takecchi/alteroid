@@ -186,7 +186,7 @@ export class UsageReceiver {
 
     usageTicket?.release();
 
-    // 増分が空の回は行を書かない: 取れない軸に0の行を作らない。その回の `contextUsage` も一緒に捨てる（独立の `context_usage` イベントが残す）。
+    // 増分が空の回は行を書かない: 取れない軸に0の行を作らない。文脈占有は独立の `context_usage` イベントが運ぶ（`turn_usage` には載せない）。
     if (Object.keys(fold.delta).length > 0) {
       await this.#ports.journal({
         type: 'turn_usage',
@@ -200,7 +200,6 @@ export class UsageReceiver {
           : {
               reset: { fromCostUsd: fold.reset.fromCostUsd, toCostUsd: fold.reset.toCostUsd },
             }),
-        ...(event.contextUsage === undefined ? {} : { contextUsage: event.contextUsage }),
       });
     }
 

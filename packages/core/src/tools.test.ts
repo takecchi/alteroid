@@ -13803,16 +13803,48 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
   });
 });
 
-describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
-  const legacyRow = {
+describe('journalEntrySchema — 古い turn_usage の行（contextUsage・mainLoopUsage を持つ）', () => {
+  const oldRow = {
     type: 'turn_usage' as const,
-    id: 'j-804-legacy',
+    id: 'j-old-turn-usage',
     at: '2026-09-01T00:00:00.000Z',
     layer: 'clone' as const,
     site: 'session' as const,
     managerId: CLONE_ACTOR_ID,
     models: {},
-    summary: 'kind が増える前に書かれたターンの消費',
+    contextUsage: {
+      durationMs: 12,
+      categories: [{ name: 'System prompt', tokens: 8_000, kind: 'used' }],
+    },
+    mainLoopUsage: {
+      inputTokens: 7,
+      outputTokens: 3,
+      cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 40,
+    },
+  };
+
+  it('⭐⭐ 欄を外した後も、欄を持つ古い行は読み出せる（z.object が未知の欄を黙って捨てる）', () => {
+    const result = journalEntrySchema.safeParse(oldRow);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('contextUsage');
+      expect(result.data).not.toHaveProperty('mainLoopUsage');
+      expect(result.data).toMatchObject({ type: 'turn_usage', id: 'j-old-turn-usage', models: {} });
+    }
+  });
+});
+
+describe('journalEntrySchema の context_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
+  const legacyRow = {
+    type: 'context_usage' as const,
+    id: 'j-804-legacy',
+    at: '2026-09-01T00:00:00.000Z',
+    layer: 'clone' as const,
+    site: 'session' as const,
+    managerId: CLONE_ACTOR_ID,
+    turnSucceeded: true,
     contextUsage: {
       durationMs: 12,
       categories: [{ name: 'System prompt', tokens: 8_000 }],
@@ -13823,8 +13855,8 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
     const result = journalEntrySchema.safeParse(legacyRow);
 
     expect(result.success).toBe(true);
-    if (result.success && result.data.type === 'turn_usage') {
-      expect(result.data.contextUsage?.categories).toEqual([
+    if (result.success && result.data.type === 'context_usage') {
+      expect(result.data.contextUsage.categories).toEqual([
         { name: 'System prompt', tokens: 8_000 },
       ]);
     }
@@ -13844,8 +13876,8 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
     });
 
     expect(result.success).toBe(true);
-    if (result.success && result.data.type === 'turn_usage') {
-      expect(result.data.contextUsage?.categories?.map((category) => category.kind)).toEqual([
+    if (result.success && result.data.type === 'context_usage') {
+      expect(result.data.contextUsage.categories?.map((category) => category.kind)).toEqual([
         'used',
         'free',
       ]);
@@ -13863,8 +13895,8 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
     });
 
     expect(result.success).toBe(true);
-    if (result.success && result.data.type === 'turn_usage') {
-      expect(result.data.contextUsage?.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
+    if (result.success && result.data.type === 'context_usage') {
+      expect(result.data.contextUsage.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
     }
   });
 });
@@ -13910,24 +13942,23 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   });
 });
 
-describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
-  const appendTurnUsage = async (
+describe('journal_read — context_usage の文脈の内訳（#804）', () => {
+  const appendContextUsage = async (
     h: ReturnType<typeof harness>,
     contextUsage: Record<string, unknown>,
   ) =>
     h.stores.journal.append({
-      type: 'turn_usage',
+      type: 'context_usage',
       layer: 'clone',
       site: 'session',
       managerId: CLONE_ACTOR_ID,
-      models: {},
-      summary: 'ターンの消費',
+      turnSucceeded: true,
       contextUsage,
     } as never);
 
   it('⭐⭐⭐ 内訳（システムプロンプト / MCP の道具 / CLAUDE.md 系）とカテゴリ別を出す', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       rawMaxTokens: 200_000,
@@ -13958,7 +13989,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐⭐ kind の無い軸は「分類なし」と名乗る（used へ倒さない）', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       categories: [{ name: 'Messages', tokens: 500 }],
@@ -13972,7 +14003,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐⭐ 内訳を持たない行では、内訳の節を1文字も出さない（0 として出さない）', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       rawMaxTokens: 200_000,
@@ -13990,7 +14021,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐ 一部の軸だけ在る行では、在る軸だけを出す', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       mcpToolTokens: 1_000,
@@ -14006,7 +14037,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐⭐ messageBreakdown は1行で、結果が大きい上位3道具だけを名前と数で出す', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       messageBreakdown: {
@@ -14035,7 +14066,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐ messageBreakdown を持たない行では、履歴の内訳を1文字も出さない', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, { durationMs: 12, totalTokens: 12_000 });
+    const entry = await appendContextUsage(h, { durationMs: 12, totalTokens: 12_000 });
 
     const reply = await h.call('journal_read', { id: entry.id });
 
@@ -14044,7 +14075,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
   it('⭐⭐ カテゴリを切った行では、省いた軸数を名乗る', async () => {
     const h = harness();
-    const entry = await appendTurnUsage(h, {
+    const entry = await appendContextUsage(h, {
       durationMs: 12,
       totalTokens: 12_000,
       categories: [{ name: '軸0', tokens: 1 }],

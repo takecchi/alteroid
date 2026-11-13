@@ -40,7 +40,7 @@ function mcpToolsPhrase(contextUsage: ContextUsageObservation): string {
   );
 }
 
-// 1行が伸びないよう、トークンの大きい上位だけを名前とトークンで出す（#5291。全サーバの内訳は `turn_usage.contextUsage.mcpToolsByServer`）。
+// 1行が伸びないよう、トークンの大きい上位だけを名前とトークンで出す（#5291。全サーバの内訳は `context_usage.contextUsage.mcpToolsByServer`）。
 // 「ほか」の行は塊であってサーバではないので順位に入れない。内訳が無い回（古い行・SDK が返さなかった回）は書かない（0 を埋めない）。
 const TOP_SERVERS_SHOWN = 3;
 

@@ -205,6 +205,7 @@ import type { ScheduleStatus } from './schedule.js';
 import type {
   ApprovalSelection,
   ChatStreamEvent,
+  ContextUsageObservation,
   InboxEvent,
   JournalEntry,
   JournalEntryInput,
@@ -649,7 +650,6 @@ export interface Turn {
 
 // スキーマ側から引く: 二重に定義すると、どちらかを直し忘れたときに型は緑のまま日誌の形だけがずれるため
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
-type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
 
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
@@ -5248,10 +5248,7 @@ class Clone implements CloneHost {
     const compactions = this.#sdkSession.turn?.compactions ?? [];
 
     await finalizeStep('usage', () =>
-      this.#usage.recordUsage(event.usage, 'session', 'cumulative', {
-        contextUsage,
-        compactions,
-      }),
+      this.#usage.recordUsage(event.usage, 'session', 'cumulative', { compactions }),
     );
 
     await this.#noteFirstTurnToolSearch(contextUsage, event.usage, event.succeeded);

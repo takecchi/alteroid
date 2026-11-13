@@ -1074,11 +1074,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     sessionId: z.string().optional(),
     models: z.record(z.string(), usageTotalsSchema),
-    /**
-     * 失敗したターンの文脈占有は `usage` が `event.succeeded` の内側でしか出ないためここに乗らない。
-     * 独立の `context_usage` イベントが観測できた回すべてを送る。`#flushUsage` はターンの境界ではないので付けない。
-     */
-    contextUsage: contextUsageObservationSchema.optional(),
+    // 文脈占有は載せない: 独立の `context_usage` イベントが観測できた回すべて（失敗したターンも）を送る。古い runner が載せてくる `contextUsage` は `z.object` が黙って捨てる
     /**
      * `usage` が来たことを成功の証拠にしない: 枠に当たったターンも `subtype: 'success'` / `is_error: true` で返り `usage` が降りるため、
      * 成功と読むと `recovered` → 委譲を起こす → また枠で落ちる、の無限の往復になる。

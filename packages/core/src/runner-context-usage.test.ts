@@ -2,8 +2,9 @@ import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-a
 import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import { createRunnerHost } from './runner.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry, type RunnerEvent } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -147,8 +148,20 @@ async function firstSession(sessions: FakeSession[]): Promise<FakeSession> {
   });
 }
 
+/** `context_usage` の行（文脈占有の唯一の記録）が届くまで待って、その `contextUsage` を返す。 */
+async function contextUsageOf(stores: Stores) {
+  const rows = await vi.waitFor(async () => {
+    const found = await contextUsageRows(stores);
+    if (found.length === 0) throw new Error('context_usage がまだ日誌に無い');
+    return found;
+  });
+  const row = rows[0];
+  if (row === undefined) throw new Error('context_usage が日誌に無い');
+  return row.contextUsage;
+}
+
 describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976）', () => {
-  it('成功したターンは turn_usage.contextUsage に値が載る', async () => {
+  it('⭐ 成功したターンの文脈占有は context_usage の行にだけ載り、turn_usage には載らない', async () => {
     const s = setup({
       getContextUsage: () => ({
         totalTokens: 12_000,
@@ -165,7 +178,8 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
       if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
       return found;
     });
-    expect(rows[0]?.contextUsage).toEqual({
+    expect(rows[0]).not.toHaveProperty('contextUsage');
+    expect(await contextUsageOf(s.stores)).toEqual({
       durationMs: expect.any(Number),
       totalTokens: 12_000,
       rawMaxTokens: 200_000,
@@ -175,7 +189,43 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     await s.pool.stop();
   });
 
-  it('messageBreakdown は畳まれて turn_usage.contextUsage に載り、SDK が返さない回は欄を作らない', async () => {
+  it('⭐ ワイヤ上も文脈占有は context_usage の出来事に一本化され、usage の出来事には載らない', async () => {
+    const { fn, sessions } = fakeSdk({
+      getContextUsage: () => ({ totalTokens: 12_000, rawMaxTokens: 200_000, percentage: 6 }),
+    });
+    const events: RunnerEvent[] = [];
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work/project',
+      emit: (event) => events.push(event),
+      queryFn: fn,
+      env: { PATH: '/usr/bin' },
+    });
+    try {
+      await host.resume({
+        managerId: 'mgr-wire',
+        sessionId: 'sess-mgr',
+        cwd: '/work/project',
+        request: '調べて',
+        entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+      });
+      const session = await firstSession(sessions);
+      await session.finish('できました');
+
+      await vi.waitFor(() => {
+        if (!events.some((event) => event.type === 'usage'))
+          throw new Error('usage がまだ出ていない');
+      });
+      const usage = events.find((event) => event.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage).not.toHaveProperty('contextUsage');
+      expect(events.filter((event) => event.type === 'context_usage')).toHaveLength(1);
+    } finally {
+      await host.shutdown();
+    }
+  });
+
+  it('messageBreakdown は畳まれて context_usage.contextUsage に載り、SDK が返さない回は欄を作らない', async () => {
     const s = setup({
       getContextUsage: (callIndex) => ({
         totalTokens: 12_000,
@@ -202,12 +252,8 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     const session = await firstSession(s.sessions);
     await session.finish('できました');
 
-    const rows = await vi.waitFor(async () => {
-      const found = await turnUsageRows(s.stores);
-      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
-      return found;
-    });
-    expect(rows[0]?.contextUsage?.messageBreakdown).toEqual({
+    const context = await contextUsageOf(s.stores);
+    expect(context.messageBreakdown).toEqual({
       toolCallTokens: 30,
       toolResultTokens: 500,
       attachmentTokens: 4,
@@ -230,12 +276,7 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     const session = await firstSession(s.sessions);
     await session.finish('できました');
 
-    const rows = await vi.waitFor(async () => {
-      const found = await turnUsageRows(s.stores);
-      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
-      return found;
-    });
-    expect(rows[0]?.contextUsage).not.toHaveProperty('messageBreakdown');
+    expect(await contextUsageOf(s.stores)).not.toHaveProperty('messageBreakdown');
 
     await s.pool.stop();
   });
@@ -288,13 +329,9 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     const session = await firstSession(s.sessions);
     await session.finish('できました');
 
-    const rows = await vi.waitFor(async () => {
-      const found = await turnUsageRows(s.stores);
-      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
-      return found;
-    });
-    expect(rows[0]?.contextUsage?.error).toBeDefined();
-    expect(rows[0]?.contextUsage?.totalTokens).toBeUndefined();
+    const context = await contextUsageOf(s.stores);
+    expect(context.error).toBeDefined();
+    expect(context.totalTokens).toBeUndefined();
 
     await s.pool.stop();
   });
@@ -305,13 +342,9 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     const session = await firstSession(s.sessions);
     await session.finish('できました');
 
-    const rows = await vi.waitFor(async () => {
-      const found = await turnUsageRows(s.stores);
-      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
-      return found;
-    });
-    expect(rows[0]?.contextUsage?.error).toBeDefined();
-    expect(typeof rows[0]?.contextUsage?.durationMs).toBe('number');
+    const context = await contextUsageOf(s.stores);
+    expect(context.error).toBeDefined();
+    expect(typeof context.durationMs).toBe('number');
 
     await s.pool.stop();
   });
@@ -334,13 +367,9 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
       },
       { timeout: 3000 },
     );
-    const rows = await vi.waitFor(async () => {
-      const found = await turnUsageRows(s.stores);
-      if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
-      return found;
-    });
-    expect(rows[0]?.contextUsage?.error).toContain('返らなかった');
-    expect(rows[0]?.contextUsage?.totalTokens).toBeUndefined();
+    const context = await contextUsageOf(s.stores);
+    expect(context.error).toContain('返らなかった');
+    expect(context.totalTokens).toBeUndefined();
 
     await s.pool.stop();
   });
