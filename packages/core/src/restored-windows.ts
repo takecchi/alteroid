@@ -143,6 +143,7 @@ export class RestoredWindows {
         job.lastReport === undefined
           ? undefined
           : excerptLine(job.lastReport, NOTIFY_REPORT_EXCERPT),
+      // 判定は `workspaceAfterSwap` に委ねる（`restartNudge` と同じ判定を二重に書かない）。
       workspaceLine:
         cause !== 'daemon'
           ? cloneWorkspaceAfterSwapLine(
@@ -195,13 +196,8 @@ export class RestoredWindows {
           : // 「戻せなかった」の語を使わない: 失敗の知らせを見分ける語なので、受理の知らせに混ぜると読み手と試験の両方が取り違える。
             (confirmed ? '' : resumeConfirmationGuidance(this.#confirmTimeoutMs)) +
             '返事待ちだった確認は器と一緒に失われているので、必要ならマネージャーが聞き直してくる。',
-        // 判定は `workspaceAfterSwap` に委ねる（`restartNudge` と同じ判定を二重に書かない）。
         // path は出さない: 直前の行で作業ディレクトリを出しており、重ねると読む側が2つの値を突き合わせることになる。
-        cause !== 'daemon'
-          ? cloneWorkspaceAfterSwapLine(
-              workspaceAfterSwap(job.workspace, job.lastUnpushedWorkObservation, job.lastRescue),
-            )
-          : '',
+        entry.workspaceLine,
       ]
         .filter((line) => line !== '')
         .join('\n'),
