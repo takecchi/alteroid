@@ -10235,7 +10235,12 @@ describe('runner_list（器の一覧）', () => {
       const description = tools.find((entry) => entry.name === 'runner_list')?.description;
 
       expect(description).toContain('⚠世代N≠現役M');
-      expect(description).toContain('manager_stop');
+      // 対処（起こし直し）は manager_list の説明に寄せてある。ここは指す先が書かれていることを縛る
+      expect(description).toContain('読み方と対処は manager_list の説明を見よ');
+      const managerListDescription = tools.find(
+        (entry) => entry.name === 'manager_list',
+      )?.description;
+      expect(managerListDescription).toContain('manager_stop');
     });
   });
 

@@ -46,7 +46,6 @@ import type { RunnerPushOutcome } from './push-ledger.js';
 import { describeRevisionStatus } from './revision.js';
 import { describeManagerPeers } from './manager-peers-format.js';
 import type { ArchiveEntry } from './store.js';
-import { STALE_TOKEN_RESTART_ADVICE } from './usage-limits.js';
 import { formatMinutesAgo } from './format-elapsed.js';
 import { chunkIdsByChars } from './chunk-ids.js';
 import { stripNul, stripNulWellFormed } from './nul-guard.js';
@@ -1518,16 +1517,13 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
         // マネージャーの状態の字面は manager_list と揃える: 片方だけが「セッション切断」を出すと、同じ相手を2つの道具で見たクローンがどちらが本当かを判定できないため
         '器ごとの内訳に出るマネージャーの状態は manager_list と同じ字面である' +
           '（running / running/セッション切断 / running/セッション不明 / done/背景処理待ち×N）。' +
-          '「背景処理待ち」は、そのマネージャーが自分で起こした背景処理や作業者の完了を待って' +
-          '畳んだだけで、手が空いたのではないという意味である（器が名乗った分だけ出る——' +
-          'この欄を送らない古い器では、待っていても出ない）。' +
+          '「背景処理待ち」は手が空いたのではないという意味である（読み方は manager_list の説明を見よ）。' +
           '「セッション切断」は、このデーモンがその委譲の宛先をいま開けていないという観測であって、' +
           '送っても届かないことの証明ではない（manager_send は resume を試みる）。' +
           '仕事が終わったという意味でもない。',
         'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
           '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている。' +
-          '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。' +
-          `${STALE_TOKEN_RESTART_ADVICE}詳しい文面は manager_list に出る。` +
+          '読み方と対処は manager_list の説明を見よ。' +
           '一致している・材料が無い（プールを使っていない構成）ときはこの印自体が出ない。',
         'デーモン自身の版と、各 runner が名乗った版（コミット sha）も出る。' +
           'デーモンと runner は別々にデプロイされるので、同じ main から起こしていても' +
@@ -1573,14 +1569,10 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
           '「飽和ではない」を意味しない**（材料が無いだけ）。' +
           'manager_start で器を名指しした場合も断らず、飽和なら応答にこの行が付く。',
         'resources: true を渡した結果、いずれかの器の pids が逼迫していれば' +
-          '（現在値が上限の80%以上）、その器に割り当てられた委譲のうち' +
-          '「畳む候補」（manager_list の ⚠ と同じ5条件——done・背景処理待ちの印なし・' +
-          '器がその印を送る版だと名乗っている・状態の判定が active・最後のターン終了から' +
-          '一定時間経過）を、デーモンが自動で manager_stop 相当（非 force）で畳む' +
-          '。**未 push の実装・未コミットの変更が1件でもある' +
-          '（または確認できなかった）委譲は畳まない**——安全側に倒す。' +
-          '何を畳んだ・見送ったかはこの応答の先頭に出て、日誌にも decision として残る' +
-          '（journal_read）。**新しい周期処理ではない**——この道具をこの引数で呼んだ、' +
+          '（現在値が上限の80%以上）、その器に割り当てられた委譲のうち「畳む候補」' +
+          '（manager_list の ⚠ と同じ。条件と畳む前の確認は manager_list の説明を見よ）を、' +
+          'デーモンが自動で畳む。何を畳んだ・見送ったかはこの応答の先頭に出る。' +
+          '**新しい周期処理ではない**——この道具をこの引数で呼んだ、' +
           'まさにこの1回の中だけで判定と実行が完結する。呼ばなければ何も起きない。',
       ].join(' '),
       {
