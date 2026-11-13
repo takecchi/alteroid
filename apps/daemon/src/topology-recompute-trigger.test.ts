@@ -33,9 +33,9 @@ function setup(options: { current: () => ManagerSummary[]; onList?: () => void }
     clone: fakeCloneHost({
       usageBlocked: false,
       managers: {
-        list: async () => {
+        listWithUnreadable: async () => {
           options.onList?.();
-          return options.current();
+          return { managers: options.current(), unreadable: [] };
         },
       } as unknown as CloneHost['managers'],
     }),
