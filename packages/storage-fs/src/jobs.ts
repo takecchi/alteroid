@@ -64,6 +64,14 @@ function summarizeRawJobProblem(raw: unknown): string {
   return result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
 }
 
+function unreadableOf(invalidJobsRaw: unknown[]): UnreadableJob[] {
+  return invalidJobsRaw.map((raw): UnreadableJob => {
+    const id = extractRowId(raw);
+    const reason = summarizeRawJobProblem(raw);
+    return id === undefined ? { reason } : { id, reason };
+  });
+}
+
 export class FsJobStore implements JobStore {
   readonly #dir: string;
   readonly #path: string;
@@ -78,12 +86,12 @@ export class FsJobStore implements JobStore {
   }
 
   async listUnreadableJobs(): Promise<UnreadableJob[]> {
-    const { invalidJobsRaw } = await this.#read();
-    return invalidJobsRaw.map((raw): UnreadableJob => {
-      const id = extractRowId(raw);
-      const reason = summarizeRawJobProblem(raw);
-      return id === undefined ? { reason } : { id, reason };
-    });
+    return unreadableOf((await this.#read()).invalidJobsRaw);
+  }
+
+  async listJobsWithUnreadable(): Promise<{ jobs: Job[]; unreadable: UnreadableJob[] }> {
+    const { jobs, invalidJobsRaw } = await this.#read();
+    return { jobs, unreadable: unreadableOf(invalidJobsRaw) };
   }
 
   // fs は1枚のファイルなので読む量は `listJobs()` と同じ。口を揃えるために置く（#5089）

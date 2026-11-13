@@ -643,6 +643,12 @@ export interface JobStore {
    */
   listUnreadableJobs(): Promise<UnreadableJob[]>;
   /**
+   * `listJobs()` と `listUnreadableJobs()` を、台帳の1回の読みで返す。結果は2つの口を別々に呼んだものと同じ。
+   * 両方を続けて呼ぶ呼び手のための口（pg は jobs 全行の scan が口ごとに1回ずつ走るため、2回が1回になる）。
+   * 片方しか要らない呼び手は、これまでどおりそれぞれの口を呼ぶ。
+   */
+  listJobsWithUnreadable(): Promise<{ jobs: Job[]; unreadable: UnreadableJob[] }>;
+  /**
    * 1件を id で読む（#5089）。1件のために `listJobs()` で台帳を全部読まないための口。
    * 無ければ `null`。在るが読めない行は `null` ではなく `UnreadableJobError`（`updateJob` と同じ: `null` に畳むと「台帳に居ない」と言い切るため）。
    */

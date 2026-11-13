@@ -72,6 +72,44 @@ export async function verifyJobStoreContract(makeStore: JobStoreFactory): Promis
     );
   }
 
+  // listJobsWithUnreadable は listJobs と listUnreadableJobs を別々に呼んだ結果と同じを、1回の読みで返す
+  // （読めない行を作る手段は実装ごとに違うので、読めない行を含む回は各実装の試験に置く）
+  {
+    const store = await makeStore();
+    expectEqual(
+      'listJobsWithUnreadable',
+      '空の台帳は2つの口と同じ（空・空）',
+      await store.listJobsWithUnreadable(),
+      { jobs: await store.listJobs(), unreadable: await store.listUnreadableJobs() },
+    );
+    await store.putJob(JOB);
+    await store.putJob({ ...JOB, id: 'mgr-second', createdAt: '2026-09-01T00:01:00.000Z' });
+    const combined = await store.listJobsWithUnreadable();
+    expectEqual(
+      'listJobsWithUnreadable',
+      '読めた委譲は listJobs と同じ（並びも）',
+      combined.jobs,
+      await store.listJobs(),
+    );
+    expectEqual(
+      'listJobsWithUnreadable',
+      '読めない行は listUnreadableJobs と同じ',
+      combined.unreadable,
+      await store.listUnreadableJobs(),
+    );
+    if (combined.jobs.length !== 2) {
+      fail('listJobsWithUnreadable', `書いた2件が返らない: ${show(combined.jobs)}`);
+    }
+    // 返した配列を書き換えても、次の読みに響かない
+    combined.jobs.pop();
+    expectEqual(
+      'listJobsWithUnreadable',
+      '返した配列の書き換えが次の読みに残らない',
+      (await store.listJobsWithUnreadable()).jobs.length,
+      2,
+    );
+  }
+
   // updateJob は現在値を読み直し、互いの変更を消さない
   {
     const store = await makeStore();

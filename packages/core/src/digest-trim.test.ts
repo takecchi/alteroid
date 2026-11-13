@@ -235,9 +235,13 @@ describe('件数の形の要約（#4938 の案2）', () => {
     const stores = createMemoryStores();
     await seedLikeIssue(stores);
     const listApprovals = stores.jobs.listApprovals.bind(stores.jobs);
+    const listJobs = stores.jobs.listJobs.bind(stores.jobs);
     stores.jobs = {
       ...stores.jobs,
-      listUnreadableJobs: async () => [{ id: 'broken-job', reason: '壊れている' }],
+      listJobsWithUnreadable: async () => ({
+        jobs: await listJobs(),
+        unreadable: [{ id: 'broken-job', reason: '壊れている' }],
+      }),
       listApprovals: async (options) => ({
         ...(await listApprovals(options)),
         unreadable: [{ id: 'broken-approval', reason: '壊れている' }],
