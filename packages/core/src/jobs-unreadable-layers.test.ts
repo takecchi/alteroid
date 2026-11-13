@@ -13,7 +13,12 @@ import { createCloneTools } from './tools.js';
 
 function withUnreadable(rows: UnreadableJob[]): Stores {
   const stores = createMemoryStores();
-  stores.jobs = { ...stores.jobs, listUnreadableJobs: async () => rows };
+  const base = stores.jobs;
+  stores.jobs = {
+    ...base,
+    listUnreadableJobs: async () => rows,
+    listJobsWithUnreadable: async () => ({ jobs: await base.listJobs(), unreadable: rows }),
+  };
   return stores;
 }
 

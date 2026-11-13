@@ -120,7 +120,7 @@ describe('B1 要約の組み立ての固定 — 記憶の床の行（全文）',
 describe('B1 要約の組み立ての固定 — 失敗の文面と出し分け', () => {
   const failingJobs = async (): Promise<Stores> => {
     const stores = createMemoryStores();
-    stores.jobs.listUnreadableJobs = () => Promise.reject(new Error('委譲の台帳が読めない'));
+    stores.jobs.listJobsWithUnreadable = () => Promise.reject(new Error('委譲の台帳が読めない'));
     const at = '2026-01-01T00:00:00.000Z';
     await stores.tasks.add({
       id: 'task-0',

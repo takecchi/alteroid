@@ -138,7 +138,7 @@ describe('クローン — 日報の既存確認が読めなかった回（#2447
 
   it('digest をまとめられなかった理由は reasonOf を通す（1行目だけ。素の String(error) を残さない）', async () => {
     const stores = createMemoryStores();
-    stores.jobs.listJobs = () =>
+    stores.jobs.listJobsWithUnreadable = () =>
       Promise.reject(new Error('jobs table unreachable\nsecret-digest-second-line'));
     const s = setup(() => '書いた', stores);
 

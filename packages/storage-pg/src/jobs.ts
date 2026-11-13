@@ -70,6 +70,10 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+function unreadableOf(skipped: { id: string; reason: string }[]): UnreadableJob[] {
+  return skipped.map((row): UnreadableJob => ({ id: row.id, reason: row.reason }));
+}
+
 export class PgJobStore implements JobStore {
   readonly #db: Db;
 
@@ -84,18 +88,29 @@ export class PgJobStore implements JobStore {
 
   async listJobs(): Promise<Job[]> {
     const { found, skipped } = await this.#scan();
-    // 跡を `listUnreadableJobs()` では残さない: 同じ行を2つの口で数えないため。
-    const dropped = new Map<string, number>();
-    for (const row of skipped) {
-      noteDroppedJournalRow(dropped, 'unknown-shape', row.type, row.bytes);
-    }
-    noteDroppedJournalRowsSummary(dropped);
+    this.#noteSkipped(skipped);
     return found;
   }
 
   async listUnreadableJobs(): Promise<UnreadableJob[]> {
     const { skipped } = await this.#scan();
-    return skipped.map((row): UnreadableJob => ({ id: row.id, reason: row.reason }));
+    return unreadableOf(skipped);
+  }
+
+  // scan は1回: 2つの口を続けて呼ぶと jobs 全行の読みが2回走るため。跡は `listJobs()` と同じく1回だけ残す。
+  async listJobsWithUnreadable(): Promise<{ jobs: Job[]; unreadable: UnreadableJob[] }> {
+    const { found, skipped } = await this.#scan();
+    this.#noteSkipped(skipped);
+    return { jobs: found, unreadable: unreadableOf(skipped) };
+  }
+
+  // 跡を `listUnreadableJobs()` では残さない: 同じ行を2つの口で数えないため。
+  #noteSkipped(skipped: { type: string | undefined; bytes: number }[]): void {
+    const dropped = new Map<string, number>();
+    for (const row of skipped) {
+      noteDroppedJournalRow(dropped, 'unknown-shape', row.type, row.bytes);
+    }
+    noteDroppedJournalRowsSummary(dropped);
   }
 
   async #scan(): Promise<{
