@@ -1,4 +1,4 @@
-import { verifyAuthNulContract } from '@alteroid/core';
+import { verifyAuthNulContract } from '@alteroid/core/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

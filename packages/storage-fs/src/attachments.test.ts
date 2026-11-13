@@ -1,12 +1,8 @@
 import { readdir, rm, utimes, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import {
-  ATTACHMENT_UNBOUND_TTL_MS,
-  captureStderr,
-  verifyAttachmentStoreContract,
-  type AttachmentMeta,
-} from '@alteroid/core';
+import { ATTACHMENT_UNBOUND_TTL_MS, captureStderr, type AttachmentMeta } from '@alteroid/core';
+import { verifyAttachmentStoreContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

@@ -1,4 +1,4 @@
-import { verifyIntegrationKeyStoreContract } from '@alteroid/core';
+import { verifyIntegrationKeyStoreContract } from '@alteroid/core/contracts';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createPgStoresFromDb, type PgStores } from './index.js';

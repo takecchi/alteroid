@@ -4,10 +4,10 @@ import {
   DEFAULT_ATTACHMENT_LIMITS,
   MemoryAttachmentBlobStore,
   captureStderr,
-  verifyAttachmentStoreContract,
   type AttachmentBlobStore,
   type AttachmentLimits,
 } from '@alteroid/core';
+import { verifyAttachmentStoreContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PgAttachmentStore } from './attachments.js';

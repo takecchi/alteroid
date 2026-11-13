@@ -120,6 +120,10 @@
       "types": "./dist/token-cooldown-ms.d.ts",
       "import": "./dist/token-cooldown-ms.js"
     },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
+    },
     "./threadpool-size": {
       "types": "./dist/threadpool-size.d.ts",
       "import": "./dist/threadpool-size.js"

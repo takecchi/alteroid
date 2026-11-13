@@ -1,4 +1,4 @@
-import { verifyJournalStoreHumanActionContract } from '@alteroid/core';
+import { verifyJournalStoreHumanActionContract } from '@alteroid/core/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

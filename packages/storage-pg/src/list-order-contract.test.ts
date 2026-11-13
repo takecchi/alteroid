@@ -1,4 +1,4 @@
-import { verifyListOrderContract } from '@alteroid/core';
+import { verifyListOrderContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, it } from 'vitest';
 
 import { createPgStoresFromDb, type PgStores } from './index.js';

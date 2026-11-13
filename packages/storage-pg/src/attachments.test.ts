@@ -1,4 +1,5 @@
-import { captureStderr, verifyAttachmentStoreContract } from '@alteroid/core';
+import { captureStderr } from '@alteroid/core';
+import { verifyAttachmentStoreContract } from '@alteroid/core/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PgAttachmentStore } from './attachments.js';

@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { verifyEventReceiptStoreContract } from '@alteroid/core';
+import { verifyEventReceiptStoreContract } from '@alteroid/core/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';

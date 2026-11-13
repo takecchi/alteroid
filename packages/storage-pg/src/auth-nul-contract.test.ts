@@ -1,4 +1,4 @@
-import { verifyAuthNulContract } from '@alteroid/core';
+import { verifyAuthNulContract } from '@alteroid/core/contracts';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
