@@ -127,6 +127,53 @@ describe('割り当ての帳面（#6633）', () => {
     expect(result.moved.map((move) => move.to.tokenId)).toEqual(['b']);
   });
 
+  describe('reconcile の早期 return', () => {
+    function countingBook(tokens: AgentToken[]) {
+      const reads = { balanced: 0, tokens: 0 };
+      const state = { tokens };
+      const b = createTokenAssignmentBook({
+        readTokens: async () => {
+          reads.tokens += 1;
+          return state.tokens;
+        },
+        balanced: async () => {
+          reads.balanced += 1;
+          return true;
+        },
+        loads: () => [],
+        now: () => AT,
+      });
+      return { b, reads, state };
+    }
+
+    it('割り当てが空なら、設定も鍵の一覧も読まず、何も動かさない', async () => {
+      const { b, reads } = countingBook([token('a', 0)]);
+      expect(await b.reconcile()).toEqual({ moved: [], stranded: [] });
+      expect(reads).toEqual({ balanced: 0, tokens: 0 });
+    });
+
+    it('割り当てがあるときは、今までどおり読んで直す', async () => {
+      const { b, reads, state } = countingBook([token('a', 0), token('b', 1)]);
+      await b.assign('mgr-1');
+      const before = { ...reads };
+      state.tokens = [token('a', 0, { disabledAt: '2026-11-09T10:00:00Z' }), token('b', 1)];
+      const result = await b.reconcile();
+      expect(reads.balanced).toBe(before.balanced + 1);
+      expect(reads.tokens).toBe(before.tokens + 1);
+      expect(result.moved.map((move) => move.to.tokenId)).toEqual(['b']);
+    });
+
+    it('空から空でなくなった直後の reconcile は走る（空のときの早期 return が状態を固定しない）', async () => {
+      const { b, reads, state } = countingBook([token('a', 0), token('b', 1)]);
+      await b.reconcile();
+      expect(reads).toEqual({ balanced: 0, tokens: 0 });
+      await b.assign('mgr-1');
+      state.tokens = [token('a', 0, { disabledAt: '2026-11-09T10:00:00Z' }), token('b', 1)];
+      const result = await b.reconcile();
+      expect(result.moved.map((move) => move.to.tokenId)).toEqual(['b']);
+    });
+  });
+
   it('値を差し替えた鍵は、同じ id でも持ち主を新しい値で割り当て直す', async () => {
     const { b, state } = book([token('a', 0)]);
     const first = await b.assign('mgr-1');

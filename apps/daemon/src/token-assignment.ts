@@ -234,6 +234,8 @@ export function createTokenAssignmentBook(
     shouldMove: (assigned: AssignedToken, row: AgentToken | undefined, at: number) => boolean,
   ): Promise<TokenEvacuation> => {
     const result: TokenEvacuation = { moved: [], stranded: [] };
+    // 持ち主がいなければ動かすものが無い: 成功ターンごとの見直しで、設定と鍵の一覧の読みを払わない
+    if (assignments.size === 0) return result;
     if (!(await options.balanced())) return result;
     const tokens = await options.readTokens();
     const at = now();
