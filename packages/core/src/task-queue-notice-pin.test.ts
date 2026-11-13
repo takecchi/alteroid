@@ -80,7 +80,7 @@ function digestSectionOf(digest: string): string {
 }
 
 describe('待ち行列の節の今の出力（pin。今の作りで通る）', () => {
-  it('断り書き: queued / waiting / needs_decision が混ざるとき、件数の内訳・先頭の行・固定の1文だけ（古さは出ない）', async () => {
+  it('断り書き: queued / waiting / needs_decision が混ざるとき、件数の内訳・先頭の行・案内の1文だけ（古さは出ない）', async () => {
     const stores = createMemoryStores();
     await seedMixed(stores);
     const notice = await noticeForReportTurn(stores);
@@ -92,21 +92,19 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1
       （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
     `);
   });
 
-  it('断り書き: 開いている件が0なら、件数の行と固定の1文だけ（閉じた件は出ない）', async () => {
+  it('断り書き: 開いている件が0なら、件数の行だけ（閉じた件は出ない）', async () => {
     const stores = createMemoryStores();
     await stores.tasks.add(task('d-1', 'done', '2026-10-01T00:00:00.000Z'));
     const notice = await noticeForReportTurn(stores);
     expect(notice).toMatchInlineSnapshot(`
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
@@ -138,7 +136,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     `);
   });
 
-  it('digest（counts 形）: waiting / needs_decision があっても件数の1行だけ', async () => {
+  it('digest（counts 形）: 待ち行列の件数の行は出さない（断り書きの先頭が同じ件数の行を持つ。節の見出しと先頭の描画も出ない）', async () => {
     const stores = createMemoryStores();
     await seedMixed(stores);
     const counts = await buildActivityDigest(
@@ -151,7 +149,6 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
     const lines = counts.split('\n').filter((line) => line.includes('待ち行列'));
     expect(lines).toMatchInlineSnapshot(`
       [
-        "- 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）",
         "（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— 待ち行列は \`task_list\`、回答待ちは \`approvals_list\`、決めたこと・エスカレーション・記憶の更新・外部イベントは \`journal_read\`、使った分は \`usage_read\`）",
       ]
     `);

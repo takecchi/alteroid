@@ -286,7 +286,7 @@ describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () 
     expect(lines[at - 1]).toBe(COUNT_LINE(1, 1, 1));
   });
 
-  it('digest（counts 形）: 件数の 1 行だけで、滞留の行は足さない（定期の依頼の tick は件数の形のまま）', async () => {
+  it('digest（counts 形）: 待ち行列の件数の行も滞留の行も載せない（定期の依頼の tick は断り書きの先頭が件数の行を持つ）', async () => {
     const stores = createMemoryStores();
     await seed(stores);
     const counts = await buildActivityDigest(
@@ -297,7 +297,7 @@ describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () 
       { shape: 'counts' },
     );
     expect(counts).not.toContain(BACKLOG_PREFIX);
-    expect(counts).toContain(COUNT_LINE(1, 1, 1));
+    expect(counts).not.toContain(COUNT_LINE(1, 1, 1));
   });
 
   it('waiting が新しいだけの回（needs_decision なし）: 断り書きにも digest にも滞留の行は出ない', async () => {

@@ -155,7 +155,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 1・2・3
 - evt-1ターン目（状態: queued（待ち行列） / origin: human）1ターン目
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-1ターン目\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -175,7 +174,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 1・2・3
 - evt-2ターン目（状態: queued（待ち行列） / origin: human）2ターン目
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-2ターン目\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -195,7 +193,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 1・2・3
 - evt-3ターン目（状態: queued（待ち行列） / origin: human）3ターン目
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-3ターン目\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -230,7 +227,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 - evt-先客（状態: queued（待ち行列） / origin: human）先客
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-先客\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -250,7 +246,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 - evt-束の中の発言（状態: queued（待ち行列） / origin: human）束の中の発言
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-束の中の発言\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -269,7 +264,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 ===== 入力 3 =====
 [system] 待ち行列（00:00:00Z に数えた材料）
 - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -342,7 +336,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 - evt-先客（状態: queued（待ち行列） / origin: human）先客
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-先客\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -359,7 +352,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 ===== 入力 2 =====
 [system] 待ち行列（00:00:00Z に数えた材料）
 - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -383,7 +375,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 人間の
 ===== 入力 3 =====
 [system] 待ち行列（00:00:00Z に数えた材料）
 - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -454,7 +445,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 失敗し
 - evt-1ターン目（状態: queued（待ち行列） / origin: human）1ターン目
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-1ターン目\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -474,7 +464,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 失敗し
 - evt-2ターン目（失敗する）（状態: queued（待ち行列） / origin: human）2ターン目（失敗する）
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-2ターン目（失敗する）\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -500,7 +489,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 失敗し
 - evt-3ターン目（失敗の後）（状態: queued（待ち行列） / origin: human）3ターン目（失敗の後）
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-3ターン目（失敗の後）\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -541,7 +529,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 自動要
 - evt-1ターン目（状態: queued（待ち行列） / origin: human）1ターン目
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-1ターン目\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -575,7 +562,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 自動要
 - evt-2ターン目（要約が走る）（状態: queued（待ち行列） / origin: human）2ターン目（要約が走る）
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-2ターン目（要約が走る）\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
@@ -595,7 +581,6 @@ exports[`既定（S1・S2 無効）の入力の全文と日誌の行 > 自動要
 - evt-3ターン目（要約の後）（状態: queued（待ち行列） / origin: human）3ターン目（要約の後）
 （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
 いま届いたこの一件は task \`evt-3ターン目（要約の後）\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-全文は \`task_list\`。並べ替えは \`task_move\`。
 
 ---
 [system] いまの全体（00:00:00Z に数えた材料だけ。何をするかは決めない）。
