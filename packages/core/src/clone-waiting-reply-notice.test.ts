@@ -135,8 +135,10 @@ describe('人間の返事が来た会話の返事待ち（waiting）の task を
       '[system] この会話を起点にした返事待ち（waiting）の task: `w1` 返事待ち-w1。' +
         '返事が来たなら `task_set_status` で閉じるか queued に戻すこと（器は状態を変えない）。',
     ]);
-    // 固定の末尾の前、積んだ旨の行の後に入る
-    expect(lines.indexOf(hit[0]!)).toBe(lines.indexOf(TAIL_FULL) - 1);
+    // 積んだ旨の行の後、区切りの前の空行の手前に入る（末尾の「全文は task_list…」の再掲は無い）
+    expect(lines.indexOf(hit[0]!)).toBe(lines.length - 2);
+    expect(lines[lines.length - 3]).toContain('いま届いたこの一件は task `evt-a` として積んだ。');
+    expect(lines).not.toContain(TAIL_FULL);
     process.stderr.write(`[返事待ちの行 測定] ${hit[0]!}\n`);
 
     expect(await statusOf(stores, 'w1')).toBe('waiting');
@@ -155,7 +157,7 @@ describe('人間の返事が来た会話の返事待ち（waiting）の task を
     await s.clone.stop();
   });
 
-  it('⭐ 該当が無いターンは1文字も増えない（積んだ旨の行の直後が固定の末尾）', async () => {
+  it('⭐ 該当が無いターンは1文字も増えない（積んだ旨の行の直後が区切り）', async () => {
     const stores = createMemoryStores();
     // 該当しない3種: 別の会話の waiting / 同じ会話の queued / needs_decision
     await stores.tasks.add(waitingTask('other', { originConversationId: 'conv-other' }));
@@ -166,9 +168,9 @@ describe('人間の返事が来た会話の返事待ち（waiting）の task を
     const lines = noticeLines(input);
     expect(input).not.toContain(WAITING_MARK);
     expect(input).not.toContain('返事待ち（waiting）');
-    const tail = lines.indexOf(TAIL_FULL);
-    expect(lines[tail - 1]).toContain('いま届いたこの一件は task `evt-b` として積んだ。');
-    expect(lines.slice(tail)).toEqual([TAIL_FULL, '']);
+    expect(lines).not.toContain(TAIL_FULL);
+    expect(lines[lines.length - 2]).toContain('いま届いたこの一件は task `evt-b` として積んだ。');
+    expect(lines[lines.length - 1]).toBe('');
     await s.clone.stop();
   });
 

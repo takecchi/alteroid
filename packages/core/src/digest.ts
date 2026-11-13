@@ -15,11 +15,7 @@ import {
   describeUnreadableSchedules,
 } from './store.js';
 import type { Stores, TaskList } from './store.js';
-import {
-  TASK_QUEUE_HEAD_LIMIT,
-  describeTaskQueueCount,
-  describeTaskQueueHead,
-} from './task-tools.js';
+import { TASK_QUEUE_HEAD_LIMIT, describeTaskQueueHead } from './task-tools.js';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsageRows,
@@ -756,8 +752,7 @@ export function renderCountsDigest(input: CountsDigestInput): string {
       ` / 聞かずに決めたこと ${input.decisions} / 記憶の更新 ${input.memoryUpdates}` +
       ` / 外部イベント ${input.externals}` +
       ` / 人間からの発言 ${input.humanTurns}`,
-    // 定期の依頼は仕事の一覧を前提にしない: 件数の1行だけで、先頭の描画は出さない
-    `- ${describeTaskQueueCount(input.taskList)}`,
+    // 待ち行列の件数の行は出さない: 定期の依頼の tick は断り書き（`taskQueueNoticeFor`）が先頭に同じ件数の行（`describeTaskQueueHead`）を持ち、同じ入力に同じ数が2回載るため
     // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
     ...(unreadableLine === ''
       ? []

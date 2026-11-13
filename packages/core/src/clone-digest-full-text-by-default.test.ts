@@ -257,10 +257,11 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     expect(timer).toContain(`- ${TIMER_KIND}（`);
     // 他の節は件数の行だけ。重なる数（担当の status 別・継続中の依頼の数）は件数の行に載らない
     expect(timer).toContain(COUNTS_LINE);
-    // 待ち行列は件数の1行だけ。先頭の描画（task の行・案内・節）は出さない
-    // #5469 P6c: ターン頭の断り書きの待ち行列の節にも同じ件数・先頭の行が出る。ここで見たいのは要約（digest）の側なので、節を落としてから見る
+    // 要約（digest）は待ち行列を何も載せない: ターン頭の断り書きの待ち行列の節が、同じ件数の行と先頭の行を先に持つ（同じ入力に同じ数を2回載せない）
+    // ここで見たいのは要約の側なので、断り書きの節を落としてから見る
+    expect(timer.split(QUEUE_COUNT_LINE).length - 1).toBe(1);
     const digestOnly = withoutQueueNotice(timer);
-    expect(digestOnly).toContain(QUEUE_COUNT_LINE);
+    expect(digestOnly).not.toContain(QUEUE_COUNT_LINE);
     expect(digestOnly).not.toContain('待ち行列の仕事 0');
     expect(digestOnly).not.toContain('先頭が先にやるもの');
     expect(digestOnly).not.toContain('## 待ち行列');

@@ -769,7 +769,6 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       - evt-一件だけ（状態: queued（待ち行列） / origin: human）一件だけ
       （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
       いま届いたこの一件は task \`evt-一件だけ\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
@@ -786,7 +785,6 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       - evt-続き2（状態: queued（待ち行列） / origin: human）続き2
       （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
       いま届いたこの 2 件は task \`evt-続き1\`, \`evt-続き2\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
@@ -827,7 +825,6 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 0 件（queued 0 / waiting 0 / needs_decision 0）
       **⚠️ いま届いたこの 1 件は Task として積めなかった（id: \`evt-ng-one\`）。** 待ち行列には載っていない。必要なら \`task_add\` で載せ直すこと（理由は日誌に残してある）。
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
@@ -846,7 +843,6 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
       いま届いたこの 2 件は task \`evt-ok-1\`, \`evt-ok-2\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
       **⚠️ いま届いたこの 2 件は Task として積めなかった（id: \`evt-ng-1\`, \`evt-ng-2\`）。** 待ち行列には載っていない。必要なら \`task_add\` で載せ直すこと（理由は日誌に残してある）。
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "
@@ -870,7 +866,6 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       "[system] **待ち行列を読めなかった（09:00:00Z に試みた材料。理由: Error: task 台帳が壊れている）。** ⟹ **開いている仕事が何件あるかは、この回は判定できていない——0 件だったのでも、異常が無かったのでもない。** 読み直す手は \`task_list\` である（同じ理由で失敗するなら、失敗として返る）。
       いま届いたこの一件は task \`evt-ok-1\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
       **⚠️ いま届いたこの 1 件は Task として積めなかった（id: \`evt-ng-1\`）。** 待ち行列には載っていない。必要なら \`task_add\` で載せ直すこと（理由は日誌に残してある）。
-      全文は \`task_list\`。並べ替えは \`task_move\`。
 
       ---
       "

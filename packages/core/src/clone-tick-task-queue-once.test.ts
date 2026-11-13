@@ -18,6 +18,7 @@ const TIMER_KIND = 'issue-round';
 const NOTICE_HEAD = '[system] 待ち行列（';
 const DIGEST_HEAD = '## 待ち行列の先頭';
 const TAIL = '全文は `task_list`。並べ替えは `task_move`。';
+const HEAD_GUIDE = '（先頭が先にやるもの。';
 const FIRST_TASK_LINE = '- task-0（';
 
 interface Boot {
@@ -182,7 +183,8 @@ describe('tick のターンで待ち行列の先頭を1回だけ載せる', () =
     expect(count(input, FIRST_TASK_LINE)).toBe(1);
     expect(count(input, NOTICE_HEAD)).toBe(1);
     expect(input).not.toContain(DIGEST_HEAD);
-    expect(input).toContain(TAIL);
+    expect(input).toContain(HEAD_GUIDE);
+    expect(input).not.toContain(TAIL);
     process.stderr.write(`[tick 重複 測定] 定期の依頼の tick 入力 ${String(input.length)} 字\n`);
     await s.clone.stop();
   });
@@ -195,7 +197,8 @@ describe('tick のターンで待ち行列の先頭を1回だけ載せる', () =
 
     expect(count(input, FIRST_TASK_LINE)).toBe(1);
     expect(count(input, NOTICE_HEAD)).toBe(1);
-    expect(input).toContain(TAIL);
+    expect(input).toContain(HEAD_GUIDE);
+    expect(input).not.toContain(TAIL);
     expect(input).toContain(`いま届いたこの一件は task \`${event.id}\` として積んだ。`);
     expect(input).not.toContain(DIGEST_HEAD);
     await s.clone.stop();

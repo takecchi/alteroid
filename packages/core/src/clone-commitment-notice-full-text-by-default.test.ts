@@ -13,7 +13,9 @@ import { createMemoryStores, humanMessage } from './testing.js';
 // #5923: クローンは台帳へ書かなくなったので、台帳の閉じ方（commitment_close）の骨組みと、その歯（回答のターン）は外した。
 
 const SKELETON = '返事をしたターンの終わりに自動で done になる';
-const TAIL_FULL = '全文は `task_list`。並べ替えは `task_move`。';
+// 括弧の案内（先頭の描画の末尾の1行）。旧: この後ろに「全文は `task_list`。並べ替えは `task_move`。」が続いたが、同趣旨の再掲なので外した
+const HEAD_GUIDE = '全部は task_list）';
+const TAIL_REPEAT = '全文は `task_list`。並べ替えは `task_move`。';
 const QUEUE_HEAD = '[system] 待ち行列（';
 
 interface SdkScript {
@@ -133,7 +135,8 @@ describe('台帳の2行は、同じ会話の2回目以降も骨組みが毎回�
       const lines = ledgerLines(turn.input);
       expect(lines).toContain(SKELETON);
       expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。`);
-      expect(lines).toContain(TAIL_FULL);
+      expect(lines).toContain(HEAD_GUIDE);
+      expect(lines).not.toContain(TAIL_REPEAT);
       expect(turn.input).not.toContain('会話の上と同じ');
     }
     await s.clone.stop();

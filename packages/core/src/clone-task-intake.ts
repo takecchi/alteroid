@@ -112,7 +112,6 @@ export class CloneTaskIntake {
       ...taskQueue.placed,
       ...taskQueue.failed,
       ...(await this.#waitingReplyLinesFor(taskEvents)),
-      '全文は `task_list`。並べ替えは `task_move`。',
       '',
       '---',
       '',
@@ -198,7 +197,7 @@ export class CloneTaskIntake {
 /**
  * この束の本文が、要約（digest）に「待ち行列の先頭」の節を載せるか。載せる回は断り書きの側で同じ先頭を重ねて出さない。
  * 発意 tick と日報（`buildActivityDigest` の全形）だけが載せる。定期の依頼の tick（timer の日報以外）は件数の形（`shape: 'counts'`）で、
- * 件数の1行しか載せず先頭の3件は無いので、断り書きの側に残す。tick は束ねられない（`CloneBatchMerge.mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
+ * 待ち行列の件数の行も先頭の3件も載せないので、断り書きの側に残す。tick は束ねられない（`CloneBatchMerge.mixedSignalBatch` に入らない）ので、束は1件のはず。1件でなければ載せる側に残す。
  */
 function tickDigestCarriesTaskQueueHead(events: readonly InboxEvent[]): boolean {
   if (events.length !== 1) return false;
