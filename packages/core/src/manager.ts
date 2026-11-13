@@ -20,12 +20,7 @@ import { excerptLine, renderListing } from './excerpt.js';
 import { laterIso } from './later-iso.js';
 import type { HeldMessages, StaleHoldStuck } from './held-messages.js';
 import { WITHHELD_REPORT_EXCERPT, resolveWithheldReportFlushMs } from './withheld-reports.js';
-import {
-  decodeDenialKey,
-  type DenialReasonSnapshot,
-  type DenialRenotifyState,
-  type ManagerDenial,
-} from './denial-key.js';
+import { decodeDenialKey, type DenialReasonSnapshot, type ManagerDenial } from './denial-key.js';
 import {
   resolveWorkspacePolicy,
   workspaceLocatorFrom,
@@ -1117,7 +1112,7 @@ export interface ManagerPool {
    */
   settleStalledUsageWakes(): Promise<string[]>;
   /**
-   * 分類器の拒否（`case 'permission_denied'`）から `DENIAL_RENOTIFY_DELAYS_MS` 経っても動きが無い委譲へ、
+   * 分類器の拒否（`case 'permission_denied'`）から `DENIAL_RENOTIFY_DELAY_MS` 経っても動きが無い委譲へ、
    * もう一度知らせる。「進んだ」は `lastReportAt` / `lastToolSettledAt` が拒否より後であることだけで見る:
    * `PostToolUseFailure` は型付きの欄が無く、本文を嗅ぐと `case 'note'` の「欄で判定し、本文を嗅がない」を破る。
    *
@@ -1491,10 +1486,11 @@ export interface ManagerRecord {
   lastEventType?: string;
   lastEventTool?: string;
   /**
-   * **同じ鍵に新しい拒否が来て `deniedLastAt` が進んだら、これは古いエピソードの記録になる**
-   * （`deniedAt` の不一致を見て数え直す）。デーモンを作り直したら「まだ知らせていない」から始まる。
+   * 鍵ごとに「知らせ直した拒否の `deniedAt`」を覚える（あれば知らせ直し済み）。**同じ鍵に新しい拒否が来て
+   * `deniedLastAt` が進んだら、これは古いエピソードの記録になる**（`deniedAt` の不一致を見て未済に戻す）。
+   * デーモンを作り直したら「まだ知らせていない」から始まる。
    */
-  deniedRenotify?: Map<string, DenialRenotifyState>;
+  deniedRenotify?: Map<string, string>;
   /**
    * `#choosePending` が使う。`requestId` 無しの `decision` が、知らせ直しとは無関係に待っていた確認へ
    * 「待ちが1件ならそこへ当てる」規則で誤って当たらないよう、直近の知らせ直しより前の確認には当てない。
@@ -1951,7 +1947,6 @@ class Pool implements ManagerPool {
         ...this.#held.jobIds(),
       ],
       journal: (entry) => this.#journal(entry),
-      journalExchange: this.#journalExchange.bind(this),
       persist: (record) => this.#persist(record),
       load: (managerId) => this.#load(managerId),
       send: (managerId, message, options, delivery) =>

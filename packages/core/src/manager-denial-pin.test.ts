@@ -608,7 +608,7 @@ describe('manager の permission_denied: 日誌・受信箱の全文（切り出
   it('蓋で忘れた組は、最後に止められた時刻・知らせ直しの段・直近の知らせ直しの鍵も一緒に忘れる', async () => {
     const out = await scenarioForget();
     const renotice =
-      '[mgr-denial-pin] `Tool0` の拒否（マネージャー自身）から11分、動きが無い（知らせ直し 1/1 回目。issue #1105 C）。<ROUTE>';
+      '[mgr-denial-pin] `Tool0` の拒否（マネージャー自身）から11分、動きが無い（知らせ直し。issue #1105 C）。<ROUTE>';
     expect(out.first).toEqual([renotice]);
     expect(out.forgotten).toBe(true);
     // 直近の知らせ直しの鍵が忘れた組を指したままなら、ここは「知らせ直しが届いている」という断りになる

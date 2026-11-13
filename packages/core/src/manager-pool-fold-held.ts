@@ -31,7 +31,6 @@ export interface FoldHeldDeps {
   stopped: AutoFoldPorts['stopped'];
   retainedIds: AutoFoldPorts['retainedIds'];
   journal: AutoFoldPorts['journal'];
-  journalExchange: DenialPorts['journalExchange'];
   persist: SweeperPorts['persist'];
   load: StashPorts['load'];
   send: (
@@ -88,8 +87,6 @@ export function createFoldHeld(deps: FoldHeldDeps): FoldHeld {
     emitReport: (managerId, text) => {
       deps.emit(managerId, 'report', text);
     },
-    // 呼び出しの形にしない: exchange-kind-coverage.test.ts が書き込み箇所として数えるため（ここは束ねるだけ）
-    journalExchange: deps.journalExchange,
   });
   const rescueSweeper = new RescueSweeper({
     records: deps.records,
