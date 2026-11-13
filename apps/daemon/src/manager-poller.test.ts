@@ -320,7 +320,7 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
   });
 });
 
-// 新しい仕様を先に書いた試験（8 段目 task-follow）: 報告由来の done で waiting のままの task を、猶予を過ぎたら倒す見回り。60 秒ごと・冪等。
+// 新しい仕様を先に書いた試験（8 段目 task-follow）: 報告由来の done で waiting のままの task を、猶予を過ぎたら倒す見回り。5 分ごと（周回は 60 秒、この段だけ間引く）・冪等。
 describe('8 段目 task-follow: repairStrandedTasks() を見回りごとに呼ぶ', () => {
   let lines: string[] = [];
   beforeEach(() => {
@@ -360,7 +360,7 @@ describe('8 段目 task-follow: repairStrandedTasks() を見回りごとに呼�
     return { managers, order };
   }
 
-  it('見回りの 1 回ごとに 1 回呼ぶ（既定の間隔は 60 秒の見回りそのもの）', async () => {
+  it('見回りの最初の周回で 1 回呼ぶ（以降は 5 分ごと。間隔の試験は manager-poller-stages.test.ts）', async () => {
     const { managers, order } = managersWithRepair(() => undefined);
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 

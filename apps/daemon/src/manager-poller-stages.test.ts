@@ -141,18 +141,24 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     const { managers } = recordingPool(behaviors);
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
+    // task-follow は 5 分に 1 回の段なので、毎回の refresh に入るよう、時計だけを 5 分ずつ進める（タイマーは進めない）
+    const nextRound = () => vi.setSystemTime(Date.now() + 5 * 60_000);
+
     await poller.refresh();
     expect(lines).toHaveLength(9);
     for (const { label } of STAGES) {
       expect(lines.filter((line) => line.includes(`見回りの段 ${label} `))).toHaveLength(1);
     }
 
+    nextRound();
     await poller.refresh();
     expect(lines).toHaveLength(9);
 
     failing = false;
+    nextRound();
     await poller.refresh();
     failing = true;
+    nextRound();
     await poller.refresh();
     poller.stop();
     expect(lines).toHaveLength(18);
@@ -172,7 +178,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       poller.stop();
     });
 
-    it('intervalMs を渡せばその間隔で、周回ごとに 9 段すべてを呼ぶ', async () => {
+    it('intervalMs を渡せばその間隔で周回し、task-follow 以外の 8 段を周回ごとに呼ぶ', async () => {
       const { managers, calls } = recordingPool();
       const poller = startManagerPolling({ managers, intervalMs: 5_000 });
       await vi.advanceTimersByTimeAsync(0);
@@ -181,7 +187,37 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       await vi.advanceTimersByTimeAsync(4_999);
       expect(calls).toHaveLength(9);
       await vi.advanceTimersByTimeAsync(1);
-      expect(calls).toEqual([...ALL_METHODS, ...ALL_METHODS]);
+      // task-follow（repairStrandedTasks）は 5 分に 1 回なので、2 周目には入らない
+      expect(calls).toEqual([
+        ...ALL_METHODS,
+        ...ALL_METHODS.filter((m) => m !== 'repairStrandedTasks'),
+      ]);
+      poller.stop();
+    });
+
+    it('task-follow だけは 5 分ごと: 60 秒の周回では呼ばず、5 分目の周回で呼ぶ。他の段は 60 秒ごとのまま', async () => {
+      const { managers, calls } = recordingPool();
+      const poller = startManagerPolling({ managers });
+      const count = (name: string) => calls.filter((c) => c === name).length;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(count('repairStrandedTasks')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(count('probeTurnEnds')).toBe(2);
+      expect(count('repairStrandedTasks')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(count('probeTurnEnds')).toBe(5);
+      expect(count('repairStrandedTasks')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(count('probeTurnEnds')).toBe(6);
+      expect(count('repairStrandedTasks')).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(count('repairStrandedTasks')).toBe(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(count('repairStrandedTasks')).toBe(3);
       poller.stop();
     });
   });
