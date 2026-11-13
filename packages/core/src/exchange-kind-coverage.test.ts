@@ -482,10 +482,6 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   'manager-waiting.ts': {
     askedOf: 'thinning',
   },
-  // 止まった拒否の知らせ直しの出し切りの日誌（旧 `Pool#renotifyStalledDenial`）。同じ検査をここへ移した。
-  'denial-renotify.ts': {
-    '#renotifyOne': 'thinning',
-  },
   // running のまま無音の担当への知らせ（A2）: 知らせた episode は failure、出来事が戻ったときの日誌は recovery（受信箱へは出さない）。どちらも `#` 付きの私的メソッド
   'manager-silence-watch.ts': {
     '#notify': 'failure',
@@ -646,7 +642,6 @@ const EXCHANGE_SOURCES = [
   'clone-turn-input.ts',
   'clone-usage-ledger.ts',
   'clone.ts',
-  'denial-renotify.ts',
   'manager-closed-front.ts',
   'manager-closed-notice.ts',
   'manager-denial.ts',
