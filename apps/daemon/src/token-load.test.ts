@@ -1,5 +1,5 @@
 import type { AgentToken, UsageProbeHandle, UsageProbeQuery } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createTokenLoadBook, startTokenLoadSampling, type TokenLoad } from './token-load.js';
 
@@ -125,6 +125,143 @@ describe('鍵ごとの枠の観測（#6633）', () => {
       state: 'ok',
       usage: { limitsAvailable: false, windows: [] },
     });
+  });
+});
+
+describe('鍵ごとの枠の観測の周期（移行前後で変えない）', () => {
+  function periodic(tokens: () => Promise<AgentToken[]>, intervalMs = 1000) {
+    const probe = probeByToken({});
+    const controller = new AbortController();
+    const handle = startTokenLoadSampling({
+      queryFn: probe.queryFn,
+      cwd: '/work',
+      withheldEnvKeys: [],
+      tokens,
+      activeTokenId: () => undefined,
+      book: createTokenLoadBook(),
+      intervalMs,
+      signal: controller.signal,
+    });
+    return { handle, controller };
+  }
+
+  it('起動時にすぐ1回測り、終わってから間隔を置いて次を測る', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const p = periodic(async () => {
+        calls += 1;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toBe(2);
+      p.handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('走っている回の間は重ならない（sampleOnce は同じ回を返す）', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const p = periodic(async () => {
+        calls += 1;
+        await gate;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+      const again = p.handle.sampleOnce();
+      expect(calls).toBe(1);
+      release();
+      await again;
+      p.handle.stop();
+      expect(calls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('止めた後は次が走らない（signal の abort でも、stop でも）', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const a = periodic(async () => {
+        calls += 1;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      a.controller.abort();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls).toBe(1);
+
+      const b = periodic(async () => {
+        calls += 1;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      b.handle.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('走っている回の最中に止めても、その回の後に次を予約しない', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const p = periodic(async () => {
+        calls += 1;
+        await gate;
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      p.handle.stop();
+      release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('1周が失敗しても次の周期は来る。sampleOnce の呼び手には拒否で返る', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let failNow = true;
+      const p = periodic(async () => {
+        calls += 1;
+        if (failNow) throw new Error('pool unreadable');
+        return [];
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(calls).toBe(2);
+
+      await expect(p.handle.sampleOnce()).rejects.toThrow('pool unreadable');
+      failNow = false;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(calls).toBe(4);
+      p.handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
