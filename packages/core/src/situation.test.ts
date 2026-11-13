@@ -632,7 +632,7 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('直近のターンが失敗で終わっている');
-    expect(text).toContain('「手が空いている」は「終わった」でもない');
+    expect(text).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
     expect(text).toContain('その本数は1本以上あるときだけ上の行に出る');
   });
 
@@ -655,7 +655,7 @@ describe('describeSituation', () => {
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
     expect(text).toContain('manager_list');
     expect(text).toContain('の各行に付く注記');
-    expect(text).toContain('で名指しされる');
+    expect(text).toContain('名指しで引くなら');
     expect(text).toContain('`manager_report <managerId>`');
   });
 
@@ -685,7 +685,7 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('枠(利用上限)で止まっている');
-    expect(text).toContain('「手が空いている」は「枠が空いた」でもない');
+    expect(text).toContain('失敗や利用上限で止まった委譲も `done` のまま座る');
     expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
@@ -736,7 +736,9 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('宛先の runner が名簿から entry ごと消えている');
-    expect(text).toContain('「走行中」は「宛先の runner が名簿に居る」でもない');
+    expect(text).toContain(
+      '「走行中」は進んでいることでも、宛先の runner が名簿に居ることでもなく',
+    );
     expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
@@ -773,8 +775,7 @@ describe('describeSituation', () => {
       managers: [summary('a', 'done', true)],
       runners: [{ state: 'connected' }],
     });
-    expect(text).toContain('「手が空いている」は「空き枠」ではない');
-    expect(text).toContain('置けるかどうかはここでは答えていない');
+    expect(text).toContain('「手が空いている」は空き枠でも');
     expect(text).not.toContain('あと何本');
     expect(text).not.toContain('空き枠は');
     expect(text).not.toContain('残り');
@@ -782,7 +783,7 @@ describe('describeSituation', () => {
 
   it('背景処理待ちが器の名乗り次第であることを断る', () => {
     const text = describeSituation({ managers: [], runners: [] });
-    expect(text).toContain('「背景処理待ち」は器が名乗った分だけである');
+    expect(text).toContain('「背景処理待ち」は器が名乗った分だけで');
   });
 
   it('「走行中」は status だけでなく背景処理待ちの印を見て数えることを、本数と断り書きの両方で測る', () => {
@@ -794,8 +795,7 @@ describe('describeSituation', () => {
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
     expect(countsLine).toContain('走行中 0');
     expect(countsLine).toContain('背景処理待ち 1');
-    expect(text).toContain('「背景処理待ち」を含まない');
-    expect(text).toContain('`status`');
+    expect(text).toContain('背景処理待ちを含まない');
     expect(text).toContain('`running`');
   });
 
