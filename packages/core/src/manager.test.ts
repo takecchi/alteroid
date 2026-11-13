@@ -8095,7 +8095,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       (await stores.journal.list({ types: ['decision'] })).filter(
         (entry) => 'decision' in entry && entry.decision.includes('周回の見回りで'),
       );
-    // 下準備（見回りの末尾の段など）が書く無関係な decision と分ける
+    // 下準備が書く無関係な decision と分ける
     const autoFoldLinesOf = async (
       stores: Awaited<ReturnType<typeof setupActiveDoneCandidate>>['stores'],
     ) =>
