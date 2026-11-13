@@ -649,7 +649,8 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
 });
 
 describe('同じ会話の2ターン目も、状況の説明文と数の行を全文で出す（#4476）', () => {
-  const READINGS_HEAD = '**「手が空いている」は「空き枠」ではない**';
+  const READINGS_HEAD =
+    '**区分の読み方** — 「手が空いている」は空き枠でも、終わった／枠が空いたでもない';
 
   async function humanTurn(s: Fake & { clone: CloneHost }, n: number): Promise<string> {
     s.clone.post({
