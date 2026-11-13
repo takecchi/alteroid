@@ -16,7 +16,7 @@ type ResumePorts = ConstructorParameters<typeof ResumeEventWindows>[0];
  * `Pool` の constructor の窓 4 種へ渡す口の束。口（関数）は `Pool` 側で作った物をそのまま渡す（このファイルは `Pool` を知らない）。
  * `records`・`tokenIdentities`・`supersedePending`・`withheld` は `Pool` の持つ同じ参照。
  * `withheld.carriedToWindow` はこの関数の中で 1 回だけ（構築の時点で）取り出す。
- * 窓の長さ・確認の待ち時間は未指定（`undefined`）なら既定値へ解決する（`synthesizedNoticeWindowMs` の既定は環境変数も読む）。
+ * 窓の長さ・確認の待ち時間は未指定（`undefined`）なら既定値（定数）へ解決する。環境変数は読まない。
  */
 export interface WindowsDeps {
   records: QuotaPorts['records'];
