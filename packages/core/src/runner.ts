@@ -2590,6 +2590,8 @@ class RunnerSession {
   #contextUsageChain: Promise<void> = Promise.resolve();
   // 鎖に積んだが終わっていない観測の数（入力を閉じる前に待つべきかを同期で見るため）
   #contextUsagePending = 0;
+  // 閉じる前の最後の待ち（`#closeContextUsage`）を抜けた後は true。以後に届いた `turn_ended` は観測を積まない（積むと、閉じたセッションへ聞いて偽の失敗の行になる）
+  #contextUsageClosed = false;
   readonly #sessionAllowRulesTimeoutMs: number;
   readonly #rescueMaxWorktrees: number | undefined;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
@@ -3166,7 +3168,8 @@ class RunnerSession {
       options.keepPeers === true && this.#sdkSession.liveBackgroundTasks.length > 0;
 
     // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: 閉じた後だと `context_usage` が偽の失敗になるか欠ける。待ちは観測の期限（`CONTEXT_USAGE_READ_TIMEOUT_MS`）が上限
-    await this.#whenContextUsageIdle();
+    // 待ちを抜けたら以後の `turn_ended` は観測を積まない（`#closeContextUsage`）
+    await this.#closeContextUsage();
 
     // `result` を待たずに渡す: この経路で畳まれたぶんは台帳に1行も残らず、渡し損ねたら二度と取れないため
     await this.#flushUsage();
@@ -4450,6 +4453,8 @@ class RunnerSession {
    * `session` はターンの終わりの時点のもの: 鎖が回ってきたときに差し替わっていたら聞かない（死んだ・別のセッションへ聞いて偽の失敗を出さないため）。`sessionId` もここで控える。
    */
   #scheduleContextUsage(event: Extract<AgentEvent, { type: 'turn_ended' }>): void {
+    // 閉じかけなら積まない: 誰にも待たれない観測が `closeQuery()` の後に走り、`closed` の後ろに偽の失敗の行を出すため
+    if (this.#contextUsageClosed) return;
     const session = this.#sdkSession.query;
     const sessionId = this.#resumeState.sessionId;
     this.#contextUsagePending += 1;
@@ -4481,6 +4486,20 @@ class RunnerSession {
     for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
       await tail;
       if (tail === this.#contextUsageChain) return;
+    }
+  }
+
+  /**
+   * セッションを閉じる前の最後の待ち（`#stopBody`・`#finishBody`）。`#whenContextUsageIdle` と同じ待ちに、待ちを抜ける同じ同期の区間で「閉じかけ」の印を立てる。
+   * 待ちの後に別に立てない: 抜けてから立てるまでの間に `turn_ended` が届くと、積んだ観測を誰も待たない。
+   */
+  async #closeContextUsage(): Promise<void> {
+    for (let tail = this.#contextUsageChain; ; tail = this.#contextUsageChain) {
+      await tail;
+      if (tail === this.#contextUsageChain) {
+        this.#contextUsageClosed = true;
+        return;
+      }
     }
   }
 
@@ -4787,7 +4806,8 @@ class RunnerSession {
     // 量をここでも1行にまとめる: `stop()` は `#finish` を通らず、片方だけにすると存在は残るが量だけが失われ、落ちていることに気づく手がかりが出力に無いため
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
     // 閉じる前に、走っている文脈占有の観測の完了を待つ（取り消さない）: `closed` より後に `context_usage` が出ない・偽の失敗にならないため
-    await this.#whenContextUsageIdle();
+    // 待ちを抜けたら以後の `turn_ended` は観測を積まない（`#closeContextUsage`）
+    await this.#closeContextUsage();
     // `close()` より先に読む: 閉じた後の control channel からは何も取れないため
     await this.#flushUsage();
     this.#settleAll(reason);
