@@ -978,12 +978,7 @@ export {
 export { guessMediaTypeFromPath } from './media-type-by-extension.js';
 export { collectManagerOutbox, isOutboxFileId, prepareManagerOutbox } from './runner-outbox.js';
 export { loadManagerAttachments } from './manager-attachments.js';
-export {
-  describeLoopStall,
-  markStreamWrites,
-  notePhase,
-  startLoopStallWatch,
-} from './loop-stall.js';
+export { describeLoopStall, startLoopStallWatch } from './loop-stall.js';
 export {
   describeThreadpoolWait,
   measureThreadpoolWait,

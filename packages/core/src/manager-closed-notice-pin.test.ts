@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { createManagerPool } from './manager.js';
+import {
+  EVENT_SETTLED,
+  EVENT_SETTLED_LAG,
+  trackEventSettled,
+} from './manager-event-settled.test-support.js';
 import type { ManagerRecord } from './manager.js';
 import { ManagerClosedNotice } from './manager-closed-notice.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
@@ -12,14 +17,15 @@ import { SynthesizedNoticeWindows } from './synthesized-notice-windows.js';
 import { createMemoryStores } from './testing.js';
 import { UsageWake } from './usage-wake.js';
 
-// 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: `#closeJob` の完了が何周で戻るかを数えるため。見張りの本体は使わない。
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('./loop-stall.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./loop-stall.js')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
+// 出来事の処理の完了を `phases` へ記す: `#closeJob` の完了が何周で戻るかを数えるため（仕組みは test-support の注記）。
+const phases: string[] = [];
+let settledTracker: { restore(): void } | undefined;
+beforeAll(() => {
+  settledTracker = trackEventSettled(phases);
+});
+afterAll(() => {
+  settledTracker?.restore();
+});
 
 // `Pool#handleEvent` の `case 'closed'` の段3（`#closeJob`）が呼ぶ、知らせの 3 本
 // （peer の閉じの知らせ `#noticePeerCloseAtEnd`・report 無しの done の知らせ `#noticeSilentDone`・畳んでいた報告の在庫を配る `#flushWithheldAtClose`）を、
@@ -192,9 +198,9 @@ async function open(options: OpenOptions = {}) {
           retired = true;
           seen.push(`${String(i)}: retired`);
         }
-        if (!settled && phases.includes('runner-event-settled:closed')) {
+        if (!settled && phases.includes(EVENT_SETTLED)) {
           settled = true;
-          seen.push(`${String(i)}: settled`);
+          seen.push(`${String(i - EVENT_SETTLED_LAG)}: settled`);
         }
       }
       return seen;
@@ -857,7 +863,7 @@ describe('口が同期で throw したときの伝わり方（#closeJob の拒�
         thrownCount: thrown.length,
         unhandled,
         stderrLines,
-        settled: phases.includes('runner-event-settled:closed'),
+        settled: phases.includes(EVENT_SETTLED),
         retired: s.pool.denials(JOB_ID).length === 0,
         settleUsageWake,
       };

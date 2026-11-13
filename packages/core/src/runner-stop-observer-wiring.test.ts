@@ -119,15 +119,15 @@ describe('呼び元の周回（await を足さない・口を async で包まな
       {
         "busy": {
           "noteSync": 1,
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "failed": {
           "noteSync": 1,
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "idle": {
           "noteSync": 1,
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
       }
     `);

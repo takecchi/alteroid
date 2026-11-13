@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createManagerPool } from './manager.js';
+import {
+  EVENT_SETTLED,
+  EVENT_SETTLED_LAG,
+  trackEventSettled,
+} from './manager-event-settled.test-support.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
 import {
   createRunnerRegistry,
@@ -12,14 +17,15 @@ import { createMemoryStores } from './testing.js';
 import type { AgentToken } from './token-pool.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
 
-// 出来事の処理が終わった印（`#onEvent` の `finally`）だけを控える: `report` の処理の完了が何周で戻るかを数えるため。見張りの本体は使わない。
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('./loop-stall.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./loop-stall.js')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
+// 出来事の処理の完了を `phases` へ記す: `report` の処理の完了が何周で戻るかを数えるため（仕組みは test-support の注記）。
+const phases: string[] = [];
+let settledTracker: { restore(): void } | undefined;
+beforeAll(() => {
+  settledTracker = trackEventSettled(phases);
+});
+afterAll(() => {
+  settledTracker?.restore();
+});
 
 // `Pool#handleEvent` の `case 'report'` の段 2（報告の中身を台帳 `record.job` へ写す同期の段。切り出し前は `Pool` の `#applyReportToJob`、
 // いまは `manager-report-apply.ts`）を、外から見える結果だけで縛る: `#persist` が最初に書いた台帳の行（＝この段が書いた値そのもの）・
@@ -208,7 +214,9 @@ async function open(spec: Spec = {}) {
       emit?.(event);
       for (let i = 1; i <= 200; i += 1) {
         await Promise.resolve();
-        if (seen.settled < 0 && phases.includes('runner-event-settled:report')) seen.settled = i;
+        if (seen.settled < 0 && phases.includes(EVENT_SETTLED)) {
+          seen.settled = i - EVENT_SETTLED_LAG;
+        }
         if (seen.put < 0 && order.includes('put')) seen.put = i;
         if (seen.journal < 0 && order.includes('journal')) seen.journal = i;
       }

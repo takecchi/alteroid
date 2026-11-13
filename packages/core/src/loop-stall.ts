@@ -12,97 +12,33 @@ import {
 /**
  * プロセスのイベントループが止まった（同期の処理・GC）ことを、止まった後に検知して、何が走っていたかを添えて知らせる（#4485）。
  *
- * 止まっている最中は何も走らないので、その場で原因を採ることはできない。代わりに、処理の要所に `notePhase` で軽い印を残しておき、
- * 止まった窓の直前と最中に通った印を、時刻の差とともに返す。GC の停止も同じ窓で合計する（使用率の 100% は GC でも出るため）。
+ * 止まっている最中は何も走らないので、その場で原因を採ることはできない。代わりに、止まった後に、窓の中の GC の停止
+ * （使用率の 100% は GC でも出るため）、このプロセスが使った CPU 時間、器（cgroup）の絞り・圧迫、スレッドの枠の待ちなどを読み直して返す。
  *
- * 窓の中でこのプロセスが使った CPU 時間と、器（cgroup）に CPU を絞られた量も添える: 印も GC も無い停止は、
- * (1) このプロセスが印の無い所で計算していた、(2) 同期の待ち（ネイティブ・システムコール）、(3) 器の CPU の上限で動けなかった、
- * のどれでも同じ形に見えるため（デーモンの器には、クローンの CLI とその Bash の子が同居していて、器の CPU を分け合っている）。
+ * GC も CPU も無い停止は、
+ * (1) このプロセスが計算していた、(2) 同期の待ち（ネイティブ・システムコール）、(3) 器の CPU の上限で動けなかった、
+ * のどれでも同じ形に見えるため、(1)〜(3) を分ける数値を添える（デーモンの器には、クローンの CLI とその Bash の子が同居していて、器の CPU を分け合っている）。
+ *
+ * 以前は処理の要所に印（`notePhase`）を打ち、止まった窓の直前と最中の印も載せていた。直前の印がばらばらで犯人を絞れず、
+ * 切り分けは数値で行われた（#4890・#4906・#4967）ので外した。
  */
 
-// 窓の中の印を数十本は持てる長さ。古い印は捨てる
-const PHASE_RING = 256;
 const GC_RING = 256;
-// 1件の知らせに載せる印の上限: 日誌の1行を印で埋めないため
-const PHASES_SHOWN = 30;
-
-interface PhaseMark {
-  readonly at: number;
-  readonly label: string;
-}
 
 interface GcMark {
   readonly at: number;
   readonly durationMs: number;
 }
 
-const phases: PhaseMark[] = [];
 const gcs: GcMark[] = [];
-// 印と見張りは同じ時計で測る（試験で見張りに時計を渡すと、印もその時計に揃う）
 const defaultClock = (): number => performance.now();
 let clock: () => number = defaultClock;
-
-/** 処理の要所に印を残す。文字列を1つ積むだけで、計測そのものは止まった後にしか走らない。 */
-export function notePhase(label: string): void {
-  phases.push({ at: clock(), label });
-  if (phases.length > PHASE_RING) phases.splice(0, phases.length - PHASE_RING);
-}
-
-/**
- * `stream.write` を包み、書き込みの前後に印を打つ（#4485）。返り値で元へ戻す。
- * 標準エラーに掛ける: Linux ではパイプの標準エラーは同期で書かれ、ログの取り込みが詰まると CPU を使わずにループを止めうるため。
- * 止まった窓が `stderr-write:<長さ>` の後に始まり、`stderr-write-done` が窓の中の終わり近くに出れば、止めていたのは書き込みである。
- * 長さは文字数（Buffer ならバイト数）で、バイト数を数え直さない: 大きい文字列の数え直しそのものがループを塞ぐため。
- */
-export function markStreamWrites(stream: NodeJS.WritableStream, label: string): () => void {
-  const original = stream.write;
-  const marked = (chunk: unknown, ...rest: unknown[]): boolean => {
-    const length =
-      typeof chunk === 'string' ? chunk.length : chunk instanceof Uint8Array ? chunk.byteLength : 0;
-    notePhase(`${label}:${String(length)}`);
-    try {
-      return (original as (...args: unknown[]) => boolean).call(stream, chunk, ...rest);
-    } finally {
-      notePhase(`${label}-done`);
-    }
-  };
-  stream.write = marked as typeof stream.write;
-  return () => {
-    stream.write = original;
-  };
-}
 
 export interface LoopStall {
   /** 予定の時刻から遅れた長さ（ms）。 */
   readonly stalledMs: number;
   /** 止まり始めたと見られる時刻（最後に見張りが回った時刻）。 */
   readonly since: string;
-  /** 止まり始めより前に最後に通った印。 */
-  readonly phaseBefore?: string;
-  /**
-   * `phaseBefore` の印が、見張りが最後に回った時刻（窓の始め `from`）の何 ms 前だったか。`phaseBefore` が在るときだけ付く。
-   * `phaseBefore` は「止まり始めの直前の印」ではなく「`from` までに最後に通った印」なので、古い印が残っていないかをこれで見分ける。
-   */
-  readonly phaseBeforeAgoMs?: number;
-  /**
-   * 窓の始め `from`・窓の中の印の全部（`phasesDuring` の表示上限で切る前）・窓の終わりを時刻順に並べたとき、隣り合う2点の差が最も大きい区間。
-   * ループが止まっていた間は印を打つ処理も走れないので、止まっていた時間は必ずどれかの「印の無い区間」の中に入る。
-   * 最も長い区間がその置き場所で、区間の始まりの印の後に走った処理（印を打たない処理）が犯人の候補になる。
-   * 区間が `from` から始まるとき（窓の中に印が無い場合を含む）は `afterLabel` が無い: 見張りが回った後に印の無い処理が走ったということで、
-   * 直前の印（`phaseBefore`）の続きとは限らない。
-   */
-  readonly longestGap?: {
-    /** 区間の始まりの、`from` からの経過（ms、丸め）。 */
-    readonly startOffsetMs: number;
-    /** 区間の長さ（ms、丸め）。 */
-    readonly gapMs: number;
-    /** 区間の始まりにある印のラベル。区間が `from` から始まるときは無い。 */
-    readonly afterLabel?: string;
-  };
-  /** 止まっていた窓の中で通った印（止まり始めからの経過 ms 付き。古い順）。 */
-  readonly phasesDuring: readonly { readonly label: string; readonly offsetMs: number }[];
-  /** 窓の中で通った印のうち、載せきれなかった本数。 */
-  readonly phasesOmitted: number;
   readonly gcCount: number;
   readonly gcTotalMs: number;
   readonly gcMaxMs: number;
@@ -472,8 +408,6 @@ export function startLoopStallWatch(options: LoopStallWatchOptions): () => void 
   const readSteal = options.readSteal ?? (() => readProcStatSteal());
   const readSchedstat = options.readSchedstat ?? (() => readSelfSchedstat());
   clock = options.now ?? defaultClock;
-  // 始める前の印は捨てる: 別の時計で打った印が窓に紛れ込まないため
-  phases.length = 0;
   gcs.length = 0;
 
   const observer = new PerformanceObserver((list) => {
@@ -651,49 +585,11 @@ function summarize(
   cpuDelta: { user: number; system: number },
   throttle: LoopStall['throttle'],
 ): LoopStall {
-  let phaseBefore: string | undefined;
-  let phaseBeforeAt: number | undefined;
-  const during: { label: string; offsetMs: number }[] = [];
-  // 表示上限で切る前の全部の印から、最も長い印の無い間を求める（始まりの点は `from`）
-  let gapStart = from;
-  let gapStartLabel: string | undefined;
-  let longest: { start: number; gap: number; label: string | undefined } = {
-    start: from,
-    gap: -1,
-    label: undefined,
-  };
-  const closeGap = (end: number): void => {
-    const gap = end - gapStart;
-    if (gap > longest.gap) longest = { start: gapStart, gap, label: gapStartLabel };
-  };
-  for (const mark of phases) {
-    if (mark.at <= from) {
-      phaseBefore = mark.label;
-      phaseBeforeAt = mark.at;
-    } else if (mark.at <= to) {
-      during.push({ label: mark.label, offsetMs: Math.round(mark.at - from) });
-      closeGap(mark.at);
-      gapStart = mark.at;
-      gapStartLabel = mark.label;
-    }
-  }
-  closeGap(to);
-  const shown = during.slice(0, PHASES_SHOWN);
   const inWindow = gcs.filter((gc) => gc.at + gc.durationMs > from && gc.at <= to);
   const memory = process.memoryUsage();
   return {
     stalledMs: Math.round(stalledMs),
     since: new Date(Date.now() - Math.round(clock() - from)).toISOString(),
-    ...(phaseBefore === undefined || phaseBeforeAt === undefined
-      ? {}
-      : { phaseBefore, phaseBeforeAgoMs: Math.round(from - phaseBeforeAt) }),
-    longestGap: {
-      startOffsetMs: Math.round(longest.start - from),
-      gapMs: Math.round(longest.gap),
-      ...(longest.label === undefined ? {} : { afterLabel: longest.label }),
-    },
-    phasesDuring: shown,
-    phasesOmitted: during.length - shown.length,
     gcCount: inWindow.length,
     gcTotalMs: Math.round(inWindow.reduce((total, gc) => total + gc.durationMs, 0)),
     gcMaxMs: Math.round(inWindow.reduce((max, gc) => Math.max(max, gc.durationMs), 0)),
@@ -748,26 +644,10 @@ function describeMemoryEvents(events: LoopStall['memoryEvents']): string {
 }
 
 export function describeLoopStall(stall: LoopStall): string {
-  const during =
-    stall.phasesDuring.length === 0
-      ? '（窓の中で通った印は無い。止めたのは、印を打たない処理（タイマー・GC・SDK の流れなど）か、直前の印の後の続きのどちらか）'
-      : stall.phasesDuring.map((mark) => `${mark.label}@+${String(mark.offsetMs)}ms`).join(' → ') +
-        (stall.phasesOmitted > 0 ? ` …ほか ${String(stall.phasesOmitted)} 本` : '');
   const throttle =
     stall.throttle === undefined
       ? '器の CPU の絞り: 読めない。'
       : `器の CPU の絞り（直近 ${String(stall.throttle.sinceMs)}ms）: ${String(stall.throttle.throttledMs)}ms・${String(stall.throttle.periods)} 周期。`;
-  const before =
-    stall.phaseBefore === undefined
-      ? '（無い）'
-      : stall.phaseBeforeAgoMs === undefined
-        ? stall.phaseBefore
-        : `${stall.phaseBefore}（見張りが最後に回った時刻の ${String(stall.phaseBeforeAgoMs)}ms 前）`;
-  const gap =
-    stall.longestGap === undefined
-      ? ''
-      : `最も長い印の無い間: +${String(stall.longestGap.startOffsetMs)}ms から ${String(stall.longestGap.gapMs)}ms` +
-        `（その前の印: ${stall.longestGap.afterLabel ?? '無い。見張りが回った後'}）。`;
   const cpuShare =
     stall.windowMs > 0 ? (stall.cpuUserMs + stall.cpuSystemMs) / stall.windowMs : undefined;
   const head =
@@ -788,8 +668,6 @@ export function describeLoopStall(stall: LoopStall): string {
         'どちらも小さく CPU も小さければ、スレッドは眠っていてタイマーが遅れて起きた＝器の一時停止か計り方の側）。';
   return (
     head +
-    `直前の印: ${before}。窓の中の印: ${during}。` +
-    gap +
     `窓の中の GC: ${String(stall.gcCount)} 回・合計 ${String(stall.gcTotalMs)}ms・最大 ${String(stall.gcMaxMs)}ms。` +
     `窓 ${String(stall.windowMs)}ms の中でこのプロセスが使った CPU: user ${String(stall.cpuUserMs)}ms・system ${String(stall.cpuSystemMs)}ms。` +
     throttle +

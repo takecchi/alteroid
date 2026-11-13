@@ -1,4 +1,4 @@
-import { notePhase, reasonOf, writeStderrLine, type ManagerPool } from '@alteroid/core';
+import { reasonOf, writeStderrLine, type ManagerPool } from '@alteroid/core';
 
 import { startPeriodicRun } from './periodic-runner.js';
 
@@ -6,7 +6,7 @@ import { startPeriodicRun } from './periodic-runner.js';
 const MANAGER_POLL_INTERVAL_MS = 60_000;
 
 interface PollStage {
-  /** 印（`poller:<label>`）と stderr の段の名前 */
+  /** stderr の段の名前 */
   readonly label: string;
   readonly run: () => Promise<unknown> | undefined;
 }
@@ -37,10 +37,7 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     );
   };
 
-  // 段ごとに印を打つ（#4485）: 見回りは印の無いまま 60 秒ごとに下の表の段を回すので、どれかの段の同期の処理がループを止めても、
-  // 止まった窓の「直前の印」が直前に通った別の出来事（runner の tool_use など）に見えていたため
   const step = (label: string, run: () => Promise<unknown> | undefined): Promise<void> => {
-    notePhase(`poller:${label}`);
     let pending: Promise<unknown> | undefined;
     try {
       pending = run();
@@ -59,7 +56,7 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     );
   };
 
-  // 見回りの段の表。段の数・順・名前（= 印と stderr の名前）はここが持つ。失敗の握り方（止めない・間引く）と印の打ち方は全段で同じで、`step` が持つ。
+  // 見回りの段の表。段の数・順・名前（= stderr の名前）はここが持つ。失敗の握り方（止めない・間引く）は全段で同じで、`step` が持つ。
   // 違うのは連鎖に繋ぐかだけで、表を 2 つに分けた: 繋がない段は周回の頭で全部起こして待たず、繋ぐ段は表の順に前の段が終わってから起こす。
   // 繋ぐ表を空にできない型（先頭 1 つ + 残り）にしたのは、先頭の段を同期で起こす（前に `Promise.resolve()` を挟んで 1 tick 遅らせない）ため。
   const detachedStages: readonly PollStage[] = [
@@ -86,14 +83,10 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       void step(stage.label, stage.run);
     }
     const [head, ...rest] = chainedStages;
-    return rest
-      .reduce(
-        (previous, stage) => previous.then(() => step(stage.label, stage.run)),
-        step(head.label, head.run),
-      )
-      .finally(() => {
-        notePhase('poller:done');
-      });
+    return rest.reduce(
+      (previous, stage) => previous.then(() => step(stage.label, stage.run)),
+      step(head.label, head.run),
+    );
   };
 
   // 重ねない・止める・次の予約は `startPeriodicRun` が持つ: 走っている間の `refresh` は同じ回を返す

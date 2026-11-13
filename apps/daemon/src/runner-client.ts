@@ -70,7 +70,6 @@ import {
   runnerSessionOpenResultSchema,
   type RunnerResumeResult,
   unpushedWorkResultSchema,
-  notePhase,
   REGISTRY_RETRY_BASE_MS,
   REGISTRY_RETRY_MAX_MS,
   writeStderrLine,
@@ -854,7 +853,6 @@ class HttpRunner implements RunnerClient {
         }
 
         if (data.length > 0) {
-          notePhase(`runner-event:${String(data.length)}B`);
           let raw: unknown;
           let parsed: ReturnType<typeof runnerEventSchema.safeParse>;
           // `try` は読む側（`JSON.parse` と `safeParse`）だけに絞る: `onEvent` まで含めると、受ける側が投げたのに「壊れたフレーム」と数えて原因を取り違える（#5950）
@@ -871,8 +869,6 @@ class HttpRunner implements RunnerClient {
             this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
             continue;
           }
-          // 種類の印に大きさを添える: 「直前の印」は1つしか残らないので、種類だけだとどの大きさの出来事の後で止まったか分からないため（#4485）
-          notePhase(`runner-event:${parsed.data.type}:${String(data.length)}B`);
           try {
             onEvent(parsed.data);
           } catch (error) {
@@ -886,8 +882,6 @@ class HttpRunner implements RunnerClient {
             );
             continue;
           }
-          // 受けた後の処理の同期の部分（日誌への書き込みの直列化など）を抜けた印: 無いまま止まっていれば、止めていたのはその処理（#4485）
-          notePhase(`runner-event-handled:${parsed.data.type}`);
         }
       }
       if (bytesSinceYield >= SSE_READ_YIELD_BYTES) {

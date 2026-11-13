@@ -713,36 +713,32 @@ describe('周回（await を足さない・外さない）', () => {
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "failed": {
           "noteSync": 1,
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "idle": {
           "noteSync": 1,
           "notesAtTick": [
             1,
             1,
-            1,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
         "thinned": {
           "noteSync": 0,
           "notesAtTick": [
             0,
             0,
-            0,
           ],
-          "settledAtTick": 2,
+          "settledAtTick": 1,
         },
       }
     `);

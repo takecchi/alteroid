@@ -1,20 +1,11 @@
 import { setStderrSinkForTesting, type ManagerPool } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// 見回りの印だけを差し替えて並びを読む（見張りの本体は使わない）
-const phases = vi.hoisted(() => [] as string[]);
-vi.mock('@alteroid/core', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@alteroid/core')>()),
-  notePhase: (label: string) => {
-    phases.push(label);
-  },
-}));
-
-const { startManagerPolling } = await import('./manager-poller.js');
+import { startManagerPolling } from './manager-poller.js';
 
 // 見回りの段の構造を固定する試験（pin）。段を表（配列）にして回す整理の前に置く。
 // ⚠️ 期待値は仕様を先に書いたものではなく、整理前の `manager-poller.ts` の出力を読んで確かめたもの。
-// 縛るのは段の数・順・連鎖に繋ぐか・失敗の握り方（stderr の文言と間引き）・印・間隔であり、表の長さや型ではない。
+// 縛るのは段の数・順・連鎖に繋ぐか・失敗の握り方（stderr の文言と間引き）・間隔であり、表の長さや型ではない。
 const STAGES = [
   { label: 'rescue-refs', method: 'sweepRescueRefs', chained: false },
   { label: 'auto-fold', method: 'autoFoldUnderPressure', chained: false },
@@ -28,10 +19,6 @@ const STAGES = [
 ] as const;
 
 const ALL_METHODS: readonly string[] = STAGES.map((stage) => stage.method);
-const ALL_MARKS: readonly string[] = [
-  ...STAGES.map((stage) => `poller:${stage.label}`),
-  'poller:done',
-];
 
 type Behavior = () => unknown;
 
@@ -52,7 +39,6 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
   let lines: string[] = [];
   beforeEach(() => {
     lines = [];
-    phases.length = 0;
     setStderrSinkForTesting((line) => {
       lines.push(line);
     });
@@ -123,7 +109,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
 
   describe.each(STAGES)('段 $label が落ちても', ({ label, method }) => {
     for (const mode of ['同期で投げる', '拒否で落ちる'] as const) {
-      it(`${mode}: 他の 8 段は同じ順で走り、印は同じ並びで、stderr に段の名前と理由を 1 行残す`, async () => {
+      it(`${mode}: 他の 8 段は同じ順で走り、stderr に段の名前と理由を 1 行残す`, async () => {
         const failure: Behavior =
           mode === '同期で投げる'
             ? () => {
@@ -136,7 +122,6 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
         poller.stop();
 
         expect(calls).toEqual(ALL_METHODS);
-        expect(phases).toEqual(ALL_MARKS);
         expect(lines).toEqual([
           `alteroidd: 見回りの段 ${label} が失敗しました（次の回も続けます）: Error: ${label}の失敗（模擬）\n`,
         ]);
@@ -171,16 +156,6 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     await poller.refresh();
     poller.stop();
     expect(lines).toHaveLength(18);
-  });
-
-  it('印は周回ごとに同じ並びで打つ（段に入る前に印、最後に poller:done）', async () => {
-    const { managers } = recordingPool();
-    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
-    await poller.refresh();
-    await poller.refresh();
-    poller.stop();
-
-    expect(phases).toEqual([...ALL_MARKS, ...ALL_MARKS]);
   });
 
   describe('間隔（60 秒ごと）', () => {
