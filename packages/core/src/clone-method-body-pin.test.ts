@@ -53,7 +53,7 @@ const MARKERS: Readonly<Record<ScannedSource, Readonly<Record<string, readonly s
     '#applyTurnEnded': [
       "this.#emit({type: 'context_usage', managerId: this.#id,",
       'this.#markProgressed();',
-      'answered: failure === undefined,',
+      'answered: failure === undefined',
       'this.#wakeForFinishedBackgroundTaskOutputs();',
     ],
   },

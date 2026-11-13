@@ -87,7 +87,7 @@ describe('journal_read — 一覧の注記と turn_usage の見せ方', () => {
     },
   };
 
-  async function turnUsageRow(models: Record<string, unknown>, withContext: boolean) {
+  async function turnUsageRow(models: Record<string, unknown>) {
     const stores = createMemoryStores();
     await stores.journal.append({
       type: 'turn_usage',
@@ -95,7 +95,6 @@ describe('journal_read — 一覧の注記と turn_usage の見せ方', () => {
       site: 'session',
       managerId: 'mgr-1',
       models,
-      ...(withContext ? { contextUsage } : {}),
     } as never);
     const listing = await tools(stores)('journal_read', { types: ['turn_usage'] });
     // 1 件の一覧: 1行目が見出し、2行目が本文の抜粋
@@ -108,7 +107,6 @@ describe('journal_read — 一覧の注記と turn_usage の見せ方', () => {
         model('claude-opus-4-1-20250805', 0.5, 120, 2_400),
         model('claude-sonnet-4-5-20250929', 0.0312, 40, 800),
       ]),
-      false,
     );
 
     expect(row).toContain('claude-opus-4-1-20250805');
@@ -125,7 +123,6 @@ describe('journal_read — 一覧の注記と turn_usage の見せ方', () => {
         model('model-d', 0.4, 4, 4),
         model('model-e', 0.5, 5, 5),
       ]),
-      false,
     );
 
     expect(row).toContain('model-c');
@@ -133,19 +130,35 @@ describe('journal_read — 一覧の注記と turn_usage の見せ方', () => {
     expect(row).toContain('…ほか 2 モデル');
   });
 
-  it('contextUsage 付きの turn_usage は、モデルの行のほかをまとめて1本の上限で切る（行が膨らまない）', async () => {
+  it('turn_usage は文脈を載せないので、モデル3行だけで一覧の行が収まる（文脈は context_usage の行が持つ）', async () => {
     const row = await turnUsageRow(
       Object.fromEntries([
         model('claude-opus-4-1-20250805', 0.5, 120, 2_400),
         model('claude-sonnet-4-5-20250929', 0.0312, 40, 800),
         model('claude-haiku-4-5-20251001', 0.0021, 10, 100),
       ]),
-      true,
     );
 
-    // モデル3行（各 80 字前後）＋残りの1本（120 字 + 注記）＋区切り。文脈・内訳・カテゴリを1行ずつ並べると 700 字を超える
     expect(row.length).toBeLessThan(520);
     expect(row).toContain('in=10 out=100');
+    expect(row).not.toContain('文脈');
+  });
+
+  it('context_usage は内訳・カテゴリをまとめて1本の上限で切る（行が膨らまない）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'context_usage',
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      turnSucceeded: true,
+      contextUsage,
+    } as never);
+    const listing = await tools(stores)('journal_read', { types: ['context_usage'] });
+    const row = listing.split('\n')[1] ?? '';
+
+    // 文脈・内訳・カテゴリを1行ずつ並べると 700 字を超える
+    expect(row.length).toBeLessThan(520);
     expect(row).toMatch(/…（全 [\d,]+ 字）$/);
   });
 

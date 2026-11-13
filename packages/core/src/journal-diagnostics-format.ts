@@ -25,7 +25,6 @@ export type JournalDiagnosticsEntryLike =
         string,
         { costUsd: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }
       >;
-      contextUsage?: ContextUsageLike;
       compactions?: unknown[];
       reset?: unknown;
     }
@@ -62,8 +61,8 @@ function seconds(ms: number): string {
   return value < 10 ? `${value.toFixed(1)}秒` : `${String(Math.round(value))}秒`;
 }
 
-function contextUsageNote(context: ContextUsageLike | undefined): string {
-  if (context === undefined || context.percentage === undefined) return '';
+function contextUsageNote(context: ContextUsageLike): string {
+  if (context.percentage === undefined) return '';
   // 履歴の内訳が無い回（古い行・SDK が返さなかった回）と道具の行が無い回は書かない（0 を埋めない）
   const top = topToolResults(context.messageBreakdown?.toolsByName ?? []);
   return (
@@ -84,7 +83,6 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
         0,
       );
       const cacheRead = models.reduce((sum, [, totals]) => sum + totals.cacheReadInputTokens, 0);
-      const contextNote = contextUsageNote(entry.contextUsage);
       const compactionNote =
         entry.compactions === undefined || entry.compactions.length === 0
           ? ''
@@ -92,7 +90,6 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
       return (
         `[${entry.layer}/${entry.site}] ${entry.managerId} 1ターン $${totalCost.toFixed(4)}` +
         `（cache read=${cacheRead} write=${cacheWrite}）` +
-        contextNote +
         compactionNote +
         (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
       );

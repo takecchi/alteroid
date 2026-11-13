@@ -254,6 +254,39 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
   });
 
   describe('ターンの境界で聞いた文脈占有・compaction・result.usage', () => {
+    // 文脈占有は `context_usage` の行にだけ書く（`turn_usage` には二重に書かない）。読む先をここに1つだけ置く
+    async function contextUsageOf(s: ReturnType<typeof setup>) {
+      const rows = await s.stores.journal.list({ types: ['context_usage'] });
+      const row = rows[0];
+      if (row?.type !== 'context_usage') throw new Error('context_usage が日誌に無い');
+      return row.contextUsage;
+    }
+
+    it('⭐ `turn_usage` の行に `contextUsage` と `mainLoopUsage` を書かない（同じ値は `context_usage` の行と `turn_timing.tokens` にある）', async () => {
+      const s = setup(undefined, createMemoryStores(), {
+        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
+        getContextUsage: () => ({ totalTokens: 12_000, rawMaxTokens: 200_000, percentage: 6 }),
+        resultUsage: () => ({
+          input_tokens: 7,
+          output_tokens: 3,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 40,
+        }),
+      });
+
+      s.clone.post(humanMessage('やあ'));
+      await waitForDone(s.events);
+
+      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).not.toHaveProperty('contextUsage');
+      expect(entries[0]).not.toHaveProperty('mainLoopUsage');
+      // 文脈占有は `context_usage` の行が運ぶ
+      expect(await contextUsageOf(s)).toMatchObject({ totalTokens: 12_000, percentage: 6 });
+
+      await s.clone.stop();
+    });
+
     it('`getContextUsage()` が成功すれば `contextUsage` に値が入り、`error` は付かない', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
@@ -269,10 +302,8 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.contextUsage).toEqual({
+      const context = await contextUsageOf(s);
+      expect(context).toEqual({
         durationMs: expect.any(Number),
         totalTokens: 12_000,
         rawMaxTokens: 200_000,
@@ -280,7 +311,7 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
         autoCompactThreshold: 160_000,
         isAutoCompactEnabled: true,
       });
-      expect(entry.contextUsage?.error).toBeUndefined();
+      expect(context.error).toBeUndefined();
 
       await s.clone.stop();
     });
@@ -313,26 +344,22 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      const context = await contextUsageOf(s);
 
-      expect(entry.contextUsage?.mcpToolTokens).toBe(1_000);
-      expect(entry.contextUsage?.mcpToolCount).toBe(3);
+      expect(context.mcpToolTokens).toBe(1_000);
+      expect(context.mcpToolCount).toBe(3);
       // サーバごとの内訳（#5291）: 道具ごとの名前は載らず、serverName ごとの本数とトークンだけが載る
-      expect(entry.contextUsage?.mcpToolsByServer).toEqual([
-        { name: 'alteroid', count: 3, tokens: 1_000 },
-      ]);
-      expect(entry.contextUsage?.memoryFileTokens).toBe(700);
-      expect(entry.contextUsage?.memoryFileCount).toBe(1);
-      expect(entry.contextUsage?.systemPromptTokens).toBe(8_000);
-      expect(entry.contextUsage?.systemPromptSectionCount).toBe(2);
-      expect(entry.contextUsage?.categories).toEqual([
+      expect(context.mcpToolsByServer).toEqual([{ name: 'alteroid', count: 3, tokens: 1_000 }]);
+      expect(context.memoryFileTokens).toBe(700);
+      expect(context.memoryFileCount).toBe(1);
+      expect(context.systemPromptTokens).toBe(8_000);
+      expect(context.systemPromptSectionCount).toBe(2);
+      expect(context.categories).toEqual([
         { name: 'System prompt', tokens: 8_000, kind: 'used' },
         { name: 'MCP tools', tokens: 3_000, kind: 'deferred' },
       ]);
-      expect(entry.contextUsage?.categoriesOmitted).toBeUndefined();
-      expect(JSON.stringify(entry.contextUsage)).not.toContain('manager_list');
+      expect(context.categoriesOmitted).toBeUndefined();
+      expect(JSON.stringify(context)).not.toContain('manager_list');
 
       await s.clone.stop();
     });
@@ -365,11 +392,9 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      const context = await contextUsageOf(s);
 
-      expect(entry.contextUsage?.messageBreakdown).toEqual({
+      expect(context.messageBreakdown).toEqual({
         toolCallTokens: 300,
         toolResultTokens: 5_000,
         attachmentTokens: 40,
@@ -398,12 +423,10 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      const context = await contextUsageOf(s);
 
-      expect(entry.contextUsage?.categories).toEqual([{ name: 'System prompt', tokens: 8_000 }]);
-      expect(entry.contextUsage?.categories?.[0]?.kind).toBeUndefined();
+      expect(context.categories).toEqual([{ name: 'System prompt', tokens: 8_000 }]);
+      expect(context.categories?.[0]?.kind).toBeUndefined();
 
       await s.clone.stop();
     });
@@ -425,11 +448,9 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      const context = await contextUsageOf(s);
 
-      expect(entry.contextUsage).toEqual({
+      expect(context).toEqual({
         durationMs: expect.any(Number),
         totalTokens: 12_000,
         rawMaxTokens: 200_000,
@@ -455,15 +476,13 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
+      const context = await contextUsageOf(s);
 
-      const shown = entry.contextUsage?.categories?.length ?? 0;
-      const omitted = entry.contextUsage?.categoriesOmitted ?? 0;
+      const shown = context.categories?.length ?? 0;
+      const omitted = context.categoriesOmitted ?? 0;
       expect(omitted).toBeGreaterThan(0);
       expect(shown + omitted).toBe(100);
-      expect(entry.contextUsage?.categories?.[0]).toEqual({ name: '軸0', tokens: 0 });
+      expect(context.categories?.[0]).toEqual({ name: '軸0', tokens: 0 });
 
       await s.clone.stop();
     });
@@ -486,13 +505,11 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
         else process.env.ALTEROID_TEST_SECRET_TOKEN = previous;
       }
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.contextUsage?.error).toBeDefined();
-      expect(entry.contextUsage?.error).toContain('[REDACTED]');
-      expect(entry.contextUsage?.error).not.toContain('sekret-value-12345');
-      expect(entry.contextUsage?.totalTokens).toBeUndefined();
+      const context = await contextUsageOf(s);
+      expect(context.error).toBeDefined();
+      expect(context.error).toContain('[REDACTED]');
+      expect(context.error).not.toContain('sekret-value-12345');
+      expect(context.totalTokens).toBeUndefined();
       expect(s.events.some((event) => event.type === 'done')).toBe(true);
 
       await s.clone.stop();
@@ -506,11 +523,9 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.contextUsage?.error).toBeDefined();
-      expect(typeof entry.contextUsage?.durationMs).toBe('number');
+      const context = await contextUsageOf(s);
+      expect(context.error).toBeDefined();
+      expect(typeof context.durationMs).toBe('number');
 
       await s.clone.stop();
     });
@@ -536,11 +551,9 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
         '2つ目のターンの終わり',
       );
 
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.contextUsage?.error).toContain('返らなかった');
-      expect(entry.contextUsage?.totalTokens).toBeUndefined();
+      const context = await contextUsageOf(s);
+      expect(context.error).toContain('返らなかった');
+      expect(context.totalTokens).toBeUndefined();
 
       await s.clone.stop();
     });
@@ -584,49 +597,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       const entry = entries[0];
       if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
       expect(entry.compactions).toBeUndefined();
-
-      await s.clone.stop();
-    });
-
-    it('`result.usage` は `mainLoopUsage` として `turn_usage` へ載る（`models` とは別の値のまま潰さない）', async () => {
-      const s = setup(undefined, createMemoryStores(), {
-        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
-        resultUsage: () => ({
-          input_tokens: 7,
-          output_tokens: 3,
-          cache_read_input_tokens: 100,
-          cache_creation_input_tokens: 40,
-        }),
-      });
-
-      s.clone.post(humanMessage('やあ'));
-      await waitForDone(s.events);
-
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.mainLoopUsage).toEqual({
-        inputTokens: 7,
-        outputTokens: 3,
-        cacheReadInputTokens: 100,
-        cacheCreationInputTokens: 40,
-      });
-
-      await s.clone.stop();
-    });
-
-    it('`result.usage` を渡さない回は `mainLoopUsage` の欄自体が無い（作り物を出さない）', async () => {
-      const s = setup(undefined, createMemoryStores(), {
-        modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
-      });
-
-      s.clone.post(humanMessage('やあ'));
-      await waitForDone(s.events);
-
-      const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-      const entry = entries[0];
-      if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-      expect(entry.mainLoopUsage).toBeUndefined();
 
       await s.clone.stop();
     });

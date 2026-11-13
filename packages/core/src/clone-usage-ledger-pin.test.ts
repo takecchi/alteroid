@@ -175,7 +175,7 @@ const CONTEXT_USAGE = {
 
 describe('turn_usage の行の欄', () => {
   // 欄の並びは見ない（見るのは欄の集合）: メモリの日誌は行をスキーマに通して返すので、並びは書いた式ではなくスキーマが決める
-  it('本セッションのターン: 全欄（sessionId・models・mainLoopUsage・contextUsage・compactions）が載る', async () => {
+  it('本セッションのターン: 全欄（sessionId・models・compactions）が載り、contextUsage と mainLoopUsage は載せない（文脈占有は context_usage の行、同じ消費は turn_timing.tokens）', async () => {
     const s = build({
       sdk: {
         modelUsage: () => usageOf('claude-fable-5', 0.5),
@@ -195,9 +195,7 @@ describe('turn_usage の行の欄', () => {
     expect(rows).toHaveLength(1);
     expect(Object.keys(rows[0]!).sort()).toEqual([
       'compactions',
-      'contextUsage',
       'layer',
-      'mainLoopUsage',
       'managerId',
       'models',
       'sessionId',
@@ -213,21 +211,7 @@ describe('turn_usage の行の欄', () => {
             "trigger": "auto",
           },
         ],
-        "contextUsage": {
-          "autoCompactThreshold": 160000,
-          "durationMs": 0,
-          "isAutoCompactEnabled": true,
-          "percentage": 6,
-          "rawMaxTokens": 200000,
-          "totalTokens": 12000,
-        },
         "layer": "clone",
-        "mainLoopUsage": {
-          "cacheCreationInputTokens": 40,
-          "cacheReadInputTokens": 100,
-          "inputTokens": 7,
-          "outputTokens": 3,
-        },
         "managerId": "clone",
         "models": {
           "claude-fable-5": {
@@ -247,7 +231,7 @@ describe('turn_usage の行の欄', () => {
     await s.clone.stop();
   });
 
-  it('result.usage も compaction も無い回: mainLoopUsage と compactions の欄そのものが無い（空の値を作らない）', async () => {
+  it('compaction が無い回: compactions の欄そのものが無い（空の値を作らない）', async () => {
     const s = build({
       sdk: {
         modelUsage: () => usageOf('claude-fable-5', 0.5),
@@ -259,7 +243,6 @@ describe('turn_usage の行の欄', () => {
     const rows = await turnUsageRows(s.stores);
     expect(rows).toHaveLength(1);
     expect(Object.keys(rows[0]!).sort()).toEqual([
-      'contextUsage',
       'layer',
       'managerId',
       'models',
@@ -289,14 +272,6 @@ describe('turn_usage の行の欄', () => {
     expect(rows[1]).not.toHaveProperty('reset');
     expect(rows[1]).toMatchInlineSnapshot(`
       {
-        "contextUsage": {
-          "autoCompactThreshold": 160000,
-          "durationMs": 0,
-          "isAutoCompactEnabled": true,
-          "percentage": 6,
-          "rawMaxTokens": 200000,
-          "totalTokens": 12000,
-        },
         "layer": "clone",
         "managerId": "clone",
         "models": {
@@ -336,7 +311,6 @@ describe('turn_usage の行の欄', () => {
     const rows = await turnUsageRows(s.stores);
     expect(rows).toHaveLength(2);
     expect(Object.keys(rows[1]!).sort()).toEqual([
-      'contextUsage',
       'layer',
       'managerId',
       'models',
@@ -347,14 +321,6 @@ describe('turn_usage の行の欄', () => {
     ]);
     expect(rows[1]).toMatchInlineSnapshot(`
       {
-        "contextUsage": {
-          "autoCompactThreshold": 160000,
-          "durationMs": 0,
-          "isAutoCompactEnabled": true,
-          "percentage": 6,
-          "rawMaxTokens": 200000,
-          "totalTokens": 12000,
-        },
         "layer": "clone",
         "managerId": "clone",
         "models": {

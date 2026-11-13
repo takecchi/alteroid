@@ -4381,7 +4381,7 @@ class RunnerSession {
     // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
     const failure = event.failure ?? rejected ?? undefined;
 
-    this.#emitAnsweredUsage(event, failure, contextUsage);
+    this.#emitAnsweredUsage(event, failure);
 
     // 失敗の分類（`usage_notice` の送出・分類できなかった失敗の跡・鍵の置き場の案内の判定）は `RunnerFailureClassifier` へ出した。戻り値は報告の末尾に案内を足すか
     const noCredentialDirHint = this.#failureClassifier.classify(event, failure);
@@ -4437,7 +4437,7 @@ class RunnerSession {
     event: Extract<AgentEvent, { type: 'turn_ended' }>,
     contextUsage: ContextUsageObservation | undefined,
   ): void {
-    // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
+    // 成否分岐の外で無条件に emit する: 文脈占有は `usage`（成功したターンだけ）に載せず、失敗したターンも残すため
     if (contextUsage !== undefined) {
       this.#emit({
         type: 'context_usage',
@@ -4453,7 +4453,6 @@ class RunnerSession {
   #emitAnsweredUsage(
     event: Extract<AgentEvent, { type: 'turn_ended' }>,
     failure: SdkFailure | undefined,
-    contextUsage: ContextUsageObservation | undefined,
   ): void {
     // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
     if (event.succeeded) {
@@ -4469,7 +4468,6 @@ class RunnerSession {
           models: event.usage.models,
           // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
           answered: failure === undefined,
-          ...(contextUsage === undefined ? {} : { contextUsage }),
         });
       }
     }

@@ -291,26 +291,26 @@ const KINDS: Append[] = [
       'model-e': totals(5, 5, 5),
     },
     reset: { fromCostUsd: 12.5, toCostUsd: 0.5 },
-    contextUsage: CTX_FULL,
     compactions: [
       { trigger: 'auto', preTokens: 180_000, postTokens: 30_000 },
       { trigger: 'manual', preTokens: 90_000 },
     ],
   } as Append,
+  // 文脈占有は `turn_usage` に載せない（`context_usage` の行にだけ書く）ので、測れなかった回・欄が疎な回は context_usage の行で縛る
   /* 24 */ {
-    type: 'turn_usage',
+    type: 'context_usage',
     layer: 'clone',
     site: 'peer',
     managerId: 'clone',
-    models: { 'claude-opus': totals(0.5, 10, 10) },
+    turnSucceeded: false,
     contextUsage: CTX_ERROR,
   } as Append,
   /* 25 */ {
-    type: 'turn_usage',
+    type: 'context_usage',
     layer: 'clone',
     site: 'session',
     managerId: 'clone',
-    models: { 'claude-opus': totals(0.25, 10, 10) },
+    turnSucceeded: true,
     contextUsage: CTX_SPARSE,
   } as Append,
   /* 26 */ {
@@ -1234,8 +1234,9 @@ describe('journal_read の出力の固定（場面ごとの全文と字数）', 
     expect(text('id-kinds#16')).toContain('12345');
     expect(text('id-kinds#18')).toContain('bytes=不明(旧形式)');
     expect(text('id-kinds#23')).toContain('⚠reset');
-    expect(text('id-kinds#23')).toContain('[分類なし]');
+    expect(text('id-kinds#23')).not.toContain('文脈');
     expect(text('id-kinds#24')).toContain('測れなかった');
+    expect(text('id-kinds#26')).toContain('[分類なし]');
     expect(text('id-kinds#32')).toContain('src=trial');
     expect(text('id-kinds#33')).toContain('撒いた鍵は 2026-10-26T05:00:00.000Z まで通らない');
     expect(text('id-kinds#34')).toContain('通るようになる時刻が取れていない');
