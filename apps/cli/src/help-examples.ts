@@ -23,6 +23,12 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics export --since 2026-11-01T00:00:00Z --until 2026-11-03T00:00:00Z',
     'alteroid diagnostics export --type turn_usage,http_timing       # 型を選ぶ（診断の型だけ）',
   ),
+  diagnosticsAnalyze: examples(
+    'alteroid diagnostics analyze --journal diag.jsonl                         # 日誌だけで集計',
+    'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json      # 台帳も読む（日誌が主）',
+    'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json --ledger-tz Asia/Tokyo',
+    'alteroid diagnostics analyze --journal diag.jsonl --json                  # 機械可読',
+  ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',
     'alteroid inbox remove --types timer --reason "古い定期の合図"            # 試算（消さない）',

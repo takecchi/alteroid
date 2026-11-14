@@ -23,6 +23,9 @@ export { compareApprovalPagingKey, type ApprovalPagingKey } from './approval-cur
 export { encodeCursor, decodeCursor } from './cursor-codec.js';
 /** 出所は SDK の `result.modelUsage` であって `usage` ではない: 後者はメインループぶんだけで、作業者の消費が落ちる。累積値なので足さずに差分を取る。 */
 export * from './usage.js';
+// 診断の日誌と台帳の集計（純関数。zod を持ち込まない）。`apps/web` は値で import できないバレルからだけ出す
+export * from './diagnostics-analysis.js';
+export { describeTimeZone, renderDiagnosticsAnalysis } from './diagnostics-analysis-format.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
 export {
   accountUsageStateSchema,

@@ -349,7 +349,33 @@ program
 
 const diagnosticsCommand = program
   .command('diagnostics')
-  .description('別の alteroid の診断の材料（日誌の診断行）を機械可読に書き出す');
+  .description('別の alteroid の診断の材料（日誌の診断行）を機械可読に書き出す・集計する');
+
+diagnosticsCommand
+  .command('analyze')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsAnalyze)
+  .description(
+    '`diagnostics export` の出力（と任意で `usage --json` の出力）を読み、キャッシュ・起点・プロンプトの大きさ・数え直しなどの事実を並べる（ファイルを読むだけ。通信しない。原因は断定しない）',
+  )
+  .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
+  .option('--usage <file>', '`usage --json` の出力（任意。日誌が主で、台帳は従）')
+  .option(
+    '--ledger-tz <iana>',
+    '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う。無ければ日別を並べない）',
+  )
+  .option('--top <n>', '上位に出す件数（委譲・MCP サーバ。既定 10）')
+  .option('--json', '整形せず JSON で（機械が読む）')
+  .action(
+    async (options: {
+      journal?: string;
+      usage?: string;
+      ledgerTz?: string;
+      top?: string;
+      json?: boolean;
+    }) => {
+      await (await import('./diagnostics-analyze.js')).diagnosticsAnalyzeCommand(options);
+    },
+  );
 
 diagnosticsCommand
   .command('export')
