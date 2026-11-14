@@ -22276,6 +22276,75 @@
         ]
       }
     },
+    "/mcp": {
+      "post": {
+        "operationId": "postMcp",
+        "tags": ["mcp"],
+        "summary": "MCP（Streamable HTTP、ステートレス）。道具は report_problem の1本だけ",
+        "description": "外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` の1本だけ（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。",
+        "responses": {
+          "200": {
+            "description": "JSON-RPC の応答（ツールエラーも 200 の `isError: true` で返る）。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "202": {
+            "description": "通知（応答の無い JSON-RPC メッセージ）を受けた。"
+          },
+          "400": {
+            "description": "JSON-RPC として不正。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "連携の鍵が無効か期限切れ（未知・失効・期限切れ）。または資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "406": {
+            "description": "`Accept` に `application/json` と `text/event-stream` の両方が無い。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "413": {
+            "description": "連携の鍵の本文の上限を超えた。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json でない。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "429": {
+            "description": "連携の鍵の回数の上限を超えた。",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/schedule": {
       "get": {
         "operationId": "getSchedule",

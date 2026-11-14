@@ -51,6 +51,7 @@ import { tasksRoutes } from './app-routes-tasks.js';
 import { scheduleRoutes } from './app-routes-schedule.js';
 import { approvalsRoutes } from './app-routes-approvals.js';
 import { integrationRoutes } from './app-routes-integration.js';
+import { mcpRoutes } from './app-routes-mcp.js';
 import { journalRoutes } from './app-routes-journal.js';
 import { practicesRoutes } from './app-routes-practices.js';
 import { topologyRoutes } from './app-routes-topology.js';
@@ -357,6 +358,8 @@ export function createApp(deps: AppDeps) {
     .route('/', approvalsRoutes(ctx, deps))
 
     .route('/', integrationRoutes(ctx, humanOnly, noteIntegrationRefusal))
+
+    .route('/', mcpRoutes(ctx))
 
     .route('/', scheduleRoutes(ctx, deps))
 
