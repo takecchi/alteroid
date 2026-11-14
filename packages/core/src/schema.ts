@@ -46,6 +46,7 @@ export const DIAGNOSTICS_SEND_REASONS = [
   'read_failed',
   'secret_pattern',
   'schema_invalid',
+  'build_failed',
   'oversize',
   'no_diagnostics',
 ] as const;
@@ -920,6 +921,7 @@ const journalEntryTypeNames = {
   github_observation: true,
   conversation_deleted: true,
   diagnostics_summary: true,
+  diagnostics_summary_send: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

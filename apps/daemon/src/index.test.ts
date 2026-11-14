@@ -473,7 +473,8 @@ describe('本番の配線: createClone に AUTH_WITHHELD_ENV_KEYS が渡る（Is
     expect(at).toBeGreaterThan(-1);
     const block = source.slice(at, source.indexOf('\n  });', at));
 
-    expect(block).toContain('withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS]');
+    // 診断の送り先の鍵（送るのはデーモンだけ）もクローンの子プロセスへは渡さない
+    expect(block).toContain('withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS, ...SINK_KEY_ENV_KEYS]');
     expect(block).not.toContain('withheldEnvKeys: storage.withheldEnvKeys');
     expect(block).not.toContain('...storage.withheldEnvKeys');
   });

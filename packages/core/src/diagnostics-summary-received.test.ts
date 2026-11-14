@@ -140,7 +140,8 @@ describe('journal_read: 診断の要約は一覧で1行に畳み、全文は id 
 
   it('一覧には全文（本体の欄）が出ず、source・period・数字の1行だけ', async () => {
     const { row, read } = await setup();
-    const listing = await read({});
+    // 型の指定なしでは既定の一覧から外れる（日々届いて一覧を埋めるため）ので、名指しして読む
+    const listing = await read({ types: ['diagnostics_summary'] });
     expect(listing).toContain('[diagnostics_summary remote.alteroid integration]');
     expect(listing).toContain(`id=${row.id}`);
     expect(listing).toContain('period=2026-11-01T00:00:00.000Z');

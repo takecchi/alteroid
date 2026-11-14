@@ -4277,6 +4277,7 @@
                             "read_failed",
                             "secret_pattern",
                             "schema_invalid",
+                            "build_failed",
                             "oversize",
                             "no_diagnostics"
                           ]
@@ -9788,6 +9789,7 @@
                                   "read_failed",
                                   "secret_pattern",
                                   "schema_invalid",
+                                  "build_failed",
                                   "oversize",
                                   "no_diagnostics"
                                 ]
@@ -11687,6 +11689,7 @@
                             "read_failed",
                             "secret_pattern",
                             "schema_invalid",
+                            "build_failed",
                             "oversize",
                             "no_diagnostics"
                           ]
@@ -15967,6 +15970,7 @@
                                     "read_failed",
                                     "secret_pattern",
                                     "schema_invalid",
+                                    "build_failed",
                                     "oversize",
                                     "no_diagnostics"
                                   ]
@@ -17779,6 +17783,7 @@
                                     "read_failed",
                                     "secret_pattern",
                                     "schema_invalid",
+                                    "build_failed",
                                     "oversize",
                                     "no_diagnostics"
                                   ]
@@ -19573,6 +19578,7 @@
                                   "read_failed",
                                   "secret_pattern",
                                   "schema_invalid",
+                                  "build_failed",
                                   "oversize",
                                   "no_diagnostics"
                                 ]
@@ -21363,6 +21369,7 @@
                                   "read_failed",
                                   "secret_pattern",
                                   "schema_invalid",
+                                  "build_failed",
                                   "oversize",
                                   "no_diagnostics"
                                 ]

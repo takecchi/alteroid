@@ -925,13 +925,14 @@ jobs:
             -e ALTEROID_RUNNER_TOKEN=raw-secret -e ALTEROID_RUNNER_PORT=4519 \
             -e ALTEROID_GOOGLE_CLIENT_ID=client-id \
             -e ALTEROID_GOOGLE_CLIENT_SECRET=client-secret \
+            -e ALTEROID_DIAGNOSTICS_SINK_KEY=altk_dummy_sink_key \
             -e GH_TOKEN=gh-secret \
             alteroid:ci sh -eu -c '
               alteroid-runner &
               sleep 3
               env_of() { tr "\0" "\n" < /proc/$1/environ; }
 
-              for key in ALTEROID_GOOGLE_CLIENT_ID ALTEROID_GOOGLE_CLIENT_SECRET; do
+              for key in ALTEROID_GOOGLE_CLIENT_ID ALTEROID_GOOGLE_CLIENT_SECRET ALTEROID_DIAGNOSTICS_SINK_KEY; do
                 env_of $! | grep -q "^$key=" \
                   && { echo "ログインの鍵が残っている: $key" >&2; exit 1; }
               done

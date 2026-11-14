@@ -54,6 +54,13 @@ unset ALTEROID_RUNNER_TOKEN
 unset ALTEROID_GOOGLE_CLIENT_ID
 unset ALTEROID_GOOGLE_CLIENT_SECRET
 
+# **診断の要約の送り先の鍵も落とす。** 診断の要約を別の alteroid へ送るのはデーモンだけで、
+# runner は使わない。これは `GH_TOKEN` のような道具の鍵ではなく、**送り先の alteroid へ要約を
+# 書き込むだけの鍵**（漏れても偽の要約を送られる程度）なので、runner に残す理由が無い。
+# 普段は `alteroid credential set` で置く（デーモンの `process.env` にだけ届く）ので、
+# ここで落とすのは、器の環境変数（`x-shared-env`）へ置いてしまった場合の保険である。
+unset ALTEROID_DIAGNOSTICS_SINK_KEY
+
 # **pid 1 を tini にする（#315）。** コンテナで pid 1 になった `node` は init の仕事を
 # 持たない — 孤児として引き取った子孫（マネージャー配下の subprocess の残骸）を
 # reap（wait）せず、ゾンビのまま溜める。実測(2026-08-28 観測、Issue #315):

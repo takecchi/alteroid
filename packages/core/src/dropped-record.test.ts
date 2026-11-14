@@ -1534,6 +1534,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why: '受けた診断の要約の本体（最大 16 KiB）。跡（stderr）へ出さない。',
       },
     },
+    diagnostics_summary_send: {
+      period: { emit: 'never', why: '送った日の窓。跡の見分けに要らない（at から分かる）。' },
+      outcome: { emit: 'raw', token: 'outcome' },
+      attempt: { emit: 'raw', token: 'attempt' },
+      httpStatus: { emit: 'never', why: '受け手の HTTP 状態。理由（reason）が分類を持つので跡に要らない。' },
+      reason: { emit: 'raw', token: 'reason' },
+      sinkHost: { emit: 'never', why: '送り先の host。跡の見分けに要らない（設定から分かる）。' },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   const CONTEXT_USAGE_SHAPE_PLAN = {
@@ -1973,6 +1981,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       principalKind: 'integration',
       keyId: SECRET,
       payload: { rows: { lines: 1 } },
+    },
+    diagnostics_summary_send: {
+      type: 'diagnostics_summary_send',
+      period: { start: '2026-11-13T00:00:00.000Z', end: '2026-11-14T00:00:00.000Z' },
+      outcome: 'failed',
+      attempt: 2,
+      httpStatus: 503,
+      reason: 'http_5xx',
+      sinkHost: SECRET,
     },
   };
 
