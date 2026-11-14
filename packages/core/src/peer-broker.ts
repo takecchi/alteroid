@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import { withoutSchemaKey } from './mcp-lean-schema.js';
 import { z } from 'zod';
 
 import type { AgentEvent } from './agent-events.js';
@@ -1247,91 +1248,93 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                   '使うモデル（人間が開けた一覧の中からだけ選べる）。省略は provider の既定',
                 ),
             };
-      return createSdkMcpServer({
-        name: PEER_MCP_SERVER_NAME,
-        version: '0.1.0',
-        instructions:
-          `もう一方の provider（${providerList}）のエージェントに、作業を頼む・相談する道具。` +
-          '呼ぶかどうかは自分で判断すること（枠やコストを理由に自動で寄せる仕組みは無い）。',
-        tools: [
-          tool(
-            'peer_run',
-            `もう一方の provider（${providerList}）のエージェントを新しく1本立て、prompt を渡して作業を頼む` +
-              '（ファイルの作成・編集・コマンドの実行を含む。調査・レビュー・相談にも使える）。' +
-              '相手は別の担い手で、あなたの文脈を持たない——必要な前提（作業ディレクトリ・完了の条件）は prompt に書くこと。' +
-              approvalNote +
-              '続きは返ってきた session_id を peer_reply へ渡す。' +
-              `同時に生きているセッションは ${String(limits.maxLiveSessions)} 本までで、超えるといちばん長く使われていないものを、` +
-              `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる` +
-              '（閉じたセッションへの続きは、基本は頼めない。器の入れ替わりの前から記録が残っている相手だけ、peer_reply で続きから起こせることがある）。' +
-              (allModels.length === 0
-                ? ''
-                : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
-            { ...runShape, ...modelShape } as typeof runShape,
-            async (args, extra) => {
-              const model = (args as { model?: string }).model;
-              const signal = signalOf(extra);
-              return render(
-                await run(args.provider, args.prompt, {
-                  ...(model === undefined ? {} : { model }),
-                  ...(signal === undefined ? {} : { signal }),
-                  ...(args.run_in_background === true ? { background: true } : {}),
-                }),
-              );
-            },
-          ),
-          tool(
-            'peer_reply',
-            'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' +
-              `セッションは上限（${String(limits.maxLiveSessions)} 本）を超えたとき、または ${String(Math.round(limits.idleMs / 60_000))} 分使われなかったときに閉じる。` +
-              '閉じたセッションへの続きは、器の入れ替わりの前から記録が残っている相手なら、この呼び出しで続きから起こせることがある' +
-              '（起こせないときは「頼み直す」と返る。そのときは peer_run で新しく頼み直すこと。前の文脈は引き継がれない）。' +
-              approvalNote,
-            {
-              session_id: z.string().min(1).describe('peer_run が返した session_id'),
-              message: z.string().min(1).describe('相手への続きの指示'),
-              ...backgroundShape,
-            },
-            async (args, extra) => {
-              const signal = signalOf(extra);
-              return render(
-                await reply(args.session_id, args.message, {
-                  ...(signal === undefined ? {} : { signal }),
-                  ...(args.run_in_background === true ? { background: true } : {}),
-                }),
-              );
-            },
-          ),
-          tool(
-            'peer_approve',
-            '相手のセッションの確認待ち（peer_run / peer_reply / peer_approve が返した approval_id）に答え、続きを受け取る。' +
-              'allow / deny はあなたがその場で答える。判断できないときは escalate でユーザーへ回す' +
-              '（ユーザーの答えが出るまでこの呼び出しは返らない。出所は peer と印が付く）。',
-            {
-              approval_id: z.string().min(1).describe('確認待ちの approval_id'),
-              decision: z
-                .enum(PEER_APPROVAL_DECISIONS)
-                .describe('allow=許可 / deny=拒否 / escalate=ユーザーへ回す'),
-              message: z
-                .string()
-                .min(1)
-                .optional()
-                .describe('deny のとき相手へ伝える理由（代わりにどうしてほしいか）'),
-              ...backgroundShape,
-            },
-            async (args, extra) => {
-              const signal = signalOf(extra);
-              return render(
-                await approve(args.approval_id, args.decision, {
-                  ...(args.message === undefined ? {} : { message: args.message }),
-                  ...(signal === undefined ? {} : { signal }),
-                  ...(args.run_in_background === true ? { background: true } : {}),
-                }),
-              );
-            },
-          ),
-        ],
-      });
+      return withoutSchemaKey(
+        createSdkMcpServer({
+          name: PEER_MCP_SERVER_NAME,
+          version: '0.1.0',
+          instructions:
+            `もう一方の provider（${providerList}）のエージェントに、作業を頼む・相談する道具。` +
+            '呼ぶかどうかは自分で判断すること（枠やコストを理由に自動で寄せる仕組みは無い）。',
+          tools: [
+            tool(
+              'peer_run',
+              `もう一方の provider（${providerList}）のエージェントを新しく1本立て、prompt を渡して作業を頼む` +
+                '（ファイルの作成・編集・コマンドの実行を含む。調査・レビュー・相談にも使える）。' +
+                '相手は別の担い手で、あなたの文脈を持たない——必要な前提（作業ディレクトリ・完了の条件）は prompt に書くこと。' +
+                approvalNote +
+                '続きは返ってきた session_id を peer_reply へ渡す。' +
+                `同時に生きているセッションは ${String(limits.maxLiveSessions)} 本までで、超えるといちばん長く使われていないものを、` +
+                `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる` +
+                '（閉じたセッションへの続きは、基本は頼めない。器の入れ替わりの前から記録が残っている相手だけ、peer_reply で続きから起こせることがある）。' +
+                (allModels.length === 0
+                  ? ''
+                  : `model で開いているモデル（${allModels.join(' / ')}）を名指しできる。`),
+              { ...runShape, ...modelShape } as typeof runShape,
+              async (args, extra) => {
+                const model = (args as { model?: string }).model;
+                const signal = signalOf(extra);
+                return render(
+                  await run(args.provider, args.prompt, {
+                    ...(model === undefined ? {} : { model }),
+                    ...(signal === undefined ? {} : { signal }),
+                    ...(args.run_in_background === true ? { background: true } : {}),
+                  }),
+                );
+              },
+            ),
+            tool(
+              'peer_reply',
+              'peer_run で立てた相手のセッションへ、続きの指示を送って結果を受け取る。' +
+                `セッションは上限（${String(limits.maxLiveSessions)} 本）を超えたとき、または ${String(Math.round(limits.idleMs / 60_000))} 分使われなかったときに閉じる。` +
+                '閉じたセッションへの続きは、器の入れ替わりの前から記録が残っている相手なら、この呼び出しで続きから起こせることがある' +
+                '（起こせないときは「頼み直す」と返る。そのときは peer_run で新しく頼み直すこと。前の文脈は引き継がれない）。' +
+                approvalNote,
+              {
+                session_id: z.string().min(1).describe('peer_run が返した session_id'),
+                message: z.string().min(1).describe('相手への続きの指示'),
+                ...backgroundShape,
+              },
+              async (args, extra) => {
+                const signal = signalOf(extra);
+                return render(
+                  await reply(args.session_id, args.message, {
+                    ...(signal === undefined ? {} : { signal }),
+                    ...(args.run_in_background === true ? { background: true } : {}),
+                  }),
+                );
+              },
+            ),
+            tool(
+              'peer_approve',
+              '相手のセッションの確認待ち（peer_run / peer_reply / peer_approve が返した approval_id）に答え、続きを受け取る。' +
+                'allow / deny はあなたがその場で答える。判断できないときは escalate でユーザーへ回す' +
+                '（ユーザーの答えが出るまでこの呼び出しは返らない。出所は peer と印が付く）。',
+              {
+                approval_id: z.string().min(1).describe('確認待ちの approval_id'),
+                decision: z
+                  .enum(PEER_APPROVAL_DECISIONS)
+                  .describe('allow=許可 / deny=拒否 / escalate=ユーザーへ回す'),
+                message: z
+                  .string()
+                  .min(1)
+                  .optional()
+                  .describe('deny のとき相手へ伝える理由（代わりにどうしてほしいか）'),
+                ...backgroundShape,
+              },
+              async (args, extra) => {
+                const signal = signalOf(extra);
+                return render(
+                  await approve(args.approval_id, args.decision, {
+                    ...(args.message === undefined ? {} : { message: args.message }),
+                    ...(signal === undefined ? {} : { signal }),
+                    ...(args.run_in_background === true ? { background: true } : {}),
+                  }),
+                );
+              },
+            ),
+          ],
+        }),
+      );
     },
   };
 }
