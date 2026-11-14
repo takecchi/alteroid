@@ -807,9 +807,21 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（task〔古い行では廃止した台帳〕へ積んだ・直した・片付けた `decision`）。読む口はこの id の行も外す。行そのものは書き換えない
     hiddenEntryIds: z.array(z.string()).optional(),
   }),
+  // 別の alteroid から届いた診断の要約（`POST /mcp` の `report_diagnostics_summary`）。受信箱・`external_event` には書かない: 書くとクローンのターンが起きて、消費を調べる仕組みが消費を増やすため。
+  // 欄名を `summary` にしない: 検索欄（`JOURNAL_SEARCH_FIELDS`）に `summary` があり、pg は `entry->>'summary'` が入れ子の本体を JSON の文字列にして `q=` に当ててしまう（JS 側は当てない）。
+  // `diagnostics` を `diagnosticsSummarySchema` にしない: 型の定義が日誌の型の一覧（`SUMMARY_JOURNAL_TYPES`）をこのファイルから引くので循環する。受け入れの検査は入口（デーモン）が `diagnosticsSummarySchema` でする。読む側が版のずれで行ごと読めなくならない利点もある。
+  z.object({
+    type: z.literal('diagnostics_summary'),
+    id: z.string(),
+    at: isoDateTime,
+    source: z.string(),
+    principalKind: z.enum(['integration', 'operator', 'account']),
+    keyId: z.string().optional(),
+    diagnostics: z.record(z.string(), z.unknown()),
+  }),
 ]);
 
-export type JournalEntry = z.infer<typeof journalEntrySchema>;
+export type JournalEntry =z.infer<typeof journalEntrySchema>;
 
 // 日誌の枝そのものから導く: 道具 `github_observation_record` の検証を日誌の枝と食い違わせないように、手で書き直さないため
 export const githubObservationInputSchema = (
@@ -865,6 +877,7 @@ const journalEntryTypeNames = {
   http_timing: true,
   github_observation: true,
   conversation_deleted: true,
+  diagnostics_summary: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
