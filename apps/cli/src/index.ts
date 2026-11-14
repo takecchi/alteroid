@@ -329,6 +329,10 @@ program
   .option('--layer <layer>', '誰が（clone / manager）')
   .option('--site <site>', 'どこで（session / distill / peer）')
   .option('--token <id>', 'どの認証トークンで（alteroid token list の id）')
+  .option(
+    '--json',
+    '整形せず、デーモンの応答を JSON で出す（resets と、台帳の date の時間帯が取れないことの明示つき）',
+  )
   .action(
     async (options: {
       from?: string;
@@ -337,10 +341,32 @@ program
       layer?: string;
       site?: string;
       token?: string;
+      json?: boolean;
     }) => {
       await (await import('./usage.js')).usageCommand(options);
     },
   );
+
+const diagnosticsCommand = program
+  .command('diagnostics')
+  .description('別の alteroid の診断の材料（日誌の診断行）を機械可読に書き出す');
+
+diagnosticsCommand
+  .command('export')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsExport)
+  .description(
+    '日誌の診断行（turn_timing / turn_usage / context_usage / http_timing）を1行1JSONで標準出力へ書き出す（頁の進行と総数は標準エラー。時刻は UTC）',
+  )
+  .option(
+    '--type <types>',
+    '診断の型だけ（カンマ区切り。既定 turn_timing,turn_usage,context_usage）',
+  )
+  .option('--since <iso>', '窓の始点（ISO 8601。省略すると終点の 1 日前）')
+  .option('--until <iso>', '窓の終点（ISO 8601。省略すると今、--since だけなら 1 日後）')
+  .option('--page-size <n>', '1 頁に読む行数（1〜1000。既定 500）')
+  .action(async (options: { type?: string; since?: string; until?: string; pageSize?: string }) => {
+    await (await import('./diagnostics.js')).diagnosticsExportCommand(options);
+  });
 
 const runnersProgram = program
   .command('runners')

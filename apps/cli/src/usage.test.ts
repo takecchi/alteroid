@@ -1,7 +1,7 @@
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { captureStderr, captureStdout } from './test-support.js';
 import { describeUsageDateOrder, renderUsage, usageCommand, type UsageView } from './usage.js';
 
 vi.mock('./target.js', async (importOriginal) => ({
@@ -709,5 +709,98 @@ describe('renderUsage の無報告の provider（unmeteredRows）', () => {
     expect(renderUsage(aggregate({ ...base, unmeteredRows: [] }))).toBe(without);
     expect(without).not.toContain('報告しない provider');
     expect(without).toBe(EXPECTED_WITHOUT_UNMETERED);
+  });
+});
+
+describe('usageCommand --json（診断の材料として機械が読む口）', () => {
+  const RESETS = [
+    { layer: 'manager', managerId: 'm1', resets: 2, lastResetAt: '2026-08-14T01:00:00.000Z' },
+  ];
+
+  it('--json を付けない出力は、これまでの整形出力と1文字も変わらない', async () => {
+    const body = aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] });
+    replies.push({ status: 200, body }, { status: 200, body });
+    const readPlain = captureStdout();
+    await usageCommand({});
+    const plain = readPlain();
+    vi.restoreAllMocks();
+    const readExplicit = captureStdout();
+    await usageCommand({ json: false });
+
+    expect(readExplicit()).toBe(plain);
+    expect(plain).toContain('合計 $1.00');
+    expect(plain).not.toContain('ledgerDateTimeZone');
+  });
+
+  it('応答を欄ごと素通しし、絞り込みの引数もそのまま /usage へ渡す', async () => {
+    const body = {
+      ...aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] }),
+      today: '2026-08-14',
+      resets: RESETS,
+    };
+    replies.push({ status: 200, body });
+    const read = captureStdout();
+
+    await usageCommand({
+      json: true,
+      from: '2026-08-01',
+      manager: 'm1',
+      layer: 'manager',
+      site: 'session',
+    });
+
+    const out = read();
+    expect(out.endsWith('\n')).toBe(true);
+    expect(out.trim().split('\n')).toHaveLength(1);
+    const parsed = JSON.parse(out) as Record<string, unknown>;
+    expect(parsed).toMatchObject(body);
+    expect(out).not.toContain('合計');
+    const url = new URL(sent[0]!.url);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      from: '2026-08-01',
+      managerId: 'm1',
+      layer: 'manager',
+      site: 'session',
+    });
+  });
+
+  it('resets を必ず出す: 応答に無い古いデーモンでは [] ではなく null（無かったと取れなかったを分ける）', async () => {
+    replies.push({ status: 200, body: aggregate({ rows: [] }) });
+    const read = captureStdout();
+    await usageCommand({ json: true });
+    expect((JSON.parse(read()) as { resets: unknown }).resets).toBeNull();
+
+    replies.push({ status: 200, body: { ...aggregate({ rows: [] }), resets: [] } });
+    const readEmpty = captureStdout();
+    await usageCommand({ json: true });
+    expect((JSON.parse(readEmpty()) as { resets: unknown }).resets).toEqual([]);
+  });
+
+  it('台帳の date の時間帯は取れないと明示し、推測の TZ を埋めない', async () => {
+    replies.push({ status: 200, body: aggregate({ rows: [] }) });
+    const read = captureStdout();
+
+    await usageCommand({ json: true });
+
+    const parsed = JSON.parse(read()) as { ledgerDateTimeZone: { state: string; note: string } };
+    expect(parsed.ledgerDateTimeZone.state).toBe('unavailable');
+    expect(parsed.ledgerDateTimeZone.note).toContain('取れない');
+    expect(JSON.stringify(parsed.ledgerDateTimeZone)).not.toMatch(/Asia|Tokyo|UTC\+|\+09/);
+  });
+
+  it('未ログインの案内は標準エラーへ出し、標準出力へは何も出さない（| jq を壊さない）', async () => {
+    vi.mocked(target.resolveTarget).mockResolvedValueOnce({
+      baseUrl: '',
+      headers: {},
+      note: 'ログインしていません',
+      remote: false,
+    });
+    const readOut = captureStdout();
+    const readErr = captureStderr();
+
+    await usageCommand({ json: true });
+
+    expect(readOut()).toBe('');
+    expect(readErr()).toContain('ログインしていません');
   });
 });

@@ -405,6 +405,18 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     return command.commands.map((c) => c.name()).sort();
   }
 
+  it('alteroid diagnostics は export だけを持ち、窓と型の絞りを持つ', () => {
+    expect(subcommandNames('diagnostics')).toEqual(['export']);
+    const diagnostics = program.commands.find((c) => c.name() === 'diagnostics');
+    const exportCommand = diagnostics?.commands.find((c) => c.name() === 'export');
+    expect((exportCommand?.options ?? []).map((o) => o.long).sort()).toEqual([
+      '--page-size',
+      '--since',
+      '--type',
+      '--until',
+    ]);
+  });
+
   it('alteroid practice は list / show / edit / set / remove / history を持つ（memory + 版の履歴。#1309）', () => {
     expect(subcommandNames('practice')).toEqual([
       'edit',
