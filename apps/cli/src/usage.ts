@@ -1,4 +1,4 @@
-import { stdout } from './terminal-out.js';
+import { stderr, stdout } from './terminal-out.js';
 
 import {
   ACCOUNT_USAGE_TITLE,
@@ -32,6 +32,8 @@ export interface UsageOptions {
   site?: string;
   // `narrowUsageAxis` を通さない: 値の集合が閉じていない（プールの中身は器ごとに違う）ため
   token?: string;
+  // 整形せず、デーモンの応答をそのまま JSON で標準出力へ出す（診断の材料として機械が読む口）
+  json?: boolean;
 }
 
 export function narrowUsageAxis<T extends string>(
@@ -55,7 +57,9 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   }
   const target = await resolveTarget();
   if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
+    // `--json` の案内を標準出力へ出さない: `| jq` へ渡せなくなるため
+    if (options.json === true) stderr.write(`${target.note}\n`);
+    else stdout.write(`${target.note}\n`);
     return;
   }
   const client = createClient(target.baseUrl, target.headers);
@@ -81,11 +85,38 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   }
   const aggregate = await response.json();
   const dateOrderNotice = describeUsageDateOrder(options.from, options.to);
+  if (options.json === true) {
+    // 応答を欄ごと素通しする（`breakdown` / `today` も落とさない）。`writeRaw` を使う: 端末向けの掃除は JSON の中身を変えるため
+    if (dateOrderNotice !== null) stderr.write(`${dateOrderNotice}\n`);
+    stdout.writeRaw(`${JSON.stringify(withDiagnosticsFields(aggregate))}\n`);
+    return;
+  }
   if (dateOrderNotice !== null) {
     stdout.write(`${dateOrderNotice}\n`);
   }
   stdout.write(`${renderUsage(aggregate)}\n`);
 }
+
+// 台帳の `date` の時間帯は、API の応答のどこにも載っていない（`today` は日付だけ。`/health` / `/status` にも無い）。
+// 推測の TZ を埋めない: 器の既定（Asia/Tokyo）が変わっている構成で、嘘の時間帯を機械が信じるため。API に欄を足さず「取れない」と出す
+export const LEDGER_DATE_TIMEZONE_UNAVAILABLE = {
+  state: 'unavailable',
+  note:
+    '台帳の date はサーバのローカル時刻（TZ）で切った日付で、その TZ は API の応答から取れない。' +
+    '日誌の at・窓は UTC のため、日付を突き合わせるときは日誌側をサーバの TZ へ直す必要がある',
+} as const;
+
+// `resets` を必ず出す: 数え直しの件数は累積の信用に関わり、欄ごと無いと「0 件」と読み分けられないため。
+// 応答に無い（古いデーモン）ときは [] ではなく null: 「無かった」と「取れなかった」を分ける
+export function withDiagnosticsFields(aggregate: UsageJsonSource): Record<string, unknown> {
+  return {
+    ...aggregate,
+    resets: aggregate.resets ?? null,
+    ledgerDateTimeZone: LEDGER_DATE_TIMEZONE_UNAVAILABLE,
+  };
+}
+
+type UsageJsonSource = { resets?: unknown } & Record<string, unknown>;
 
 export { describeUsageDateOrder };
 

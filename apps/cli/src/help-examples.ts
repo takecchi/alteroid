@@ -16,6 +16,12 @@ export const HELP_EXAMPLES = {
     'alteroid usage                                      # 全期間',
     'alteroid usage --from 2026-09-01 --to 2026-09-30    # 日付の範囲',
     'alteroid usage --layer clone --site session         # クローンの会話の分だけ',
+    'alteroid usage --json                               # 整形せず JSON で（機械が読む）',
+  ),
+  diagnosticsExport: examples(
+    'alteroid diagnostics export > diag.jsonl                        # 直近 1 日の診断行',
+    'alteroid diagnostics export --since 2026-11-01T00:00:00Z --until 2026-11-03T00:00:00Z',
+    'alteroid diagnostics export --type turn_usage,http_timing       # 型を選ぶ（診断の型だけ）',
   ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',
