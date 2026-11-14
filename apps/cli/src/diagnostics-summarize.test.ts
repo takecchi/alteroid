@@ -5,8 +5,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import {
+  buildDiagnosticsSummary,
+  diagnosticsSummarySchema,
+  parseJournalJsonl,
+} from '@alteroid/core';
+
 import { diagnosticsSummarizeCommand } from './diagnostics-summarize.js';
 import { captureStderr, captureStdout } from './test-support.js';
+import { withDiagnosticsFields } from './usage.js';
 
 const turnUsage = (managerId: string) => ({
   type: 'turn_usage',
@@ -124,5 +131,30 @@ describe('diagnosticsSummarizeCommand', () => {
     expect(
       (await failureOf(diagnosticsSummarizeCommand({ journal, usage: bad }))).message,
     ).toContain('JSON として読めません');
+  });
+});
+
+describe('usage --json の ledgerDateTimeZone と要約の型が一致する', () => {
+  // 実際の `usage --json` の組み立て（`withDiagnosticsFields`）の出力をそのまま渡す
+  const summarize = (ledgerTimeZone: unknown) => {
+    const usage = withDiagnosticsFields({ rows: [], ledgerTimeZone });
+    return buildDiagnosticsSummary(
+      { journal: parseJournalJsonl(''), usage },
+      { now: new Date('2026-11-14T00:00:00.000Z') },
+    );
+  };
+
+  it('known（デーモンが申告した IANA 名）は known・source=usage で出る', () => {
+    const s = summarize('Asia/Tokyo');
+    expect(s.ledgerDateTimeZone).toEqual({ state: 'known', name: 'Asia/Tokyo', source: 'usage' });
+    expect(diagnosticsSummarySchema.safeParse(s).success).toBe(true);
+  });
+
+  it('unavailable（欄が無い・null・空）は unavailable で出る。推測の TZ を埋めない', () => {
+    for (const value of [undefined, null, '']) {
+      const s = summarize(value);
+      expect(s.ledgerDateTimeZone).toEqual({ state: 'unavailable', reason: 'not_declared' });
+      expect(diagnosticsSummarySchema.safeParse(s).success).toBe(true);
+    }
   });
 });
