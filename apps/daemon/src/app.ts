@@ -68,6 +68,8 @@ export interface AppDeps {
   token: string;
   shutdown: () => void;
   now?: () => Date;
+  // `now` と同じ差し替え口: `/usage` の `ledgerTimeZone` が読む TZ 名の解決（既定は実行時の `Intl`）。テストが TZ の取れない状態を作るため
+  resolveTimeZone?: () => string | undefined;
   attachmentLimits?: AttachmentLimits;
   /** 要求ごとの時間の受け手（#5089）。無くても `Server-Timing` は付ける */
   httpTiming?: HttpTimingRecorder;

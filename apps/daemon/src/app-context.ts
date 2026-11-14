@@ -449,6 +449,7 @@ export function createAppContext(deps: AppDeps) {
     description: '認証は無効（未設定）',
   };
   const clock = deps.now ?? (() => new Date());
+  const resolveTimeZone = deps.resolveTimeZone;
   const authService: AuthService =
     deps.auth?.service ??
     createAuthService({
@@ -618,6 +619,7 @@ export function createAppContext(deps: AppDeps) {
     topologyDebounceMs,
     authPlan,
     clock,
+    resolveTimeZone,
     authService,
     watchSseCredential,
     chatEventPump,
