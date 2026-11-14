@@ -21621,7 +21621,7 @@
         "operationId": "postIntegrationKeys",
         "tags": ["integration-keys"],
         "summary": "連携の鍵を発行する",
-        "description": "外のサービスへ渡す鍵を発行する。**鍵の種類そのものが「固定の 1 source で外部イベントを送る」という 1 つの能力だけを表す**（選べる許可の一覧は無い）。通れるのは `POST /events`（本文の source が鍵の source と一致するとき）と `POST /events/:source`（パスが一致するとき）、MCP の報告 `POST /mcp`（道具は `report_problem` の1本。source は鍵の source に固定）、自分の添付を上げる `POST /attachments` だけで、それ以外の口は **すべて 403**（鍵の管理の口を含む）。本文は既定で 1 MiB、回数は既定で 60 回/分まで（鍵ごとに上書きできる。この上限は連携の鍵にだけ掛かる）。**値（`altk_...`）はこの応答で1度だけ返し、後からは取り出せない**（保存は sha256 だけ）。",
+        "description": "外のサービスへ渡す鍵を発行する。**鍵の種類そのものが「固定の 1 source で外部イベントを送る」という 1 つの能力だけを表す**（選べる許可の一覧は無い）。通れるのは `POST /events`（本文の source が鍵の source と一致するとき）と `POST /events/:source`（パスが一致するとき）、MCP の報告 `POST /mcp`（道具は `report_problem` と `report_diagnostics_summary` の2本。source は鍵の source に固定）、自分の添付を上げる `POST /attachments` だけで、それ以外の口は **すべて 403**（鍵の管理の口を含む）。本文は既定で 1 MiB、回数は既定で 60 回/分まで（鍵ごとに上書きできる。この上限は連携の鍵にだけ掛かる）。**値（`altk_...`）はこの応答で1度だけ返し、後からは取り出せない**（保存は sha256 だけ）。",
         "responses": {
           "200": {
             "description": "発行した。`value` はこの応答でだけ見える。",
@@ -22550,8 +22550,8 @@
       "post": {
         "operationId": "postMcp",
         "tags": ["mcp"],
-        "summary": "MCP（Streamable HTTP、ステートレス）。道具は report_problem の1本だけ",
-        "description": "外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` の1本だけ（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。",
+        "summary": "MCP（Streamable HTTP、ステートレス）。道具は report_problem と report_diagnostics_summary の2本だけ",
+        "description": "外の AI が MCP の道具で、クローンの受信箱へ問題を報告する（`report_problem`）口と、別の alteroid の消費の診断の要約を日誌へ送る（`report_diagnostics_summary`）口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` と `report_diagnostics_summary` の2本だけ（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは何も積まず、ツールエラー（`isError: true`）で返す。`report_diagnostics_summary` は受信箱へ積まず（クローンを起こさない）、strict の型・秘密の走査に通らない要約や period が null の要約は何も積まずに断り、日誌の `diagnostics_summary` の行として積む（読むのは `GET /journal?type=diagnostics_summary`）。応答の本文は JSON-RPC。",
         "responses": {
           "200": {
             "description": "JSON-RPC の応答（ツールエラーも 200 の `isError: true` で返る）。",

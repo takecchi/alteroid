@@ -186,7 +186,11 @@ export function mcpRoutes(ctx: AppContext) {
             }),
           );
           if (result.kind !== 'accepted') return toolError(result.message);
-          const structuredContent = { ok: true as const, id: result.id, duplicate: result.duplicate };
+          const structuredContent = {
+            ok: true as const,
+            id: result.id,
+            duplicate: result.duplicate,
+          };
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }],
             structuredContent,

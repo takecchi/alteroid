@@ -130,8 +130,8 @@ beforeEach(() => {
   persistOutcome = 'persisted';
 });
 
-describe('POST /mcp: 道具は report_problem の1本だけ', () => {
-  it('initialize と tools/list: 道具は1本。未知の道具の tools/call と他の能力（資源・プロンプト）は拒否', async () => {
+describe('POST /mcp: 道具は report_problem と report_diagnostics_summary の2本だけ', () => {
+  it('initialize と tools/list: 道具は2本。未知の道具の tools/call と他の能力（資源・プロンプト）は拒否', async () => {
     const app = buildApp();
     const { value } = await issue(app);
     const h = bearer(value);
@@ -145,7 +145,10 @@ describe('POST /mcp: 道具は report_problem の1本だけ', () => {
     expect(JSON.stringify(init.json.result)).not.toContain(value);
 
     const list = await rpc(app, h, 'tools/list');
-    expect(list.json.result?.tools?.map((t) => t.name)).toEqual(['report_problem']);
+    expect(list.json.result?.tools?.map((t) => t.name)).toEqual([
+      'report_problem',
+      'report_diagnostics_summary',
+    ]);
     expect((await rpc(app, h, 'ping')).status).toBe(200);
 
     const unknown = await rpc(app, h, 'tools/call', { name: 'list_inbox', arguments: {} });
