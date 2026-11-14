@@ -109,7 +109,10 @@ describe('クローン — MCP 登録の変更を走行中のセッションへ�
 
   it('差し替えが失敗しても落ちず、次のセッションから効く旨を日誌に残し、次のターンも通る', async () => {
     const { fn } = fakeSdk(undefined, {
-      setMcpServers: () => Promise.reject(new Error('control channel が閉じている')),
+      setMcpServers: () =>
+        Promise.reject(
+          new Error('control channel が閉じている: Authorization: Bearer altk_dummy-secret'),
+        ),
     });
     const stores = createMemoryStores();
     const mcpServerService = createMcpServerService({ stores });
@@ -126,7 +129,11 @@ describe('クローン — MCP 登録の変更を走行中のセッションへ�
       .toBe(true);
     const failure = (await journalTexts(stores)).find((t) => t.includes('反映できなかった'));
     expect(failure).toContain('次のセッションから効く');
-    expect(failure).toContain('control channel が閉じている');
+    expect(failure).toContain('例外の種類: Error');
+    expect(failure, '例外の文面（資格が混ざりうる）が日誌に載っている').not.toContain(
+      'altk_dummy-secret',
+    );
+    expect(failure).not.toContain('control channel が閉じている');
 
     const before = events.filter((e) => e.type === 'done').length;
     clone.post(humanMessage('もう1回'));

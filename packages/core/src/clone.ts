@@ -5649,7 +5649,7 @@ class Clone implements CloneHost {
     } catch (error) {
       await this.#journalSelf(
         'outbound',
-        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映できなかった（理由: ${reasonOf(error)}）。次のセッションから効く。`,
+        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映できなかった（例外の種類: ${error instanceof Error ? error.name : typeof error}。文面は載せない: 登録の URL やヘッダの資格が混ざりうる）。次のセッションから効く。`,
       );
     }
   }
