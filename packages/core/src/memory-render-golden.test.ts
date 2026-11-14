@@ -9,8 +9,8 @@ import { MEMORY_BAKE_FIXTURES } from './memory-bake.fixtures.test-support.js';
 // 同じ入力から出した出力の sha256 と文字数である。切り出しはこの出力を変えてはいけない（`GET /self/prompt` の `indexChars` は同じ関数が焼いた断片の長さを返す）。
 const GOLDEN: Record<keyof typeof MEMORY_BAKE_FIXTURES, { chars: number; sha256: string }> = {
   mixed: {
-    chars: 1441,
-    sha256: 'ab8ab94348583efb8b4d6d1f93c3069a157e97fb7fe18a0e7652efe5323072fc',
+    chars: 1507,
+    sha256: '85582a43e9007c0d114299aa5fa04c0447ac0b02c5bf3db6362a43afe1cbadd3',
   },
   overCardBudget: {
     chars: 62759,

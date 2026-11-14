@@ -31,7 +31,7 @@ export function documentsMixed(): MemoryPart[] {
     },
     {
       slug: 'broken',
-      content: '---\ntype: [壊れている\n---\n# 壊れた\n本文',
+      content: '---\nunknown-key: 壊れている\n---\n# 壊れた\n本文',
     },
     {
       slug: 'index-doc',
