@@ -220,5 +220,16 @@ export function renderDiagnosticsAnalysis(a: DiagnosticsAnalysis): string {
       );
     }
   }
+
+  // 見立ての材料の索引。値の評価（しきい値・良し悪し）は書かない: 材料が揃ってから人間が決める
+  out.push(
+    '',
+    '## 見立て別に見る節（材料の索引。判定はしない）',
+    '  キャッシュの効き: 1（読み出し率・read÷creation。turn_timing と turn_usage の2つの出所）',
+    '  プロンプトの大きさ: 4（system / memory / mcp / total の日別の中央値と最大、MCP サーバ別）',
+    '  同じ合図の配り直し: 2（起点別・batchSize・manager_message のターンの開始間隔）と resets・5（compaction）',
+    '  委譲の多さ: 3（層・場所別のターンあたり、managerId 別の cache read）',
+    '  台帳だけの膨らみ: resets（台帳と日誌）・7（台帳÷日誌の日別）・6（結べない増分）',
+  );
   return out.join('\n');
 }
