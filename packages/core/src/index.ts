@@ -26,6 +26,20 @@ export * from './usage.js';
 // 診断の日誌と台帳の集計（純関数。zod を持ち込まない）。`apps/web` は値で import できないバレルからだけ出す
 export * from './diagnostics-analysis.js';
 export { describeTimeZone, renderDiagnosticsAnalysis } from './diagnostics-analysis-format.js';
+// 診断の要約（別の alteroid へ送る本体の型と生成。zod を使う。バレルからだけ出す）
+export {
+  DIAGNOSTICS_SUMMARY_DEFAULT_TOP,
+  DIAGNOSTICS_SUMMARY_MAX_BYTES,
+  DIAGNOSTICS_SUMMARY_MAX_TOP,
+  DiagnosticsSummarySecretError,
+  buildDiagnosticsSummary,
+  diagnosticsSummarySchema,
+  findSecretPatterns,
+  jsonByteLength,
+  type BuildDiagnosticsSummaryInput,
+  type BuildDiagnosticsSummaryOptions,
+  type DiagnosticsSummary,
+} from './diagnostics-summary.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
 export {
   accountUsageStateSchema,

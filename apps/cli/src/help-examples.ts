@@ -29,6 +29,11 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json --ledger-tz Asia/Tokyo',
     'alteroid diagnostics analyze --journal diag.jsonl --json                  # 機械可読',
   ),
+  diagnosticsSummarize: examples(
+    'alteroid diagnostics summarize --journal diag.jsonl > summary.json                     # 送る要約（JSON）。標準エラーに大きさ',
+    'alteroid diagnostics summarize --journal diag.jsonl --usage usage.json --ledger-tz Asia/Tokyo',
+    'alteroid diagnostics summarize --journal diag.jsonl --top 5                            # 委譲の上位を 5 件に',
+  ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',
     'alteroid inbox remove --types timer --reason "古い定期の合図"            # 試算（消さない）',

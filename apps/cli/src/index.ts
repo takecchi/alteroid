@@ -378,6 +378,25 @@ diagnosticsCommand
   );
 
 diagnosticsCommand
+  .command('summarize')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsSummarize)
+  .description(
+    '`diagnostics export` の出力（と任意で `usage --json` の出力）から、別の alteroid へ送る診断の要約（JSON）を標準出力へ出す。出力が送る内容のすべて（記憶・会話・鍵は載らない。秘密らしい文字列があれば断る。通信しない）',
+  )
+  .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
+  .option('--usage <file>', '`usage --json` の出力（任意）')
+  .option(
+    '--ledger-tz <iana>',
+    '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う）',
+  )
+  .option('--top <n>', '委譲の上位に出す件数（1〜20。既定 10）')
+  .action(
+    async (options: { journal?: string; usage?: string; ledgerTz?: string; top?: string }) => {
+      await (await import('./diagnostics-summarize.js')).diagnosticsSummarizeCommand(options);
+    },
+  );
+
+diagnosticsCommand
   .command('export')
   .addHelpText('after', HELP_EXAMPLES.diagnosticsExport)
   .description(
