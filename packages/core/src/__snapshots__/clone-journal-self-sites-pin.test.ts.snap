@@ -110,5 +110,8 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#applySessionStarted 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}開き直した: \${reopened.previousSessionId ?? '（古い id は不明）'}\` + \` → \${event.sessionId}（\${describeReopenArchive(reopened.archive)}）\`",
   "#applyRateLimit 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}同じ壁を跨いで畳んだ回に、\` + \`\${crossFold.folded.size} 本の異なる会話が当たっている\` + '（前回この壁の遷移を記録してから、いまの遷移までのあいだ）。'",
   "#journalSelf role text",
+  "#reflectMcpServers 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が変わったが、この provider は走行中のセッションへ置き直せない。次のセッションから効く。\`",
+  "#reflectMcpServers 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映した（開き直していない。追加: \${list(applied.added)}／除去: \${list(applied.removed)}／接続失敗: \${list(applied.failed)}）\` + (applied.retained.length === 0 ? '' : \`。登録から外れたが、このセッションには残る: \${list(applied.retained)}（外れるのは次のセッションから）\`)",
+  "#reflectMcpServers 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映できなかった（理由: \${reasonOf(error)}）。次のセッションから効く。\`",
 ]
 `;

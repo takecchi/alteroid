@@ -46,6 +46,7 @@ export class ClaudeCloneDriver implements AgentCloneDriver {
   open(spec: AgentCloneSessionSpec): AgentCloneSession {
     const { mcpServer, file } = stageMcpConfig(spec.tools, spec.externalMcpServers);
     const removeMcpConfig = (): void => file?.remove();
+    const startupExternalNames = file === undefined ? [] : Object.keys(spec.externalMcpServers);
     let q: Query;
     try {
       q = this.#queryFn({
@@ -85,6 +86,18 @@ export class ClaudeCloneDriver implements AgentCloneDriver {
         } finally {
           removeMcpConfig();
         }
+      },
+      // `mcpServer`（自作のインプロセス MCP）を毎回合成して渡す: `setMcpServers` は渡した名前以外の動的な登録を外すので、省くと自分の道具が消える
+      // 資格は control channel（標準入力）で渡り、argv にもファイルにも書かない
+      // 起動時のファイル（`--mcp-config`）の登録は、袋から外しても CLI が外さない（実機で確認。0.3.318）: 外れた名前は `retained` で申告し、黙って「反映した」にしない
+      setExternalMcpServers: async (servers) => {
+        const result = await q.setMcpServers(cloneMcpServers(mcpServer, servers));
+        return {
+          added: result.added,
+          removed: result.removed,
+          failed: Object.keys(result.errors),
+          retained: startupExternalNames.filter((name) => !(name in servers)),
+        };
       },
       interrupt: () => q.interrupt(),
       close: () => {

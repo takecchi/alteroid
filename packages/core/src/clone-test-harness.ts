@@ -1,5 +1,11 @@
 import { afterEach, expect } from 'vitest';
-import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  query as sdkQuery,
+  McpServerConfig,
+  Options,
+  Query,
+  SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { createClone } from './clone.js';
 import type { DelegatedPermissionRuleService } from './delegated-permission-rules.js';
 import type { CloneHost } from './host.js';
@@ -57,9 +63,15 @@ export function fakeSdk(
     initExtras?: (callIndex: number) => Record<string, unknown>;
     /** init を出す前に待たせる（init が届かない窓を作る） */
     beforeInit?: (callIndex: number) => Promise<void> | undefined;
+    /** `Query.setMcpServers` の答え。省略は「渡された名前をすべて追加」 */
+    setMcpServers?: (
+      servers: Record<string, McpServerConfig>,
+    ) => Promise<{ added: string[]; removed: string[]; errors: Record<string, string> }>;
   } = {},
 ) {
   const calls: FakeCall[] = [];
+  /** `calls` と同じ添字で、`Query.setMcpServers` に渡された袋を呼ばれた順に持つ */
+  const mcpSetCalls: Record<string, McpServerConfig>[][] = [];
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     const call: FakeCall = {
@@ -70,6 +82,7 @@ export function fakeSdk(
     };
     const callIndex = calls.length;
     calls.push(call);
+    mcpSetCalls.push([]);
 
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       if (options.failWith !== undefined) throw new Error(options.failWith);
@@ -172,13 +185,18 @@ export function fakeSdk(
     return Object.assign(generator, {
       close: () => undefined,
       interrupt: async () => undefined,
+      setMcpServers: async (servers: Record<string, McpServerConfig>) => {
+        mcpSetCalls[callIndex]?.push(servers);
+        if (options.setMcpServers !== undefined) return options.setMcpServers(servers);
+        return { added: Object.keys(servers), removed: [], errors: {} };
+      },
       ...(options.getContextUsage === undefined
         ? {}
         : { getContextUsage: async () => options.getContextUsage!(callIndex) }),
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
 
-  return { fn, calls };
+  return { fn, calls, mcpSetCalls };
 }
 
 export interface Setup {
