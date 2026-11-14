@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import type { AgentContextUsage } from './agent-session.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
+import { stripSchemaKey } from './mcp-lean-schema.js';
 import type { McpServers } from './mcp-servers.js';
 import { parseMemoryFrontmatter, resolveMemoryDocKind } from './memory-frontmatter.js';
 import type { MemoryPart } from './memory.js';
@@ -68,7 +69,21 @@ export interface PromptSnapshotSession {
   };
   readonly tools: readonly PromptSnapshotTool[];
   readonly builtinTools: SnapshotAxis<never>;
+  /**
+   * いまのセッションに効いている外部 MCP の登録（名前と種別だけ）。セッション開始時の値で始まり、走行中に登録が差し替わったら
+   * `updateExternalMcpServers` が差し替え後の値へ合わせる（モデルに実際に見える登録と食い違う状態を黙って残さない）。
+   * `builtAt` と `systemPrompt` は焼いたまま変えない。
+   */
   readonly externalMcpServers: readonly PromptSnapshotExternalMcpServer[];
+  /** null = 走行中の差し替えはまだ無い（`externalMcpServers` はセッション開始時の値）。差し替えた時刻と、その結果の名前 */
+  readonly externalMcpServersLive: {
+    readonly at: string;
+    /** 登録にあるが接続できなかった名前 */
+    readonly failed: readonly string[];
+    /** 登録から外れたが、起動時の登録ファイルから来たのでこのセッションには残る名前 */
+    readonly retained: readonly string[];
+  } | null;
+  /** セッション開始時の値。plugin を走行中に置き直す経路は無い（開き直したときに変わる） */
   readonly plugins: readonly { readonly name: string }[];
 }
 
@@ -180,16 +195,19 @@ interface CloneToolDefinition {
  */
 export function describeCloneTools(tools: readonly CloneToolDefinition[]): PromptSnapshotTool[] {
   return tools.map((entry) => {
-    const inputSchema = JSON.parse(
-      JSON.stringify(
-        z.toJSONSchema(
-          '_zod' in (entry.inputSchema as object)
-            ? (entry.inputSchema as unknown as z.ZodType)
-            : z.object(entry.inputSchema as z.ZodRawShape),
-          { io: 'input', unrepresentable: 'any' },
+    // `$schema` を外す: モデルへ渡す `tools/list` からは外してある（`withoutSchemaKey`）。「モデルに見える定義」と大きさを合わせるため、同じ `stripSchemaKey` を使う
+    const inputSchema = stripSchemaKey(
+      JSON.parse(
+        JSON.stringify(
+          z.toJSONSchema(
+            '_zod' in (entry.inputSchema as object)
+              ? (entry.inputSchema as unknown as z.ZodType)
+              : z.object(entry.inputSchema as z.ZodRawShape),
+            { io: 'input', unrepresentable: 'any' },
+          ),
         ),
-      ),
-    ) as unknown;
+      ) as unknown,
+    );
     return {
       name: entry.name,
       description: entry.description,
@@ -264,6 +282,7 @@ export class ClonePromptSnapshotState {
         tools: describeCloneTools(input.tools()),
         builtinTools: BUILTIN_TOOLS_UNAVAILABLE_AXIS,
         externalMcpServers: describeExternalMcpServers(input.externalMcpServers),
+        externalMcpServersLive: null,
         plugins: input.pluginPaths.map((path) => ({ name: basename(path) })),
       });
     } catch (error) {
@@ -280,6 +299,29 @@ export class ClonePromptSnapshotState {
     const session = this.#session;
     if (session === null || !session.ok || session.sessionId !== null || sessionId === null) return;
     this.#session = deepFreeze({ ...session, sessionId });
+  }
+
+  /**
+   * 走行中のセッションへ登録を置き直せたとき、その欄だけを差し替え後に合わせる。接続設定の値は読まない（名前と種別だけ）。
+   * 残っている名前（`retained`）は種別を差し替え前の値から引く（登録から外れて、設定の値が手元に無いため）。
+   */
+  updateExternalMcpServers(
+    servers: McpServers,
+    applied: { failed: readonly string[]; retained: readonly string[] },
+    at: string,
+  ): void {
+    const session = this.#session;
+    if (session === null || !session.ok) return;
+    const kept = describeExternalMcpServers(servers);
+    const keptNames = new Set(kept.map((server) => server.name));
+    const retained = session.externalMcpServers.filter(
+      (server) => applied.retained.includes(server.name) && !keptNames.has(server.name),
+    );
+    this.#session = deepFreeze({
+      ...session,
+      externalMcpServers: [...kept, ...retained],
+      externalMcpServersLive: { at, failed: [...applied.failed], retained: [...applied.retained] },
+    });
   }
 
   recordContextUsage(usage: AgentContextUsage, at: string): void {

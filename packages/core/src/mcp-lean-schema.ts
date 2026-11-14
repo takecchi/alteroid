@@ -7,7 +7,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 // SDK に落とす口が無いので、公開の `connect(transport)` の送信側で `tools/list` の応答だけから `$schema` を外す
 // （SDK の非公開の構造には触れない）。
 
-function stripSchemaKey(schema: unknown): unknown {
+export function stripSchemaKey(schema: unknown): unknown {
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return schema;
   const rest = { ...(schema as Record<string, unknown>) };
   delete rest.$schema;

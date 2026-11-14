@@ -5678,7 +5678,12 @@ class Clone implements CloneHost {
       return;
     }
     try {
-      const applied = await session.setExternalMcpServers(await this.#externalMcpServers());
+      const servers = await this.#externalMcpServers();
+      const applied = await session.setExternalMcpServers(servers);
+      // 置き直せたときだけ、モデルに見える登録に合わせる（差し替わった後のセッションの欄は触らない）
+      if (this.#sdkSession.query === session) {
+        this.#promptSnapshot.updateExternalMcpServers(servers, applied, new Date().toISOString());
+      }
       const list = (names: readonly string[]): string =>
         names.length === 0 ? 'なし' : names.join('、');
       await this.#journalSelf(
