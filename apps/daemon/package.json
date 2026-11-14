@@ -30,6 +30,7 @@
     "@anthropic-ai/claude-agent-sdk": "catalog:",
     "@hono/node-server": "catalog:",
     "@hono/standard-validator": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@scalar/hono-api-reference": "catalog:",
     "@standard-community/standard-json": "catalog:",
     "@standard-community/standard-openapi": "catalog:",

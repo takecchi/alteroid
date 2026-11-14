@@ -154,7 +154,7 @@ export function attachmentsRoutes(ctx: AppContext, deps: AppDeps) {
             'クエリ `keep=1` を付けると、預けた時点で保存の印が付く（期限なし。未結び付けの掃除にも掛からない。' +
             '外すのは `PATCH /attachments/:id`、消すのは `DELETE /attachments/:id`）。**連携の鍵は `keep` を付けられない**（403）。' +
             '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
-            '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
+            '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events`（と MCP の `report_problem`）で付けられるのは自分が上げた添付だけ。' +
             '本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。' +
             '鍵は添付を読み出せない（`GET /attachments/:id` は 403）。',
           requestBody: {

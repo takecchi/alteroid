@@ -51,6 +51,7 @@ import { tasksRoutes } from './app-routes-tasks.js';
 import { scheduleRoutes } from './app-routes-schedule.js';
 import { approvalsRoutes } from './app-routes-approvals.js';
 import { integrationRoutes } from './app-routes-integration.js';
+import { mcpRoutes } from './app-routes-mcp.js';
 import { journalRoutes } from './app-routes-journal.js';
 import { practicesRoutes } from './app-routes-practices.js';
 import { topologyRoutes } from './app-routes-topology.js';
@@ -211,7 +212,7 @@ export function createApp(deps: AppDeps) {
     await next();
   });
 
-  // 既定で拒否し、この資格にだけ制限を掛ける（人間・operator の経路に新しい制限は足さない）。通すのは `POST /events`（source の一致はハンドラが判定）・`POST /events/:source` と、添付のアップロード `POST /attachments`（読み出しは通さない）だけ。`maxBodyBytes` は `/events*` にだけ掛ける: 添付のアップロードにも掛けると 1 MiB 超の画像を上げられず添付の意味が無い。断った試みは日誌に書かずデーモンのログへ。
+  // 既定で拒否し、この資格にだけ制限を掛ける（人間・operator の経路に新しい制限は足さない）。通すのは `POST /events`（source の一致はハンドラが判定）・`POST /events/:source`・MCP の報告 `POST /mcp`（道具は `report_problem` の1本だけ。source は鍵の source に固定）と、添付のアップロード `POST /attachments`（読み出しは通さない）だけ。`maxBodyBytes` は添付のアップロード以外（`/events*` と `/mcp`）に掛ける: 添付のアップロードにも掛けると 1 MiB 超の画像を上げられず添付の意味が無い。断った試みは日誌に書かずデーモンのログへ。
   async function authenticateIntegrationKey(
     c: Context<{ Variables: AuthVariables }>,
     next: Next,
@@ -243,7 +244,7 @@ export function createApp(deps: AppDeps) {
       return c.json(
         {
           error:
-            'この連携の鍵では、この操作はできない（固定の source への外部イベントと、それに付ける添付のアップロードだけ）' as const,
+            'この連携の鍵では、この操作はできない（固定の source への外部イベントと、MCP の報告（POST /mcp の report_problem）と、それらに付ける添付のアップロードだけ）' as const,
         },
         403,
       );
@@ -357,6 +358,8 @@ export function createApp(deps: AppDeps) {
     .route('/', approvalsRoutes(ctx, deps))
 
     .route('/', integrationRoutes(ctx, humanOnly, noteIntegrationRefusal))
+
+    .route('/', mcpRoutes(ctx))
 
     .route('/', scheduleRoutes(ctx, deps))
 
