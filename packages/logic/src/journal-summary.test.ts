@@ -9,7 +9,7 @@ import {
 } from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
-import { summarizeJournalEntry } from './journal-summary.js';
+import { journalReportDetail, summarizeJournalEntry } from './journal-summary.js';
 
 describe('summarizeJournalEntry — daily_report', () => {
   const REASON = "You've hit your org's monthly spend limit";
@@ -576,5 +576,47 @@ describe('summarizeJournalEntry — github_observation の CI の1行（字面�
   it.each(cases)('%s: raw と localized の字面', (_label, extra, raw, localized) => {
     expect(summarizeJournalEntry(observed(extra))).toBe(rawHead + raw);
     expect(summarizeJournalEntry(observed(extra), 'localized')).toBe(localizedHead + localized);
+  });
+});
+
+describe('summarizeJournalEntry / journalReportDetail — alteroid-report', () => {
+  const report = { summary: '落ちる', component: 'cli', severity: 'high', logs: 'Error: boom' };
+  const entry = (source: string, summary: string): JournalEntry => ({
+    type: 'external_event',
+    id: 'ev-1',
+    at: '2026-11-01T00:00:00.000Z',
+    source,
+    summary,
+  });
+
+  it('報告は「[報告] component / severity: summary」の1行になる。日誌の本文は触らない', () => {
+    const verbatim = JSON.stringify(report, null, 2);
+    const e = entry('alteroid-report', verbatim);
+    expect(summarizeJournalEntry(e)).toBe('[報告] cli / high: 落ちる');
+    expect(summarizeJournalEntry(e, 'localized')).toBe('[報告] cli / high: 落ちる');
+    expect(e.type === 'external_event' && e.summary).toBe(verbatim);
+  });
+
+  it('壊れた payload・他の source は既存の表示のまま', () => {
+    expect(summarizeJournalEntry(entry('alteroid-report', '{broken'))).toBe(
+      'alteroid-report: {broken',
+    );
+    expect(summarizeJournalEntry(entry('alteroid-report', JSON.stringify({ summary: 1 })))).toBe(
+      'alteroid-report: {"summary":1}',
+    );
+    const same = JSON.stringify(report);
+    expect(summarizeJournalEntry(entry('ci', same))).toBe(`ci: ${same}`);
+  });
+
+  it('詳細は欄ごと。報告以外は null', () => {
+    const rows = journalReportDetail(entry('alteroid-report', JSON.stringify(report)));
+    expect(rows?.map((row) => row.label)).toEqual([
+      '分類（報告者の主張）',
+      '重大度（報告者の自己申告）',
+      '要約（報告者の主張）',
+      'ログ（報告者の主張）',
+    ]);
+    expect(journalReportDetail(entry('ci', JSON.stringify(report)))).toBeNull();
+    expect(journalReportDetail(entry('alteroid-report', 'x'))).toBeNull();
   });
 });

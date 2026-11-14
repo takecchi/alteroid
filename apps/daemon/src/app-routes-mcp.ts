@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { hasNul, isReservedEventSource } from '@alteroid/core';
+import {
+  ALTEROID_REPORT_SOURCE,
+  REPORT_PROBLEM_COMPONENTS,
+  REPORT_PROBLEM_LIMITS,
+  REPORT_PROBLEM_SEVERITIES,
+  hasNul,
+  isReservedEventSource,
+} from '@alteroid/core';
 import { Hono } from 'hono';
 import { describeRoute } from 'hono-openapi';
 import { z } from 'zod';
@@ -9,11 +16,8 @@ import type { AppContext } from './app-context.js';
 import type { AuthVariables } from './auth.js';
 import { deliberateClient, isWellFormedString } from './app-shared.js';
 
-// 鍵でない資格（operator・アカウント）が呼ぶときの source。鍵のときは鍵の source を使い、引数からは変えられない。
-export const MCP_REPORT_SOURCE = 'alteroid-report';
-
-const PROBLEM_COMPONENTS = ['cli', 'daemon', 'web', 'runner', 'docs', 'other'] as const;
-const PROBLEM_SEVERITIES = ['low', 'medium', 'high'] as const;
+// 鍵でない資格（operator・アカウント）が呼ぶときの source は `ALTEROID_REPORT_SOURCE`（core が持つ。読む側と同じ定数）。鍵のときは鍵の source を使い、引数からは変えられない。
+// 列挙と上限も core の `REPORT_PROBLEM_*` を参照する（読む側の整形と入口がずれない）。
 
 // 文字列の欄は NUL・孤立サロゲートを断る（pg は NUL を落とし孤立サロゲートを置き換えて残すので、黙って通すと別々の報告が潰れる）。
 function text(max: number, min = 0) {
@@ -27,14 +31,14 @@ function text(max: number, min = 0) {
 
 // 厳格: 未知の欄（`source` を含む）は黙って捨てず拒否する。
 const reportProblemInput = z.strictObject({
-  summary: text(200, 1),
-  component: z.enum(PROBLEM_COMPONENTS),
-  severity: z.enum(PROBLEM_SEVERITIES),
-  expected: text(4000).optional(),
-  actual: text(4000).optional(),
-  steps: text(4000).optional(),
-  environment: text(1000).optional(),
-  logs: text(8000).optional(),
+  summary: text(REPORT_PROBLEM_LIMITS.summary, 1),
+  component: z.enum(REPORT_PROBLEM_COMPONENTS),
+  severity: z.enum(REPORT_PROBLEM_SEVERITIES),
+  expected: text(REPORT_PROBLEM_LIMITS.expected).optional(),
+  actual: text(REPORT_PROBLEM_LIMITS.actual).optional(),
+  steps: text(REPORT_PROBLEM_LIMITS.steps).optional(),
+  environment: text(REPORT_PROBLEM_LIMITS.environment).optional(),
+  logs: text(REPORT_PROBLEM_LIMITS.logs).optional(),
   attachmentIds: z.array(text(200, 1)).max(5).optional(),
 });
 
@@ -84,7 +88,7 @@ export function mcpRoutes(ctx: AppContext) {
         outputSchema: reportProblemOutput,
       },
       async (args) => {
-        const source = principal.kind === 'integration' ? principal.source : MCP_REPORT_SOURCE;
+        const source = principal.kind === 'integration' ? principal.source : ALTEROID_REPORT_SOURCE;
         // 鍵の source は作成時に検査済みだが、`POST /events` と同じ順序・同じ規則でここでも断る。
         if (hasNul(source) || !isWellFormedString(source) || isReservedEventSource(source)) {
           return toolError('この source は使えない（何も積んでいない）。');
