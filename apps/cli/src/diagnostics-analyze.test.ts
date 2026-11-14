@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { diagnosticsAnalyzeCommand } from './diagnostics-analyze.js';
 import { captureStdout } from './test-support.js';
@@ -52,7 +53,7 @@ let originalFetch: typeof fetch;
 let fetchCalls: number;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'alteroid-analyze-'));
+  dir = await makeTempDir('alteroid-analyze-');
   originalFetch = globalThis.fetch;
   fetchCalls = 0;
   globalThis.fetch = (() => {
@@ -61,10 +62,9 @@ beforeEach(async () => {
   }) as typeof fetch;
 });
 
-afterEach(async () => {
+afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
-  await rm(dir, { recursive: true, force: true });
 });
 
 async function files(): Promise<{ journal: string; usage: string }> {
