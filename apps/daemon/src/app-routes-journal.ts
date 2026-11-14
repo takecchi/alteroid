@@ -8,6 +8,7 @@ import {
   JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
   journalWindowCrossesHorizon,
+  ledgerTimeZone,
   localDayRange,
   normalizeJournalTimeBoundary,
   summarizeUsage,
@@ -79,7 +80,7 @@ const usageQuery = z.object({
 });
 
 export function journalRoutes(ctx: AppContext, deps: AppDeps) {
-  const { clone, stores, clock } = ctx;
+  const { clone, stores, clock, resolveTimeZone } = ctx;
   return (
     new Hono<{ Variables: AuthVariables }>()
       .get(
@@ -263,7 +264,11 @@ export function journalRoutes(ctx: AppContext, deps: AppDeps) {
             '層 × マネージャーの基準ごとに返す（`resets` は回数、`lastResetAt` は最後の時刻で、0 回なら無い）。' +
             '基準が1件も無いときは欄ごと無い。**日付に依らない現在値**で、`from` / `to` / `site` / `tokenId` では絞らず、' +
             '`layer` / `managerId` だけで絞る。判定は推定で、誤って数え直しとみなす・拾えない、のどちらもありうる' +
-            '（回数が増え続けていないかを見張る口）。',
+            '（回数が増え続けていないかを見張る口）。' +
+            '`ledgerTimeZone` は台帳の `date` を切る時間帯（デーモンのプロセスが実際に使っている TZ の IANA 名。例 `Asia/Tokyo`）。' +
+            '台帳の `date` と `today` はこの TZ の暦日で、日誌の `at` と窓は UTC である — ' +
+            '両者を並べるときはどちらかにそろえること（推測で集計しない）。' +
+            '取れないときは null（`UTC` などの既定値は入れない。その場合 `date` の時間帯は不明として扱う）。',
           responses: {
             200: jsonResponse('台帳の集計。', usageResponseSchema),
             400: errorResponse(INVALID_QUERY_DESCRIPTION),
@@ -297,6 +302,8 @@ export function journalRoutes(ctx: AppContext, deps: AppDeps) {
             unrecordedManagers,
             // 台帳の `date` を書くのと同じ関数・同じ TZ で評価する: ブラウザの TZ で「今日」を決めると台帳の日とずれる。
             today: usageDate(clock()),
+            // `today` と同じ時計・同じ TZ の名前。取れなければ null（既定値を埋めない）
+            ledgerTimeZone: ledgerTimeZone(clock(), resolveTimeZone),
           });
         },
       )

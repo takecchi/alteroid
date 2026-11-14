@@ -1,4 +1,9 @@
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core';
+import {
+  USAGE_ESTIMATE_NOTICE,
+  ZERO_USAGE,
+  resolveLedgerTimeZone,
+  type UsageRow,
+} from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStderr, captureStdout } from './test-support.js';
@@ -786,6 +791,76 @@ describe('usageCommand --json（診断の材料として機械が読む口）', 
     expect(parsed.ledgerDateTimeZone.state).toBe('unavailable');
     expect(parsed.ledgerDateTimeZone.note).toContain('取れない');
     expect(JSON.stringify(parsed.ledgerDateTimeZone)).not.toMatch(/Asia|Tokyo|UTC\+|\+09/);
+  });
+
+  it('応答に ledgerTimeZone があれば known でその名前を出す（応答の欄もそのまま残る）', async () => {
+    replies.push({
+      status: 200,
+      body: { ...aggregate({ rows: [] }), ledgerTimeZone: 'America/Los_Angeles' },
+    });
+    const read = captureStdout();
+
+    await usageCommand({ json: true });
+
+    const parsed = JSON.parse(read()) as Record<string, unknown>;
+    expect(parsed['ledgerDateTimeZone']).toEqual({ state: 'known', name: 'America/Los_Angeles' });
+    expect(parsed['ledgerTimeZone']).toBe('America/Los_Angeles');
+  });
+
+  it('実際の --json 出力を diagnostics analyze の読み手（resolveLedgerTimeZone）が known として読める', async () => {
+    replies.push(
+      { status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: 'Asia/Tokyo' } },
+      { status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: null } },
+    );
+    const readKnown = captureStdout();
+    await usageCommand({ json: true });
+    expect(resolveLedgerTimeZone(JSON.parse(readKnown()), undefined)).toEqual({
+      state: 'known',
+      name: 'Asia/Tokyo',
+      source: 'usage',
+    });
+
+    const readNull = captureStdout();
+    await usageCommand({ json: true });
+    expect(resolveLedgerTimeZone(JSON.parse(readNull()), undefined)).toEqual({ state: 'unknown' });
+  });
+
+  it('ledgerTimeZone が null（デーモンが解決できなかった）なら unavailable で、名前を埋めない', async () => {
+    replies.push({ status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: null } });
+    const read = captureStdout();
+
+    await usageCommand({ json: true });
+
+    const parsed = JSON.parse(read()) as { ledgerDateTimeZone: { state: string; name?: string } };
+    expect(parsed.ledgerDateTimeZone.state).toBe('unavailable');
+    expect(parsed.ledgerDateTimeZone).not.toHaveProperty('name');
+  });
+
+  it('ledgerTimeZone が空文字でも unavailable（空を known の名前にしない）', async () => {
+    replies.push({ status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: '' } });
+    const read = captureStdout();
+
+    await usageCommand({ json: true });
+
+    const parsed = JSON.parse(read()) as { ledgerDateTimeZone: { state: string } };
+    expect(parsed.ledgerDateTimeZone.state).toBe('unavailable');
+  });
+
+  it('整形出力（--json 無し）は、応答に ledgerTimeZone があっても変わらない', async () => {
+    const base = aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] });
+    replies.push(
+      { status: 200, body: base },
+      { status: 200, body: { ...base, ledgerTimeZone: 'Asia/Tokyo' } },
+    );
+    const readWithout = captureStdout();
+    await usageCommand({});
+    const without = readWithout();
+    vi.restoreAllMocks();
+    const readWith = captureStdout();
+    await usageCommand({});
+
+    expect(readWith()).toBe(without);
+    expect(without).not.toContain('Asia/Tokyo');
   });
 
   it('未ログインの案内は標準エラーへ出し、標準出力へは何も出さない（| jq を壊さない）', async () => {

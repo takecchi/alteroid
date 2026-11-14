@@ -17,6 +17,8 @@ const PRE_S3_KEYS = [
   'beforeTurns',
   'breakdown',
   'layersSince',
+  // 台帳の date の時間帯（PR-1b）。unmeteredRows とは別の欄で、常に載る（取れないときは null）
+  'ledgerTimeZone',
   'notice',
   // 基準が1件でもあれば載る（Issue #5409）。unmeteredRows とは別の欄で、この試験が測る「無報告の鍵が無い」には関わらない
   'resets',

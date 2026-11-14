@@ -302,6 +302,36 @@ export function usageDate(at: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+// `usageDate` が日付を決める TZ（プロセスのローカル時刻）の IANA 名。取れなければ null（`UTC` などの既定値は埋めない）
+// `Intl` の解決と Date の解決は食い違いうる: `TZ=JST-9`（POSIX 形式）や存在しない名前だと、Date は効くのに `Intl` は undefined を返す。
+// だから名前を返す前に、その名前で `at` の暦日を引き直し、`usageDate(at)` と一致したときだけ採る（一致しなければ null）
+// `resolve` は差し替え口（テスト用）。既定は実行時の `Intl` の解決
+export function ledgerTimeZone(
+  at: Date,
+  resolve: () => string | undefined = () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string | null {
+  const name = resolve();
+  if (name === undefined || name === '') return null;
+  try {
+    // 暦日だけでなく時分も突き合わせる: 日付だけだと、違う時間帯でも同じ日になる時刻で偶然一致する
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: name,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(at);
+    const pick = (type: string): string => parts.find((p) => p.type === type)?.value ?? '';
+    const viaName = `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}`;
+    const viaDate = `${usageDate(at)} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    return viaName === viaDate ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 // 器（fs / pg / インメモリ）ごとに書かない: 器だけ違う判断をすると、同じ照会で本物と違う結果を返すため
 export function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
   if (start === null) return true;
