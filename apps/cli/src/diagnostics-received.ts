@@ -143,9 +143,13 @@ export async function diagnosticsReceivedListCommand(
     );
   }
   if (!exhausted && found.length >= limit) {
-    stdout.write(`（--limit ${String(limit)} で打ち切った。続きは --until ${found.at(-1)?.at ?? ''}）\n`);
+    stdout.write(
+      `（--limit ${String(limit)} で打ち切った。続きは --until ${found.at(-1)?.at ?? ''}）\n`,
+    );
   } else if (!exhausted) {
-    stdout.write(`（${String(pages)} 頁まで読んで打ち切った。続きがあるかもしれない。--since で窓を狭める）\n`);
+    stdout.write(
+      `（${String(pages)} 頁まで読んで打ち切った。続きがあるかもしれない。--since で窓を狭める）\n`,
+    );
   }
 }
 

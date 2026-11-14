@@ -1525,7 +1525,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
     diagnostics_summary: {
       source: { emit: 'size', token: 'source' },
       principalKind: { emit: 'tag', token: 'principalKind' },
-      keyId: { emit: 'never', why: '連携の鍵の id。跡の見分けに要らない（`external_event.via` と同じ判断）。' },
+      keyId: {
+        emit: 'never',
+        why: '連携の鍵の id。跡の見分けに要らない（`external_event.via` と同じ判断）。',
+      },
       payload: {
         emit: 'never',
         why: '受けた診断の要約の本体（最大 16 KiB）。跡（stderr）へ出さない。',
