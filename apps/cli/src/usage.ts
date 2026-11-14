@@ -135,9 +135,10 @@ const AXIS_LIMIT = 20;
 
 // デーモンの応答の型から導く（型付きクライアントの `InferResponseType`）: 手で写さない。欄が増えたら tsc が教える
 // `breakdown`（デーモンの集計）と `today` は読まない: 集計は `rows` から `summarizeUsage` で組む（口ごとに数字が食い違わないため）
+// `ledgerTimeZone` も読まない: 整形出力には出さない（`--json` だけが `ledgerDateTimeZone` として出す）
 export type UsageView = Omit<
   InferResponseType<DaemonClient['usage']['$get'], 200>,
-  'breakdown' | 'today'
+  'breakdown' | 'today' | 'ledgerTimeZone'
 >;
 
 export function renderUsage(view: UsageView): string {
