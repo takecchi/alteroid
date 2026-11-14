@@ -385,10 +385,7 @@ diagnosticsCommand
   )
   .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
   .option('--usage <file>', '`usage --json` の出力（任意）')
-  .option(
-    '--ledger-tz <iana>',
-    '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う）',
-  )
+  .option('--ledger-tz <iana>', '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う）')
   .option('--top <n>', '委譲の上位に出す件数（1〜20。既定 10）')
   .action(
     async (options: { journal?: string; usage?: string; ledgerTz?: string; top?: string }) => {

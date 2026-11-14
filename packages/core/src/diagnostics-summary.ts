@@ -44,9 +44,8 @@ const closedSet = <T extends string>(values: readonly T[]): [T, ...T[]] =>
   values as unknown as [T, ...T[]];
 
 /** 日誌の行の型。スキーマの定義そのものから取る（手で写さない） */
-export const SUMMARY_JOURNAL_TYPES: readonly JournalEntry['type'][] = journalEntrySchema.options.map(
-  (option) => option.shape.type.value,
-);
+export const SUMMARY_JOURNAL_TYPES: readonly JournalEntry['type'][] =
+  journalEntrySchema.options.map((option) => option.shape.type.value);
 /** 起点の種類名（inbox イベントの型名）。閉じた集合なので列挙型にする */
 export const SUMMARY_TRIGGER_KINDS: readonly InboxEventType[] = inboxEventSchema.options.map(
   (option) => option.shape.type.value,
@@ -131,7 +130,9 @@ const diagnosticsSummaryBase = strictObject({
   rows: strictObject({
     lines: count,
     invalidLines: count,
-    byType: z.array(strictObject({ type: journalTypeEnum, count })).max(SUMMARY_JOURNAL_TYPES.length),
+    byType: z
+      .array(strictObject({ type: journalTypeEnum, count }))
+      .max(SUMMARY_JOURNAL_TYPES.length),
     legacy: strictObject({
       turnTimingWithoutTokens: count,
       contextUsageWithoutSizeFields: count,
@@ -352,7 +353,9 @@ const layerSet: ReadonlySet<string> = new Set(USAGE_LAYERS);
 const siteSet: ReadonlySet<string> = new Set(USAGE_SITES);
 
 const validId = (value: unknown): value is string =>
-  typeof value === 'string' && value.length <= SUMMARY_ID_BUILD_MAX && SUMMARY_ID_PATTERN.test(value);
+  typeof value === 'string' &&
+  value.length <= SUMMARY_ID_BUILD_MAX &&
+  SUMMARY_ID_PATTERN.test(value);
 const validMcpName = (value: unknown): value is string =>
   typeof value === 'string' && SUMMARY_MCP_SERVER_PATTERN.test(value);
 
@@ -387,7 +390,10 @@ function sanitizeInput(input: BuildDiagnosticsSummaryInput): Sanitized {
     if (raw.managerId !== undefined && !validId(raw.managerId)) delete raw.managerId;
     if (raw.triggers !== undefined) {
       const triggers = raw.triggers;
-      if (!Array.isArray(triggers) || !triggers.every((t) => typeof t === 'string' && triggerSet.has(t))) {
+      if (
+        !Array.isArray(triggers) ||
+        !triggers.every((t) => typeof t === 'string' && triggerSet.has(t))
+      ) {
         droppedTriggerRows += 1;
         delete raw.triggers;
       }
@@ -401,7 +407,9 @@ function sanitizeInput(input: BuildDiagnosticsSummaryInput): Sanitized {
       delete cu.messageBreakdown;
       if (Array.isArray(cu.mcpToolsByServer)) {
         cu.mcpToolsByServer = cu.mcpToolsByServer.map((s) =>
-          isObj(s) && validMcpName(s.name) ? { name: s.name, tokens: s.tokens } : { tokens: isObj(s) ? s.tokens : undefined },
+          isObj(s) && validMcpName(s.name)
+            ? { name: s.name, tokens: s.tokens }
+            : { tokens: isObj(s) ? s.tokens : undefined },
         );
       }
       // `error` を持つ行は集計が数だけ数える。消したので持っていた印だけ残す
@@ -439,7 +447,10 @@ function tokenSummary(stat: TokenStat): TokenSummary {
     rows: stat.rows,
     cacheReadSum: stat.sums.cacheRead,
     cacheCreationSum: stat.sums.cacheCreation,
-    readOverCreation: { value: stat.readOverCreation.value, missingRows: stat.readOverCreation.rows.missing },
+    readOverCreation: {
+      value: stat.readOverCreation.value,
+      missingRows: stat.readOverCreation.rows.missing,
+    },
     readRate: { value: stat.readRate.value, missingRows: stat.readRate.rows.missing },
   };
 }
@@ -474,7 +485,8 @@ function assemble(
   let layerOrSiteRows = 0;
   const layerRows = Object.entries(fromUsage.byLayer);
   const siteRows = Object.entries(fromUsage.bySite);
-  for (const [key, stat] of [...layerRows, ...siteRows]) if (key === UNKNOWN_KEY) layerOrSiteRows += stat.rows;
+  for (const [key, stat] of [...layerRows, ...siteRows])
+    if (key === UNKNOWN_KEY) layerOrSiteRows += stat.rows;
   const byLayer = layerRows
     .filter(([key]) => known(layerSet, key))
     .map(([layer, stat]) => ({ layer, stat: tokenSummary(stat) }));
@@ -515,7 +527,9 @@ function assemble(
       }));
   const managerRows = analysis.perTurn.topManagers.rows;
   const droppedManagers = managerRows.filter((m) => m.managerId === UNKNOWN_KEY);
-  const validManagers = managerRows.filter((m) => m.managerId !== UNKNOWN_KEY && known(layerSet, m.layer));
+  const validManagers = managerRows.filter(
+    (m) => m.managerId !== UNKNOWN_KEY && known(layerSet, m.layer),
+  );
 
   // ---- プロンプトの大きさ ----
   const days = analysis.promptSize.days.map((d) => {
@@ -583,8 +597,7 @@ function assemble(
   return {
     schemaVersion: DIAGNOSTICS_SUMMARY_SCHEMA_VERSION,
     generatedAt,
-    period:
-      header.period === null ? null : { start: header.period.first, end: header.period.last },
+    period: header.period === null ? null : { start: header.period.first, end: header.period.last },
     truncated: [],
     rows: {
       lines: header.lines,
@@ -712,7 +725,8 @@ const FOLDS: readonly Fold[] = [
     section: 'ledgerResets',
     length: (d) => (d.resets.ledger.state === 'known' ? d.resets.ledger.rows.length : 0),
     cut: (d, keep) => {
-      if (d.resets.ledger.state === 'known') d.resets.ledger.rows = d.resets.ledger.rows.slice(0, keep);
+      if (d.resets.ledger.state === 'known')
+        d.resets.ledger.rows = d.resets.ledger.rows.slice(0, keep);
     },
   },
   {
