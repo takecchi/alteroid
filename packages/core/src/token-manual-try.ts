@@ -88,7 +88,8 @@ export function createManualTokenTry(options: ManualTokenTryOptions): ManualToke
 
       const credential = credentialOf(token);
       // 理由は必ず値を伏せてから返す: 試しの理由も投げられた文面も、応答・日誌・画面へそのまま出るため
-      const scrub = (text: string): string => redactErrorText(text, process.env, [credential.value]);
+      const scrub = (text: string): string =>
+        redactErrorText(text, process.env, [credential.value]);
       let verdict: TokenCandidateVerdict;
       try {
         verdict = await options.trial.trial({ id: token.id, ...credential });

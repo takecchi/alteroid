@@ -3,7 +3,7 @@ import { renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useAddToken, useRemoveToken, useSetTokenDisabled } from './mutations';
+import { useAddToken, useRemoveToken, useSetTokenDisabled, useTryToken } from './mutations';
 import { json, Providers, storeTestBaseUrl, stubFetch } from '../test-support';
 
 interface Row {
@@ -133,5 +133,41 @@ describe('トークンの全置換を直列に流す', () => {
 
     release();
     await stalled;
+  });
+});
+
+describe('useTryToken', () => {
+  function stubTry(status: number, body: unknown) {
+    const posts: string[] = [];
+    const stub = stubFetch(() => undefined);
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(String(input), init);
+      const path = new URL(request.url).pathname;
+      if (request.method === 'POST' && path.endsWith('/try')) {
+        posts.push(path);
+        return json(body, status);
+      }
+      if (path === '/tokens') return json(view([A]));
+      return inner(input, init);
+    }) as typeof fetch;
+    return { stub, posts };
+  }
+
+  it('間隔内（429）と試せない鍵（409）は、投げずに本文を返す', async () => {
+    const { posts } = stubTry(429, { error: 'x', result: 'too_soon', retryAfterSeconds: 42 });
+    const { result } = renderHook(() => useTryToken(), { wrapper });
+
+    const outcome = await result.current('a');
+
+    expect(outcome).toEqual({ error: 'x', result: 'too_soon', retryAfterSeconds: 42 });
+    expect(posts).toEqual(['/tokens/a/try']);
+  });
+
+  it('404 は投げる（結果ではなく失敗）', async () => {
+    stubTry(404, { error: 'その id の認証トークンが無い' });
+    const { result } = renderHook(() => useTryToken(), { wrapper });
+
+    await expect(result.current('a')).rejects.toThrow('その id の認証トークンが無い');
   });
 });

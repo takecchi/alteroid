@@ -688,7 +688,9 @@ export function tokensRoutes(deps: AppDeps) {
           if (result.kind === 'passed') {
             await journalTry(
               `認証トークン${subject}を手で試した: 通った` +
-                (result.cooldownCleared ? '（冷却を解いた）' : '（冷却中ではないので何も変えていない）'),
+                (result.cooldownCleared
+                  ? '（冷却を解いた）'
+                  : '（冷却中ではないので何も変えていない）'),
               'cloneModel の枠だけを確かめた。',
             );
             return c.json(

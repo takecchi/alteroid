@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeRecoveredSource } from './tokens-describe';
+import { describeRecoveredSource, describeTryResult } from './tokens-describe';
 
 describe('describeRecoveredSource（#5989）', () => {
   it('試しで通った回復は「ターンの成功」とは別の言葉で出す', () => {
@@ -15,5 +15,11 @@ describe('describeRecoveredSource（#5989）', () => {
 
   it('知らない値は捨てずに素の値のまま出す', () => {
     expect(describeRecoveredSource('future_source' as never)).toContain('future_source');
+  });
+});
+
+describe('describeTryResult', () => {
+  it('知らない結果は投げずに、そのまま出す', () => {
+    expect(describeTryResult({ result: 'future_result' }).text).toContain('future_result');
   });
 });

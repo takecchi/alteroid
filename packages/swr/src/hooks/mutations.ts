@@ -921,6 +921,28 @@ export function useSetTokenPolicy() {
   );
 }
 
+// 409（試せない鍵）と 429（間隔内）は投げずに本文を返す: どちらも「試さなかった」という結果そのもので、本文に原因と待ち秒数が載るため。それ以外の失敗は投げる。
+// 冷却が解けたかもしれないので、結果を問わず一覧を取り直す。`serializeTokenWrite` に載せない: 一覧を書き換える口ではなく、試しは数十秒かかって書き込みを待たせるため
+export function useTryToken() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api.POST('/tokens/{id}/try', { params: { path: { id } } });
+      await mutate(KEY.tokens);
+      if (
+        (result.response.status === 409 || result.response.status === 429) &&
+        result.error !== undefined &&
+        'result' in result.error
+      ) {
+        return result.error;
+      }
+      return unwrap(result);
+    },
+    [api, mutate],
+  );
+}
+
 export function useEndConversation() {
   const api = useApi();
   const { mutate } = useSWRConfig();

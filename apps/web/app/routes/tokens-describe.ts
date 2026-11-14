@@ -347,3 +347,57 @@ export function weeklyResetSchedule(
     nextAt: weeklyReset.at + weeksAhead * WEEK_MS,
   };
 }
+
+// 画面にも1行で出す注記。デーモンの応答の `note` と同じ内容（応答を待たずに、押す前から読めるようにするため）
+export const TOKEN_TRY_SCOPE_NOTE =
+  '確かめられるのはクローンのモデルの枠だけです（モデル別の枠では、通っても層は通らないことがあります）';
+
+// 値は載せない（応答にも無い）。未知の結果は投げずにそのまま出す: サーバのほうが新しい窓があり、投げると行の操作が丸ごと消えるため
+export function describeTryResult(view: {
+  result: string;
+  reason?: string;
+  cooldownCleared?: boolean;
+  cooldownKept?: boolean;
+  retryAfterSeconds?: number;
+  cause?: string;
+}): { tone: 'ok' | 'warn'; text: string } {
+  switch (view.result) {
+    case 'passed':
+      return {
+        tone: 'ok',
+        text:
+          view.cooldownCleared === true
+            ? '通りました。冷却を解きました。'
+            : '通りました（冷却中ではなかったので、何も変えていません）。',
+      };
+    case 'rejected':
+      return {
+        tone: 'warn',
+        text:
+          `拒否されました: ${view.reason ?? '理由は分かりません'}。` +
+          (view.cooldownKept === true
+            ? '冷却はそのままです。'
+            : '冷却中ではなかったので、何も変えていません。'),
+      };
+    case 'undecidable':
+      return {
+        tone: 'warn',
+        text: `試せませんでした（判定できなかった）: ${view.reason ?? '理由は分かりません'}。何も変えていません。`,
+      };
+    case 'too_soon':
+      return {
+        tone: 'warn',
+        text: `直前に試したばかりです。あと ${String(view.retryAfterSeconds ?? 0)} 秒で試せます（試していません）。`,
+      };
+    case 'not_tryable':
+      return {
+        tone: 'warn',
+        text: `この鍵は試せません（${view.cause ?? '理由は分かりません'}）。試していません。`,
+      };
+    default:
+      return {
+        tone: 'warn',
+        text: `未知の結果（${view.result}）。この画面より新しいサーバが送った値である`,
+      };
+  }
+}
