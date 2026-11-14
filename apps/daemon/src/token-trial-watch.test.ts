@@ -416,7 +416,10 @@ describe('token-trial-watch: 通ったときの記録と知らせ（実物の回
 
     const row = (await stores.tokens.list()).find((t) => t.id === 'a');
     expect(row?.cooldownUntil).toBeUndefined();
-    expect(outcomes).toHaveLength(1);
+    // 元の期待: `toHaveLength(1)`。経緯: 定期の復活チェック（案B）で、a が通って ready になっても冷却中の b が次の目盛りで試されるようになったため、40ms の間に2回目（b の試し）の知らせが出る。
+    // 1回の目盛りで試すのは1本のまま（目盛りごとの本数は「1回の目盛りで1本だけ」の歯が見張る）。最初の知らせが a の試しで、回ったことは変わらない。
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]?.kind).toBe('rotated');
     expect(outcomes[0]?.reason).toBe('trial_succeeded');
   });
 
