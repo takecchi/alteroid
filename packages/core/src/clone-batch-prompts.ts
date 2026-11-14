@@ -6,6 +6,12 @@ import {
   externalEventInstruction,
   externalViaLine,
 } from './prompt.js';
+import {
+  externalSourceNote,
+  formatReportProblemForClone,
+  isAlteroidReportSource,
+  parseReportProblemPayload,
+} from './report-problem.js';
 import type { InboxEvent } from './schema.js';
 
 // `clone.ts` の末尾にあった、束ねて読む入力の文面を作る純関数群（状態を持たない）。
@@ -457,16 +463,18 @@ export function externalBatchPrompt(
   const head = events[0];
   if (head === undefined) return '';
 
-  const body = renderPayload(head.payload, head.at, head.attachments);
+  const body = renderPayload(head.payload, head.at, head.attachments, head.source);
   const timestamps = events.map((event) => event.at).join(' / ');
 
   const viaNames = events.flatMap((event) => (event.via === undefined ? [] : [event.via.name]));
   const via = externalViaLine(viaNames, viaNames.length < events.length);
+  const sourceNote = externalSourceNote(head.source);
 
   return [
     `[system] 外部から出来事が届いた（source: ${head.source}）。人間はこれを見ていない。`,
     ...(via === null ? [] : [via]),
     EXTERNAL_EVENT_FRAMING,
+    ...(sourceNote === null ? [] : [sourceNote]),
     ...externalAttachmentSection(attachmentNoticeLines),
     `処理待ちのあいだに、同じ中身の合図を続けて **${events.length} 件** まとめて渡す` +
       '（本文は1回だけ。全件で `source` と中身が一致している）。',
@@ -503,7 +511,13 @@ export function renderPayload(
   payload: unknown,
   at: string,
   attachments?: readonly { name: string }[],
+  source?: string,
 ): string {
+  // 報告は欄ごとに「報告者の主張」として整形する。想定外の形は整形せず、下の既存の形へ落とす。8000 字では切らない（フェンスの途中で切ると枠が崩れる。欄ごとの上限の合計が上限）
+  if (source !== undefined && isAlteroidReportSource(source)) {
+    const report = parseReportProblemPayload(payload);
+    if (report !== null) return formatReportProblemForClone(report);
+  }
   const body = payloadText(payload, attachments);
   if (body.length <= EXTERNAL_PAYLOAD_LIMIT) return body;
   const journalNote =
