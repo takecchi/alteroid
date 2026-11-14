@@ -356,10 +356,26 @@ function renderMemoryTocOmission(input: {
   ].join('\n');
 }
 
+interface MemoryTocLayout {
+  text: string;
+  /** 目次の行として焼かれた文書と、その行の長さ（改行は含まない）。行ごとの長さを答えるために、描いた行そのものから取る */
+  shown: { slug: string; chars: number }[];
+  /** 目次から省かれた文書。`cut` はその理由（件数・文字数・両方） */
+  omitted: { slugs: string[]; cut: 'count' | 'chars' | 'count-and-chars' } | null;
+}
+
+// 描く関数と行ごとの長さを答える関数で別々に書かない: どちらか一方だけを直した瞬間に、`GET /self/prompt` の `indexChars` が実物と食い違うため
 function renderMemoryToc(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},
 ): string {
+  return layoutMemoryToc(entries, elsewhere).text;
+}
+
+function layoutMemoryToc(
+  entries: readonly MemoryTocEntry[],
+  elsewhere: MemoryHierarchyElsewhere = {},
+): MemoryTocLayout {
   const flat = flattenMemoryToc(resolveMemoryHierarchy(entries, elsewhere));
   const countShown = flat.slice(0, MEMORY_TOC_ENTRY_LIMIT);
   const countCut = countShown.length < flat.length;
@@ -396,7 +412,20 @@ function renderMemoryToc(
       }),
     );
   }
-  return lines.join('\n');
+  return {
+    text: lines.join('\n'),
+    shown: shownLines.map((line, index) => ({
+      slug: (flat[index] as ResolvedTocNode).entry.slug,
+      chars: line.length,
+    })),
+    omitted:
+      omitted > 0
+        ? {
+            slugs: flat.slice(shownLines.length).map((node) => node.entry.slug),
+            cut: countCut && charCut ? 'count-and-chars' : countCut ? 'count' : 'chars',
+          }
+        : null,
+  };
 }
 
 const MALFORMED_FRONTMATTER_NOTE =
@@ -820,15 +849,21 @@ function selectPremiseCards(
   };
 }
 
+// 描く側と、`indexChars` のために行ごとの長さを答える側で同じ行を使う
+function premiseStubItems(
+  demoted: readonly { part: MemoryPart; chars: number }[],
+  kindOf: (part: MemoryPart) => MemoryDocKind,
+): string[] {
+  return demoted.map((entry) => renderPremiseStub(entry.part, entry.chars, kindOf(entry.part)));
+}
+
 function renderPremiseBudgetNotice(
   demoted: readonly { part: MemoryPart; chars: number }[],
   keptCount: number,
   totalChars: number,
   kindOf: (part: MemoryPart) => MemoryDocKind,
 ): string {
-  const items = demoted.map((entry) =>
-    renderPremiseStub(entry.part, entry.chars, kindOf(entry.part)),
-  );
+  const items = premiseStubItems(demoted, kindOf);
   const demotedPremise = demoted.filter((entry) => kindOf(entry.part) === 'premise').length;
   const demotedIndexed = demoted.length - demotedPremise;
   const listing = renderListing(items, {
@@ -883,6 +918,39 @@ function renderIndexedPart(part: MemoryPart, seen?: string): string {
   return frontmatter.kind === 'malformed' ? `${MALFORMED_FRONTMATTER_NOTE}\n${rendered}` : rendered;
 }
 
+/** 索引の中で、その文書が焼かれた形。`stub` はカードを落として1行にした分、`toc-line` は fact の目次の1行 */
+export type MemoryBakedForm =
+  | 'premise-card'
+  | 'indexed-card'
+  | 'premise-stub'
+  | 'indexed-stub'
+  | 'toc-line';
+
+/**
+ * 文書ごとに索引へ焼いた断片。`chars` は断片そのものの長さで、断片のあいだの区切り（空行）と節の見出し行（`<!-- memory: index -->` など）は含まない。
+ * 省かれた文書は長さを持たない（0 を置くと「焼いたが空だった」と読める）。理由を文で持つ。
+ */
+export type MemoryDocumentBake =
+  | { readonly omitted: false; readonly form: MemoryBakedForm; readonly chars: number }
+  | { readonly omitted: true; readonly reason: string };
+
+function describeTocOmissionReason(cut: 'count' | 'chars' | 'count-and-chars'): string {
+  const why =
+    cut === 'count-and-chars'
+      ? `件数の上限（${formatMemoryCharCount(MEMORY_TOC_ENTRY_LIMIT)} 件）と文字数の予算（${formatMemoryCharCount(MEMORY_TOC_CHAR_BUDGET)} 文字）の両方`
+      : cut === 'count'
+        ? `件数の上限（${formatMemoryCharCount(MEMORY_TOC_ENTRY_LIMIT)} 件）`
+        : `文字数の予算（${formatMemoryCharCount(MEMORY_TOC_CHAR_BUDGET)} 文字）`;
+  return `fact の目次から省かれた（${why}に当たった）。焼き込みの中では存在しないのと見分けが付かない`;
+}
+
+function describeStubOmissionReason(): string {
+  return (
+    `カードを落とした分の1行の一覧からも省かれた（その一覧の予算 ${formatMemoryCharCount(MEMORY_PREMISE_STUB_BUDGET)} 文字を超えた）。` +
+    '焼き込みの中では存在しないのと見分けが付かない'
+  );
+}
+
 // 焼き込みの本体と大きさだけを答える関数で別々に書かない: どちらか一方だけを直した瞬間にメーターが実物と食い違うため
 function buildMemoryDocumentSections(
   documents: readonly MemoryPart[],
@@ -896,6 +964,7 @@ function buildMemoryDocumentSections(
   indexedSection: string;
   tocEntries: MemoryTocEntry[];
   tocSection: string;
+  bake: Map<string, MemoryDocumentBake>;
 } {
   const premiseParts: MemoryPart[] = [];
   const indexedParts: MemoryPart[] = [];
@@ -927,12 +996,46 @@ function buildMemoryDocumentSections(
   const renderCard = (part: MemoryPart, seen?: string): string =>
     indexedSlugs.has(part.slug) ? renderIndexedPart(part, seen) : renderPremisePart(part, seen);
   const { kept, demoted, uncappedChars } = selectPremiseCards(cardParts, seenContent, renderCard);
-  const keptPremiseCards = kept
-    .filter((part) => !indexedSlugs.has(part.slug))
-    .map((part) => renderPremisePart(part, seenContent?.get(part.slug)));
-  const keptIndexedCards = kept
-    .filter((part) => indexedSlugs.has(part.slug))
-    .map((part) => renderIndexedPart(part, seenContent?.get(part.slug)));
+  const bake = new Map<string, MemoryDocumentBake>();
+  const keptPremiseParts = kept.filter((part) => !indexedSlugs.has(part.slug));
+  const keptPremiseCards = keptPremiseParts.map((part) =>
+    renderPremisePart(part, seenContent?.get(part.slug)),
+  );
+  keptPremiseParts.forEach((part, index) =>
+    bake.set(part.slug, {
+      omitted: false,
+      form: 'premise-card',
+      chars: (keptPremiseCards[index] as string).length,
+    }),
+  );
+  const keptIndexedParts = kept.filter((part) => indexedSlugs.has(part.slug));
+  const keptIndexedCards = keptIndexedParts.map((part) =>
+    renderIndexedPart(part, seenContent?.get(part.slug)),
+  );
+  keptIndexedParts.forEach((part, index) =>
+    bake.set(part.slug, {
+      omitted: false,
+      form: 'indexed-card',
+      chars: (keptIndexedCards[index] as string).length,
+    }),
+  );
+  if (demoted.length > 0) {
+    const stubKindOf = (part: MemoryPart): MemoryDocKind =>
+      indexedSlugs.has(part.slug) ? 'indexed' : 'premise';
+    const stubFill = fillListingBudget(premiseStubItems(demoted, stubKindOf), MEMORY_PREMISE_STUB_BUDGET);
+    demoted.forEach((entry, index) => {
+      bake.set(
+        entry.part.slug,
+        index < stubFill.shown
+          ? {
+              omitted: false,
+              form: stubKindOf(entry.part) === 'indexed' ? 'indexed-stub' : 'premise-stub',
+              chars: (stubFill.lines[index] as string).length,
+            }
+          : { omitted: true, reason: describeStubOmissionReason() },
+      );
+    });
+  }
   const premiseSection =
     cardParts.length === 0
       ? ''
@@ -948,10 +1051,20 @@ function buildMemoryDocumentSections(
   // 在り処ごとに分けて渡す・indexed も premise と同じ集合へ合流させる: 畳むと実在する親が「見つからない」と出るため。indexed も premise と同じくカードとして描かれる側のため
   const cardSlugs = new Set([...premiseParts, ...indexedParts].map((part) => part.slug));
   const presence = presentInMemory === undefined ? undefined : buildMemoryPresence(presentInMemory);
-  const tocSection =
+  const tocLayout =
     tocEntries.length === 0
-      ? ''
-      : renderMemoryToc(tocEntries, { renderedAsPremise: cardSlugs, presentInMemory: presence });
+      ? null
+      : layoutMemoryToc(tocEntries, { renderedAsPremise: cardSlugs, presentInMemory: presence });
+  const tocSection = tocLayout === null ? '' : tocLayout.text;
+  if (tocLayout !== null) {
+    for (const row of tocLayout.shown) {
+      bake.set(row.slug, { omitted: false, form: 'toc-line', chars: row.chars });
+    }
+    if (tocLayout.omitted !== null) {
+      const reason = describeTocOmissionReason(tocLayout.omitted.cut);
+      for (const slug of tocLayout.omitted.slugs) bake.set(slug, { omitted: true, reason });
+    }
+  }
 
   return {
     premiseParts,
@@ -961,6 +1074,7 @@ function buildMemoryDocumentSections(
     indexedSection,
     tocEntries,
     tocSection,
+    bake,
   };
 }
 
@@ -982,12 +1096,26 @@ export function renderMemoryDocuments(
   documents: readonly MemoryPart[],
   options: RenderMemoryDocumentsOptions = {},
 ): RenderedMemory {
-  const { premiseSection, indexedSection, tocSection } = buildMemoryDocumentSections(
+  return renderMemoryDocumentsWithBake(documents, options).text;
+}
+
+/**
+ * 索引の全体（`renderMemoryDocuments` と同じ文字列）と、文書ごとに焼いた断片の長さを同じ1回の組み立てから返す。
+ * 長さを別の関数で数え直さない: 数え直すと、焼いた実物と違う数を名乗りうるため。キーは slug。
+ */
+export function renderMemoryDocumentsWithBake(
+  documents: readonly MemoryPart[],
+  options: RenderMemoryDocumentsOptions = {},
+): { text: RenderedMemory; bake: ReadonlyMap<string, MemoryDocumentBake> } {
+  const { premiseSection, indexedSection, tocSection, bake } = buildMemoryDocumentSections(
     documents,
     options.presentInMemory,
     options.seenContent,
   );
-  return brandRenderedMemory(joinMemorySections(premiseSection, indexedSection, tocSection));
+  return {
+    text: brandRenderedMemory(joinMemorySections(premiseSection, indexedSection, tocSection)),
+    bake,
+  };
 }
 
 // 単位は文字（bytes ではない）: bytes を返すと、self_status で起きた bytes から文字数を割り戻す誤読を再生産するため。premise の文字数は `content.length` ではなく描いた結果の長さで数える: malformed な frontmatter は説明の1行が前に付き、実物より少ない数を名乗ることになるため

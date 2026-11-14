@@ -7,7 +7,7 @@ import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { stripSchemaKey } from './mcp-lean-schema.js';
 import type { McpServers } from './mcp-servers.js';
 import { parseMemoryFrontmatter, resolveMemoryDocKind } from './memory-frontmatter.js';
-import type { MemoryPart } from './memory.js';
+import type { MemoryBakedForm, MemoryDocumentBake, MemoryPart } from './memory.js';
 import type { MemoryDocKind } from './schema.js';
 import { describeProbeError } from './usage-probe.js';
 
@@ -40,13 +40,25 @@ export interface PromptSnapshotTool {
   readonly inputSchemaChars: number;
 }
 
+/**
+ * その文書が、焼いた索引の中で占めた断片。`#buildSessionSpec` が索引を組んだ同じ1回から取った値（読み直さない）。
+ * - `baked`: 断片の長さ（`renderMemoryDocuments` が焼いた断片そのもの。区切りの空行は含まない）と、断片の形（カード・落として1行にした分・fact の目次の1行）
+ * - `omitted`: 索引に焼かれなかった（長さを持たない。0 を置かない）。理由を文で持つ
+ * - `unavailable`: 長さを取れなかった。理由を文で持つ（0 を置かない）
+ */
+export type PromptSnapshotMemoryIndex =
+  | { readonly kind: 'baked'; readonly form: MemoryBakedForm; readonly chars: number }
+  | { readonly kind: 'omitted'; readonly reason: string }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
 export interface PromptSnapshotMemoryDocument {
   readonly slug: string;
   readonly type: MemoryDocKind;
   /** frontmatter の要旨。書かれていなければ null（空文字にしない） */
   readonly description: string | null;
-  /** 文書の本文の文字数。焼かれた索引の文字数ではない（本文は焼かれていない。索引の全体は `systemPrompt.text` の記憶の節） */
+  /** 文書の本文の文字数。焼かれた索引の文字数ではない（本文は焼かれていない。焼かれた断片の長さは `index`） */
   readonly chars: number;
+  readonly index: PromptSnapshotMemoryIndex;
 }
 
 export interface PromptSnapshotExternalMcpServer {
@@ -218,8 +230,17 @@ export function describeCloneTools(tools: readonly CloneToolDefinition[]): Promp
   });
 }
 
-/** 区分と要旨は `renderMemoryDocuments` が使う導出関数をそのまま使う（二重実装しない） */
-export function describeMemoryInPrompt(documents: readonly MemoryPart[]): {
+const MEMORY_BAKE_ABSENT_REASON =
+  '索引を組んだときの文書ごとの長さの控えにこの文書が無かった（取れなかったので、0 とは書かない）';
+
+/**
+ * 区分と要旨は `renderMemoryDocuments` が使う導出関数をそのまま使う（二重実装しない）。
+ * 索引の中での長さ（`index`）は、`renderMemoryDocumentsWithBake` が索引を組んだ同じ1回に返した値をそのまま写す。数え直さない。
+ */
+export function describeMemoryInPrompt(
+  documents: readonly MemoryPart[],
+  bake: ReadonlyMap<string, MemoryDocumentBake>,
+): {
   documents: PromptSnapshotMemoryDocument[];
   omitted: number;
 } {
@@ -227,11 +248,19 @@ export function describeMemoryInPrompt(documents: readonly MemoryPart[]): {
     const frontmatter = parseMemoryFrontmatter(doc.content);
     const description =
       frontmatter.kind === 'parsed' ? (frontmatter.description?.trim() ?? '') : '';
+    const baked = bake.get(doc.slug);
+    const index: PromptSnapshotMemoryIndex =
+      baked === undefined
+        ? { kind: 'unavailable', reason: MEMORY_BAKE_ABSENT_REASON }
+        : baked.omitted
+          ? { kind: 'omitted', reason: baked.reason }
+          : { kind: 'baked', form: baked.form, chars: baked.chars };
     return {
       slug: doc.slug,
       type: resolveMemoryDocKind(frontmatter),
       description: description.length === 0 ? null : description,
       chars: doc.content.length,
+      index,
     };
   });
   return {
@@ -251,6 +280,8 @@ export interface PromptSnapshotSessionInput {
   model: string;
   systemPrompt: string;
   documents: readonly MemoryPart[];
+  /** `renderMemoryDocumentsWithBake` が索引を組んだ同じ1回に返した、文書ごとに焼いた断片の長さ（slug が鍵）。読み直さず、その値をそのまま置く */
+  memoryBake: ReadonlyMap<string, MemoryDocumentBake>;
   // 関数で受ける: 道具の組み立てが投げても、`recordSession` の中で失敗の値へ畳み、セッションの起動を止めないため
   tools: () => readonly CloneToolDefinition[];
   externalMcpServers: McpServers;
@@ -278,7 +309,7 @@ export class ClonePromptSnapshotState {
         sessionId: null,
         model: input.model,
         systemPrompt: { text: input.systemPrompt, chars: input.systemPrompt.length },
-        memoryInPrompt: describeMemoryInPrompt(input.documents),
+        memoryInPrompt: describeMemoryInPrompt(input.documents, input.memoryBake),
         tools: describeCloneTools(input.tools()),
         builtinTools: BUILTIN_TOOLS_UNAVAILABLE_AXIS,
         externalMcpServers: describeExternalMcpServers(input.externalMcpServers),

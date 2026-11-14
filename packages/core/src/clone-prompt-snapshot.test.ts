@@ -59,9 +59,36 @@ describe('クローン — 実際に焼いたプロンプトのスナップシ�
     // init が届いた時点で埋まる
     expect(session.sessionId).toBe('sess-fake');
     expect(session.memoryInPrompt.documents).toEqual([
-      { slug: 'misc', type: 'indexed', description: '作業メモの要旨', chars: expect.any(Number) },
-      { slug: 'values', type: 'premise', description: '価値観の要旨', chars: expect.any(Number) },
+      {
+        slug: 'misc',
+        type: 'indexed',
+        description: '作業メモの要旨',
+        chars: expect.any(Number),
+        index: { kind: 'baked', form: 'indexed-card', chars: expect.any(Number) },
+      },
+      {
+        slug: 'values',
+        type: 'premise',
+        description: '価値観の要旨',
+        chars: expect.any(Number),
+        index: { kind: 'baked', form: 'premise-card', chars: expect.any(Number) },
+      },
     ]);
+    // 焼いた索引の中の断片の長さは、焼いたシステムプロンプトの中にその断片が実在する長さと合う: 断片は空行を含まず、次の断片か節との区切りの空行の直前で終わる
+    // （premise と indexed のカードは続けて並ぶ。最後の断片のあとは記憶の節の終わりで、そこに何が続くかはこの試験の関心の外）
+    const cards = session.memoryInPrompt.documents.map((document) => {
+      if (document.index.kind !== 'baked') throw new Error('焼かれていない');
+      const start = burned.indexOf(`<!-- memory: ${document.slug}.md（`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return { start, end: start + document.index.chars };
+    });
+    for (const { start, end } of cards) {
+      expect(burned.slice(start, end).includes('\n\n')).toBe(false);
+    }
+    const [first, second] = [...cards].sort((a, b) => a.start - b.start);
+    expect(burned.slice((first as { end: number }).end, (second as { start: number }).start)).toBe(
+      '\n\n',
+    );
     expect(JSON.stringify(session.memoryInPrompt)).not.toContain('本文');
     // 並びは `CLONE_TOOL_NAMES`（名前の集合）とは別に `createCloneTools` が決める。ここは集合で比べる（並びは pin が縛る）
     expect(session.tools.map((tool) => tool.name).sort()).toEqual([...CLONE_TOOL_NAMES].sort());
@@ -281,6 +308,7 @@ describe('ClonePromptSnapshotState — 単体', () => {
       model: 'opus',
       systemPrompt: 'P',
       documents: [],
+      memoryBake: new Map(),
       tools: () => [],
       externalMcpServers: {},
       pluginPaths: ['/x/plugins/alpha'],
@@ -302,6 +330,7 @@ describe('ClonePromptSnapshotState — 単体', () => {
       model: 'opus',
       systemPrompt: 'P',
       documents: [],
+      memoryBake: new Map(),
       tools: () => [],
       externalMcpServers: {},
       pluginPaths: [],
@@ -324,6 +353,7 @@ describe('ClonePromptSnapshotState — 単体', () => {
       model: 'opus',
       systemPrompt: 'P',
       documents: [],
+      memoryBake: new Map(),
       externalMcpServers: {},
       pluginPaths: [],
     };
@@ -340,13 +370,39 @@ describe('ClonePromptSnapshotState — 単体', () => {
   });
 
   it('記憶の区分と要旨は frontmatter から導く（要旨が無ければ null、区分が無ければ premise）', () => {
-    const described = describeMemoryInPrompt([
-      { slug: 'a', content: '本文だけ' },
-      { slug: 'b', content: MEMORY_DOC('要旨', 'fact') },
-    ]);
+    const described = describeMemoryInPrompt(
+      [
+        { slug: 'a', content: '本文だけ' },
+        { slug: 'b', content: MEMORY_DOC('要旨', 'fact') },
+        { slug: 'c', content: '控えに無い' },
+      ],
+      new Map([
+        ['a', { omitted: false, form: 'premise-card', chars: 10 }],
+        ['b', { omitted: true, reason: '目次から省かれた' }],
+      ]),
+    );
     expect(described.documents).toEqual([
-      { slug: 'a', type: 'premise', description: null, chars: 4 },
-      { slug: 'b', type: 'fact', description: '要旨', chars: MEMORY_DOC('要旨', 'fact').length },
+      {
+        slug: 'a',
+        type: 'premise',
+        description: null,
+        chars: 4,
+        index: { kind: 'baked', form: 'premise-card', chars: 10 },
+      },
+      {
+        slug: 'b',
+        type: 'fact',
+        description: '要旨',
+        chars: MEMORY_DOC('要旨', 'fact').length,
+        index: { kind: 'omitted', reason: '目次から省かれた' },
+      },
+      {
+        slug: 'c',
+        type: 'premise',
+        description: null,
+        chars: 5,
+        index: { kind: 'unavailable', reason: expect.stringContaining('0 とは書かない') },
+      },
     ]);
   });
 

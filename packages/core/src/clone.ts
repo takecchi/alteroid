@@ -168,7 +168,11 @@ import {
   type ManagerSummary,
   type WorkerToolEvent,
 } from './manager.js';
-import { describeMemoryTidyTargets, renderMemoryDocuments } from './memory.js';
+import {
+  describeMemoryTidyTargets,
+  renderMemoryDocuments,
+  renderMemoryDocumentsWithBake,
+} from './memory.js';
 import { resolveModelTier } from './model-tier.js';
 import { heuristicChars } from './quantity.js';
 import { resolvePermissionModeFor, type PermissionModeName } from './permission-mode.js';
@@ -4250,7 +4254,7 @@ class Clone implements CloneHost {
   async #buildSessionSpec(resume: string | null): Promise<AgentCloneSessionSpec> {
     const readAt = new Date().toISOString();
     const documents = await this.#stores.persona.documents();
-    const memory = renderMemoryDocuments(documents);
+    const { text: memory, bake: memoryBake } = renderMemoryDocumentsWithBake(documents);
 
     // 読み直さず、載せた値そのものを控える: 読み直すと、この間に人間が直した差分を見失う
     this.#distillMemory.commitMemory(documents);
@@ -4275,6 +4279,7 @@ class Clone implements CloneHost {
       model: this.#model,
       systemPrompt,
       documents,
+      memoryBake,
       tools: () => createCloneTools(this.#toolContext()),
       externalMcpServers,
       pluginPaths: plugins.map((plugin) => plugin.path),

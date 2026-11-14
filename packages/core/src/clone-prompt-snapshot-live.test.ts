@@ -64,6 +64,7 @@ describe('スナップショットの外部 MCP は、走行中の登録の差�
       model: 'opus',
       systemPrompt: 'P',
       documents: [],
+      memoryBake: new Map(),
       tools: () => [],
       externalMcpServers: { github: GITHUB, old: REMOTE },
       pluginPaths: [],
