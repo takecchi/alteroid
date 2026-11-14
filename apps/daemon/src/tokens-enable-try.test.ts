@@ -88,7 +88,7 @@ function buildApp() {
 }
 
 type App = ReturnType<typeof buildApp>;
-type RowInput = { id: string; label: string; value?: string; disabled?: boolean };
+type RowInput = { id?: string; label: string; value?: string; disabled?: boolean };
 
 async function put(app: App, tokens: RowInput[]): Promise<Response> {
   let response: Response | undefined;
