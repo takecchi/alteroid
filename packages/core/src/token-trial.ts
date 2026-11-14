@@ -40,9 +40,8 @@ export function selectTokenForTrial(input: SelectTokenForTrialInput): AgentToken
 
   if (active === null || active.tokenId === undefined) return undefined;
 
-  const hasReadyCandidate = tokens.some((token) => tokenAvailabilityAt(token, at) === 'ready');
-  if (hasReadyCandidate) return undefined;
-
+  // ready な鍵が在っても冷却中の鍵を試す（#1501 の「ready が無いときだけ」をやめた）: 冷却の期限は推測のことがあり、期限を信じて待つと、戻っている鍵が長く眠るため。
+  // 通っても現役を奪わない: `recordTrialSuccess` は現役でない鍵なら冷却の記録を消して選び直すだけで、現役が ready ならその選び直しは回さない。
   const eligible = tokens.filter((token) => {
     if (tokenAvailabilityAt(token, at) !== 'cooling') return false;
     const cooldownUntil = token.cooldownUntil as number;
