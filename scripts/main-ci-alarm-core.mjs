@@ -6,8 +6,17 @@
 // 印の接頭辞を変えない: 過去の警報 Issue が見つからなくなり、同じ赤で2本目が立つため。
 export const ALARM_MARKER_PREFIX = 'alteroid:main-ci-alarm';
 
+// 定期実行で落ちる workflow は鍵から sha を外す: main は1日に何十回も進むので、毎日同じ理由で落ちると sha ごとに別の Issue が立ち続けるため。落ちた回は1本の Issue へコメントで足す。
+// 名前の並びは main-ci-alarm.yml の監視対象の部分集合でなければならない（`main-ci-alarm.test.ts` が突き合わせる）。
+export const PER_WORKFLOW_ALARM_NAMES = ['Claude SDK 更新', 'ベースイメージを GHCR へ写す'];
+
+export function isPerWorkflowAlarm(workflowName) {
+  return PER_WORKFLOW_ALARM_NAMES.includes(workflowName);
+}
+
 // workflow 名を slug へ潰さない: `CI` と `C-I` のような別物が同じ鍵になりうるため。
 export function alarmKey(workflowName, headSha) {
+  if (isPerWorkflowAlarm(workflowName)) return workflowName;
   return `${workflowName}@${headSha}`;
 }
 
@@ -93,6 +102,7 @@ export function decideAlarmAction({ issue, commentBodies, runId }) {
 
 // タイトルに sha を12桁入れる: 一覧で同じ赤の続きか別の赤かがタイトルだけで分かるようにするため。
 export function buildIssueTitle({ workflowName, headSha }) {
+  if (isPerWorkflowAlarm(workflowName)) return `${workflowName} が main で落ちている`;
   return `${workflowName} が main で落ちた（${headSha.slice(0, 12)}）`;
 }
 
@@ -114,8 +124,16 @@ export function buildIssueBody({ workflowName, headSha, runId, runUrl, key }) {
     '',
     '**直したら手で閉じてよい。** この仕掛けは Issue を自動では閉じない',
     "（理由の逐語は `grep -Fn -- '閉じるのは人である' scripts/main-ci-alarm-core.mjs`）。",
-    '同じ sha で同じ workflow がまた落ちた場合は、新しい Issue ではなく',
-    'この Issue へコメントが足される。**`main` が進めば別の Issue になる。**',
+    ...(isPerWorkflowAlarm(workflowName)
+      ? [
+          'この workflow は定期実行で落ちうるので、鍵を sha ではなく workflow 名にしてある。',
+          'また落ちた回は、`main` が進んでいても新しい Issue ではなくこの Issue へ',
+          'コメントが足される。**閉じるまで、この workflow の失敗はここへ集まる。**',
+        ]
+      : [
+          '同じ sha で同じ workflow がまた落ちた場合は、新しい Issue ではなく',
+          'この Issue へコメントが足される。**`main` が進めば別の Issue になる。**',
+        ]),
     '',
     alarmMarker(key),
   ].join('\n');

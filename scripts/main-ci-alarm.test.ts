@@ -11,6 +11,7 @@ import {
   ALARM_MARKER_PREFIX,
   CANCEL_AWARE_WORKFLOW_NAME,
   GATE_JOB_NAME,
+  PER_WORKFLOW_ALARM_NAMES,
   alarmKey,
   alarmMarker,
   buildCommentBody,
@@ -190,6 +191,64 @@ describe('鍵（どの workflow が、どの sha で落ちたか）', () => {
   });
 });
 
+describe('定期実行の workflow は sha を鍵に入れない（毎日 Issue が増えない）', () => {
+  const SDK = { ...REAL, workflowName: 'Claude SDK 更新' };
+  const SDK_NEXT_DAY = { ...SDK, headSha: '1d1bb8c84c3c0000000000000000000000000000', runId: 42 };
+
+  it('⭐ main が進んで sha が変わっても、同じ鍵になる', () => {
+    expect(alarmKey(SDK.workflowName, SDK.headSha)).toBe(
+      alarmKey(SDK_NEXT_DAY.workflowName, SDK_NEXT_DAY.headSha),
+    );
+  });
+
+  it('⭐ 翌日の別 run は、前日の Issue が open ならそこへコメントを足す（新しく立てない）', () => {
+    const key = alarmKey(SDK.workflowName, SDK.headSha);
+    const issue = {
+      number: 7,
+      body: buildIssueBody({ ...SDK, key }),
+    };
+    const marker = alarmMarker(alarmKey(SDK_NEXT_DAY.workflowName, SDK_NEXT_DAY.headSha));
+    const found = findOpenAlarmIssue([issue], marker);
+    expect(found?.number).toBe(7);
+    const action = decideAlarmAction({
+      issue: found,
+      commentBodies: [],
+      runId: SDK_NEXT_DAY.runId,
+    });
+    expect(action.kind).toBe('comment');
+  });
+
+  it('⭐ 閉じた後（open な Issue が無い）なら、次の失敗で新しく立てる', () => {
+    const marker = alarmMarker(alarmKey(SDK.workflowName, SDK.headSha));
+    expect(findOpenAlarmIssue([], marker)).toBeNull();
+    expect(decideAlarmAction({ issue: null, commentBodies: [], runId: 1 }).kind).toBe('create');
+  });
+
+  it('タイトルは sha を持たず、本文は sha でなく workflow 名で集まると書く', () => {
+    const key = alarmKey(SDK.workflowName, SDK.headSha);
+    expect(buildIssueTitle(SDK)).not.toContain(SDK.headSha.slice(0, 12));
+    expect(buildIssueTitle(SDK)).toContain('Claude SDK 更新');
+    const body = buildIssueBody({ ...SDK, key });
+    expect(body).toContain('閉じてよい');
+    expect(body).not.toContain('`main` が進めば別の Issue になる');
+    expect(body).toContain(alarmMarker(key));
+  });
+
+  it('⭐ 既存の workflow（CI など）は従来どおり sha ごとに別の鍵・別のタイトルである', () => {
+    expect(alarmKey('CI', REAL.headSha)).toBe(`CI@${REAL.headSha}`);
+    expect(buildIssueTitle(REAL)).toContain('3ca63973b7da');
+    expect(buildIssueBody({ ...REAL, key: alarmKey('CI', REAL.headSha) })).toContain(
+      '`main` が進めば別の Issue になる',
+    );
+  });
+
+  it('⭐ 別の workflow は、sha が同じでも別の鍵になる', () => {
+    expect(alarmKey('Claude SDK 更新', REAL.headSha)).not.toBe(
+      alarmKey('ベースイメージを GHCR へ写す', REAL.headSha),
+    );
+  });
+});
+
 describe('findOpenAlarmIssue', () => {
   const marker = alarmMarker(alarmKey(REAL.workflowName, REAL.headSha));
 
@@ -357,6 +416,17 @@ describe('main-ci-alarm の監視対象は実在する workflow の名前であ�
   it('前提: 監視対象を1本以上読めている（走査が空を「全部一致」へ倒さない）', () => {
     expect(watched.length).toBeGreaterThan(0);
     expect(actualNames.size).toBeGreaterThan(watched.length);
+  });
+
+  it('⭐ sha を鍵に入れない workflow は、すべて監視対象に入っている（入れ忘れると鍵だけ変わって鳴らない）', () => {
+    expect(PER_WORKFLOW_ALARM_NAMES.length).toBeGreaterThan(0);
+    for (const name of PER_WORKFLOW_ALARM_NAMES as string[]) {
+      expect(watched, `PER_WORKFLOW_ALARM_NAMES の "${name}" が監視対象に無い`).toContain(name);
+    }
+  });
+
+  it('⭐ 定期実行の update-claude-sdk は監視対象に入っている', () => {
+    expect(watched).toContain('Claude SDK 更新');
   });
 
   it('監視対象の名前は、すべて .github/workflows/ の実在する name: である', () => {
