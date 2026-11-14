@@ -15,7 +15,12 @@ import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-fo
 import { describeGithubCi } from './progress-github.js';
 import { describeDiagnosticsSummaryDigest } from './diagnostics-summary-format.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
-import { JOURNAL_ENTRY_TYPES, describeAnsweredVia, type JournalEntry } from './schema.js';
+import {
+  JOURNAL_ENTRY_TYPES,
+  describeAnsweredVia,
+  type JournalEntry,
+  type JournalEntryType,
+} from './schema.js';
 import {
   EXCHANGE_WITH_VALUES,
   JournalAnchorNotFoundError,
@@ -439,6 +444,14 @@ function renderJournalEntry(
         head: `[diagnostics_summary ${field(entry.source)} ${entry.principalKind}]`,
         body: JSON.stringify(entry.payload),
       };
+    case 'diagnostics_summary_send':
+      return {
+        head: `[diagnostics_summary_send ${entry.outcome}]`,
+        body:
+          `${entry.period.start} 〜 ${entry.period.end} の診断の要約を ${entry.sinkHost} へ送る試み（${entry.attempt} 回目）: ${entry.outcome}` +
+          (entry.httpStatus === undefined ? '' : ` HTTP ${entry.httpStatus}`) +
+          (entry.reason === undefined ? '' : ` 理由 ${entry.reason}`),
+      };
   }
 }
 
@@ -629,6 +642,17 @@ function checkJournalListArgs(
 }
 
 // ストアへ渡す問い合わせ。`[]`（空配列）もそのまま転送する: `{}` へ落とすと「0件」の契約が「絞らない」に化け、契約の歯からも見えないため
+// `types` を省略した一覧から外す種別: 日々届く（受け取った診断の要約）・日々積まれる（送信の結果）ので、既定の一覧を埋めて判断の記録を押し出す。
+// 他の診断の種別（turn_usage など）は外していない（これまでどおり既定の一覧に出る）。ここに足した2つだけが、`types` で名指ししたときにだけ出る。
+// ストアの問い合わせに「除く」の口は無いので、省略時は残りの種別を明示して渡す（ストア3実装の契約を広げない）。
+const DEFAULT_LISTING_EXCLUDED_TYPES: readonly JournalEntryType[] = [
+  'diagnostics_summary',
+  'diagnostics_summary_send',
+];
+const DEFAULT_LISTING_TYPES: JournalEntryType[] = JOURNAL_ENTRY_TYPES.filter(
+  (type) => !DEFAULT_LISTING_EXCLUDED_TYPES.includes(type),
+);
+
 function buildJournalQuery(
   args: JournalListArgs,
   requested: number,
@@ -639,7 +663,7 @@ function buildJournalQuery(
     limit: requested,
     ...(normalized.normalizedSince === undefined ? {} : { since: normalized.normalizedSince }),
     ...(normalized.normalizedUntil === undefined ? {} : { until: normalized.normalizedUntil }),
-    ...(types === undefined ? {} : { types }),
+    types: types === undefined ? DEFAULT_LISTING_TYPES : types,
     ...(q === undefined ? {} : { q }),
     ...(withFilter === undefined ? {} : { with: withFilter }),
     ...(order === undefined ? {} : { order }),
@@ -1009,7 +1033,7 @@ export function journalTools(context: ToolContext, shared: CloneToolsShared) {
           .array(z.enum(JOURNAL_ENTRY_TYPES))
           .optional()
           .describe(
-            '例 {"types":["escalation"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別',
+            '例 {"types":["escalation"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別（ただし diagnostics_summary と diagnostics_summary_send は、日々積まれて一覧を埋めるので、名指ししたときだけ出る）',
           ),
         // 説明文は `conversation_read` の `q` と変えない: 同じ語で探す口の言い方が違うと違う意味論を疑われるため
         q: z

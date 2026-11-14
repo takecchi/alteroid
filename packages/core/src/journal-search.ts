@@ -33,6 +33,8 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
   conversation_deleted: [],
   // 自由文を持たない（数と列挙値だけ。本体の欄名は検索欄の `summary` を避けてある）
   diagnostics_summary: [],
+  // 自由文を持たない（結果・理由の列挙値・数・host だけ）
+  diagnostics_summary_send: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
 // 表から導く: 断りを各所に手書きすると、表だけ直して断りが置き去りになる。

@@ -181,6 +181,7 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       break;
     // 受け取った診断の要約は、読み直す画面の材料を変えない
     case 'diagnostics_summary':
+    case 'diagnostics_summary_send':
       break;
     case 'conversation_deleted':
       // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる:一覧・未読数・開いている本文を読み直す
