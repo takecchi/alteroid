@@ -55,6 +55,11 @@ on:
       - CI
       - release/prod へ反映
       - storage-pg を本物の PostgreSQL で
+      # 定期実行で落ちる workflow。落ちても `main` の CI は緑のままなので、ここで拾わないと誰にも知らされない
+      # （`Claude SDK 更新` は PAT の失効で10日以上落ち続けたが、知らせる経路が無かった）。
+      # sha ではなく workflow 名で1本の Issue にまとめる（`PER_WORKFLOW_ALARM_NAMES`）。
+      - Claude SDK 更新
+      - ベースイメージを GHCR へ写す
     types: [completed]
 
 # **同じ run に対して二重に走らせない。** `workflow_run` は再実行でも起きる。
