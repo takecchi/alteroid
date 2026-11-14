@@ -66,6 +66,7 @@ function stringifyToolResponseForValidationCheck(toolResponse: unknown): string 
 }
 
 import { MCP_SERVER_NAME } from './mcp-server-name.js';
+import { withoutSchemaKey } from './mcp-lean-schema.js';
 
 export { MCP_SERVER_NAME };
 export {
@@ -305,14 +306,16 @@ export function createCloneTools(context: ToolContext) {
 }
 
 export function createCloneMcpServer(context: ToolContext) {
-  return createSdkMcpServer({
-    name: MCP_SERVER_NAME,
-    version: '0.1.0',
-    instructions:
-      'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
-      '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
-      '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典と実行時の状態、' +
-      'マネージャーへの委譲。',
-    tools: createCloneTools(context),
-  });
+  return withoutSchemaKey(
+    createSdkMcpServer({
+      name: MCP_SERVER_NAME,
+      version: '0.1.0',
+      instructions:
+        'alteroid のクローン自身の道具。記憶（人間がいつでも読み書きする Markdown）、' +
+        '日誌（追記専用）、人間への確認、継続中の依頼（時間起点の仕込み）、' +
+        '実行環境プロファイル（`.zprofile` 相当）、自分自身（alteroid）の正典と実行時の状態、' +
+        'マネージャーへの委譲。',
+      tools: createCloneTools(context),
+    }),
+  );
 }
