@@ -2,6 +2,12 @@ import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { approvalStateOf } from '@alteroid/core/approval-state';
 import { describeGithubCi } from '@alteroid/core/github-ci-format';
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
+import {
+  isAlteroidReportSource,
+  parseReportProblemJson,
+  reportProblemDetailRows,
+  summarizeReportProblem,
+} from '@alteroid/core/report-problem';
 
 import { redactBody } from './redact.js';
 import {
@@ -81,8 +87,15 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       return entry.unavailable === undefined
         ? `${entry.date} の日報`
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
-    case 'external_event':
-      return `${entry.source}: ${entry.summary}${attachmentNote(entry.attachments)}`;
+    case 'external_event': {
+      // 日誌の本文（`entry.summary`）は逐語のまま。ここで読める1行にするのは表示だけ。壊れた・想定外の形は既存の表示へ落とす
+      const report = isAlteroidReportSource(entry.source)
+        ? parseReportProblemJson(entry.summary)
+        : null;
+      return report === null
+        ? `${entry.source}: ${entry.summary}${attachmentNote(entry.attachments)}`
+        : `${summarizeReportProblem(report)}${attachmentNote(entry.attachments)}`;
+    }
     case 'turn_usage':
     case 'context_usage':
     case 'turn_timing':
@@ -114,6 +127,22 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       );
     }
   }
+}
+
+/**
+ * 展開した行の詳細。`alteroid-report` の `external_event` を欄ごとの（ラベル, 値）にする。それ以外・壊れた形は null（逐語の JSON だけを出す既存の表示のまま）。
+ * 値は要旨と同じ伏せ字を通す。日誌の本文は変えない。
+ */
+export function journalReportDetail(
+  entry: JournalEntry,
+): { label: string; value: string }[] | null {
+  if (entry.type !== 'external_event' || !isAlteroidReportSource(entry.source)) return null;
+  const report = parseReportProblemJson(entry.summary);
+  if (report === null) return null;
+  return reportProblemDetailRows(report).map((row) => ({
+    label: row.label,
+    value: redactBody(row.value),
+  }));
 }
 
 export function summarizeJournalEntry(

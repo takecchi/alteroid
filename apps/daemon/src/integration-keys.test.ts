@@ -398,7 +398,7 @@ describe('門番: 既定で拒否（403）', () => {
     expect(journal).not.toContain('ci.other');
   });
 
-  it('openapi の全ルートを回す: 連携の鍵で通るのは source 一致の2口と添付のアップロード（POST /attachments）だけで、残りはすべて 403', async () => {
+  it('openapi の全ルートを回す: 連携の鍵で通るのは source 一致の2口と添付のアップロード（POST /attachments）と MCP の口（POST /mcp）だけで、残りはすべて 403', async () => {
     const app = buildApp();
     const { value } = await issue(app, { source: 'ci.main' });
     const spec = (await (await app.request('/openapi.json')).json()) as {
@@ -438,13 +438,16 @@ describe('門番: 既定で拒否（403）', () => {
         });
         // POST /attachments は content-type 違いで自身の 415 に止まる: 403 でないことが「門を通った」の証拠。
         if (response.status === 403) denied.push(`${method} ${path}`);
-        else if (method === 'post' && path === '/attachments' && response.status === 415) {
+        else if (method === 'post' && path === '/mcp' && response.status === 406) {
+          // POST /mcp は Accept 不足の 406（MCP の transport の応答）に止まる: 403 でないことが「門を通った」の証拠。
+          passedGate.push(`${method} ${path}`);
+        } else if (method === 'post' && path === '/attachments' && response.status === 415) {
           passedGate.push(`${method} ${path}`);
         } else wrongly.push(`${method} ${path} -> ${String(response.status)}`);
       }
     });
     expect(wrongly).toEqual([]);
-    expect(passedGate).toEqual(['post /attachments']);
+    expect(passedGate.sort()).toEqual(['post /attachments', 'post /mcp']);
     expect(denied).toContain('get /attachments/{id}');
     expect(denied).toContain('get /attachments/{id}/meta');
     expect(denied).toContain('post /events/{source}');
@@ -872,11 +875,12 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
 });
 
 describe('部品', () => {
-  it('judgeIntegrationRoute: 通すのは POST /events・source 一致の POST /events/:source・添付のアップロード POST /attachments だけ', () => {
+  it('judgeIntegrationRoute: 通すのは POST /events・source 一致の POST /events/:source・添付のアップロード POST /attachments・MCP の POST /mcp だけ', () => {
     expect(judgeIntegrationRoute('POST', '/attachments', 'ci')).toEqual({
       allowed: true,
       via: 'attachment-upload',
     });
+    expect(judgeIntegrationRoute('POST', '/mcp', 'ci')).toEqual({ allowed: true, via: 'mcp' });
     expect(judgeIntegrationRoute('POST', '/events', 'ci')).toEqual({
       allowed: true,
       via: 'body-source',
@@ -892,6 +896,10 @@ describe('部品', () => {
     for (const [method, path] of [
       ['GET', '/events'],
       ['POST', '/events/'],
+      ['GET', '/mcp'],
+      ['POST', '/mcp/'],
+      ['PUT', '/mcp'],
+      ['DELETE', '/mcp'],
       ['POST', '/events/other'],
       ['POST', '/events/ci/x'],
       ['POST', '/events/%'],

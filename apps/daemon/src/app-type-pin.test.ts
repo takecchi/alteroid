@@ -110,6 +110,7 @@ type ExpectedAppSchema = {
   '/access/unreadable/remove': '$post';
   '/shutdown': '$post';
   '/reset': '$post';
+  '/mcp': '$post';
 };
 
 type ActualAppSchema = { [P in keyof Schema]: keyof Schema[P] };

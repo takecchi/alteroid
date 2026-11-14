@@ -2,6 +2,7 @@ type IntegrationRouteVerdict =
   | { allowed: true; via: 'body-source' }
   | { allowed: true; via: 'path-source' }
   | { allowed: true; via: 'attachment-upload' }
+  | { allowed: true; via: 'mcp' }
   | { allowed: false };
 
 // 添付の読み出し（`GET /attachments/:id` など）は通さない: 鍵は上げるだけで読めない設計のため。それ以外はすべて既定で拒否する。
@@ -12,6 +13,7 @@ export function judgeIntegrationRoute(
 ): IntegrationRouteVerdict {
   if (method.toUpperCase() !== 'POST') return { allowed: false };
   if (path === '/events') return { allowed: true, via: 'body-source' };
+  if (path === '/mcp') return { allowed: true, via: 'mcp' };
   if (path === '/attachments') return { allowed: true, via: 'attachment-upload' };
   const prefix = '/events/';
   if (!path.startsWith(prefix)) return { allowed: false };
