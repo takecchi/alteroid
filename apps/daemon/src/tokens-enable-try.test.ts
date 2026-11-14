@@ -135,6 +135,11 @@ async function waitForTryJournal(fragment: string): Promise<string> {
   return journalText();
 }
 
+// 「試しが走らなかった」を確かめる前に、裏の処理が進みきるまで譲る。実時間の待ち（`setTimeout`）は使わない（待ちの基準値の門: wallclock-waits-ratchet）。メモリのストアだけなので、イベントループを数周回せば足りる。
+async function flushBackground(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 beforeEach(async () => {
   nowMs = T0;
   stores = createMemoryStores();
@@ -206,7 +211,7 @@ describe('PUT /tokens: 無効 → 有効（戻す）でその場で試す', () =
       expect(response.status).toBe(200);
       const journal = await waitForTryJournal('判定できなかった');
       expect(journal).not.toContain(VALUE_COOLING);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await flushBackground();
       expect(unhandled).toEqual([]);
     } finally {
       process.off('unhandledRejection', listener);
@@ -268,7 +273,7 @@ describe('PUT /tokens: 無効 → 有効（戻す）でその場で試す', () =
       { id: 'tok-cooling', label: 'tok-cooling', disabled: true },
       { id: 'tok-ready-disabled', label: 'tok-ready-disabled', disabled: true },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushBackground();
 
     expect(trialCalls).toEqual([]);
   });
@@ -281,7 +286,7 @@ describe('PUT /tokens: 無効 → 有効（戻す）でその場で試す', () =
       { id: 'tok-cooling', label: 'tok-cooling', value: VALUE_NEW, disabled: false },
       { id: 'tok-ready-disabled', label: 'tok-ready-disabled', disabled: true },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushBackground();
 
     expect(response.status).toBe(200);
     expect(trialCalls).toEqual([]);
@@ -298,7 +303,7 @@ describe('PUT /tokens: 無効 → 有効（戻す）でその場で試す', () =
       });
     });
     void response;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flushBackground();
 
     expect(trialCalls).toEqual([]);
     expect((await rowOf('tok-cooling'))?.disabledAt).toBe(DISABLED_AT);
