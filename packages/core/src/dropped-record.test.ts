@@ -1538,7 +1538,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       period: { emit: 'never', why: '送った日の窓。跡の見分けに要らない（at から分かる）。' },
       outcome: { emit: 'raw', token: 'outcome' },
       attempt: { emit: 'raw', token: 'attempt' },
-      httpStatus: { emit: 'never', why: '受け手の HTTP 状態。理由（reason）が分類を持つので跡に要らない。' },
+      httpStatus: {
+        emit: 'never',
+        why: '受け手の HTTP 状態。理由（reason）が分類を持つので跡に要らない。',
+      },
       reason: { emit: 'raw', token: 'reason' },
       sinkHost: { emit: 'never', why: '送り先の host。跡の見分けに要らない（設定から分かる）。' },
     },

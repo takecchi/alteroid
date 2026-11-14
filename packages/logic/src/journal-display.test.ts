@@ -30,6 +30,8 @@ const OLD_TONE_IN_ORDER = [
   ['conversation_deleted', 'neutral'],
   // 受け取った診断の要約も移した後に足した種別なので、並びの末尾に置く
   ['diagnostics_summary', 'neutral'],
+  // 診断の要約の送信の結果も同じ
+  ['diagnostics_summary_send', 'neutral'],
 ] as const;
 
 describe('日誌の表示の定数', () => {
@@ -65,7 +67,7 @@ describe('種別の日本語名（issue #2806）', () => {
 
   it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
     expect(SEARCH_SCOPE_NOTE_JA).toBe(
-      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除・受け取った診断の要約は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除・受け取った診断の要約・診断の要約の送信は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
     expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });
