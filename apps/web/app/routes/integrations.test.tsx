@@ -195,6 +195,51 @@ describe('/integrations 画面 — 発行', () => {
     expect(document.body.textContent).not.toContain(SECRET_VALUE);
   });
 
+  it('「Claude Code から報告に使う鍵にする」で source と回数 10 を入れ、発行した鍵には登録コマンドを（値なしで）出す', async () => {
+    const stub = stubKeys({
+      post: {
+        status: 200,
+        body: {
+          key: view({ id: 'k-r', name: '報告', source: 'alteroid-report' }),
+          value: SECRET_VALUE,
+        },
+      },
+    });
+    renderScreen();
+    await screen.findByText('CI');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code から報告に使う鍵にする' }));
+    expect(screen.getByLabelText<HTMLInputElement>('source').value).toBe('alteroid-report');
+    expect(screen.getByLabelText<HTMLInputElement>('1分あたりの回数').value).toBe('10');
+    fill('名前（見分けるための呼び名）', '報告');
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await screen.findByText('発行した: 報告');
+
+    expect(stub.posts[0]?.body).toEqual({
+      name: '報告',
+      source: 'alteroid-report',
+      ratePerMinute: 10,
+    });
+    const command = screen.getByText(/claude mcp add/, { selector: 'pre, code' }).textContent ?? '';
+    expect(command).toContain(
+      'claude mcp add --transport http alteroid-report http://daemon.test/mcp',
+    );
+    expect(command).toContain('--header "Authorization: Bearer <上の値>"');
+    expect(command).not.toContain(SECRET_VALUE);
+    expect(document.body.textContent?.split(SECRET_VALUE)).toHaveLength(2);
+  });
+
+  it('source が alteroid-report 以外の鍵には、登録コマンドを出さない', async () => {
+    stubKeys();
+    renderScreen();
+    await screen.findByText('CI');
+    fill('名前（見分けるための呼び名）', '新しい鍵');
+    fill('source', 'new.src');
+    fireEvent.click(screen.getByRole('button', { name: '発行する' }));
+    await screen.findByText('発行した: 新しい鍵');
+    expect(document.body.textContent).not.toContain('claude mcp add');
+  });
+
   it('名前が 200 文字を超えたら、黙って切らず欄の下で言い、送らない（CLI と同じ上限）', async () => {
     const stub = stubKeys();
     renderScreen();

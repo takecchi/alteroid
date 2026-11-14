@@ -1,4 +1,10 @@
-import { daemonOrigin, ORIGIN_PLACEHOLDER } from '~/lib/integration-example';
+import {
+  claudeMcpAddCommand,
+  daemonOrigin,
+  ORIGIN_PLACEHOLDER,
+  REPORT_RATE_PER_MINUTE,
+  REPORT_SOURCE,
+} from '~/lib/integration-example';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { SettingsTabs } from '~/components/group-tabs';
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
@@ -81,7 +87,7 @@ export default function Integrations() {
       tabs={<SettingsTabs />}
       documentTitle={settingsDocumentTitle('/integrations')}
       title="連携"
-      description="外のサービスが alteroid へ外部イベントを送るための鍵。鍵ごとに送れる source を1つに固定し、期限と上限を付けられる"
+      description="外のサービスが alteroid へ外部イベントを送る（外の AI が MCP で不具合を報告する）ための鍵。鍵ごとに送れる source を1つに固定し、期限と上限を付けられる"
     >
       <LeaveGuardScope>
         <div className="flex flex-col gap-4">
@@ -160,6 +166,8 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
   const [expires, setExpires] = useState('');
   const [maxBodyBytes, setMaxBodyBytes] = useState('');
   const [ratePerMinute, setRatePerMinute] = useState('');
+  // 報告用の設定を選んだとき、絞った回数が畳んだ欄に隠れないよう開く
+  const [limitsOpen, setLimitsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // 発行中の2回目を止める印: ボタンの disabled は Ctrl/Cmd+Enter（`requestSubmit`）を止めず、state は次の描画まで古いため。
   // 止めないと、値の違う生きた鍵が2本発行され、片方を控え損ねやすい
@@ -253,6 +261,25 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
             英小文字・数字・. _ - の 1〜64 文字（^[a-z0-9._-]{'{1,64}'}$）。この鍵は、この source
             のイベントだけを送れる。後から変えられない
           </FieldHint>
+          <div className="flex flex-col items-start gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSource(REPORT_SOURCE);
+                setRatePerMinute(String(REPORT_RATE_PER_MINUTE));
+                setLimitsOpen(true);
+              }}
+            >
+              Claude Code から報告に使う鍵にする
+            </Button>
+            <FieldHint id="integration-report-hint">
+              source を {REPORT_SOURCE}、1分あたりの回数を {String(REPORT_RATE_PER_MINUTE)}{' '}
+              回に入れる（外の AI が alteroid の不具合を報告する鍵。既定の {String(DEFAULT_RATE_PER_MINUTE)}{' '}
+              回/分より絞って渡すのを勧める）
+            </FieldHint>
+          </div>
         </div>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">期限（任意。空なら無期限）</span>
@@ -262,7 +289,11 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
             onChange={(event) => setExpires(event.target.value)}
           />
         </label>
-        <details className="rounded-md border border-border px-3 py-2">
+        <details
+          className="rounded-md border border-border px-3 py-2"
+          open={limitsOpen}
+          onToggle={(event) => setLimitsOpen(event.currentTarget.open)}
+        >
           <summary className="cursor-pointer text-xs text-muted-foreground">
             上限を変える（任意）
           </summary>
@@ -388,6 +419,23 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
           </span>
           <CodeBlock label="curl">{example}</CodeBlock>
         </div>
+        {key.source === REPORT_SOURCE && (
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">
+              Claude Code から報告に使う。次のコマンドの &lt;上の値&gt; を上の鍵の値に置き換えて登録すると、その
+              Claude Code が MCP の道具 report_problem で alteroid の不具合をクローンの受信箱へ報告できる（task
+              は自動では作られず、クローンが判断する）
+            </span>
+            <CodeBlock label="claude mcp add">{claudeMcpAddCommand(origin)}</CodeBlock>
+            {key.limits.ratePerMinute > REPORT_RATE_PER_MINUTE && (
+              <p className="text-[11px] break-words text-warn">
+                この鍵の回数の上限は {String(key.limits.ratePerMinute)} 回/分。報告用の鍵は{' '}
+                {String(REPORT_RATE_PER_MINUTE)}{' '}
+                回/分に絞って発行するのを勧める（後から変えられないので、絞るなら失効して発行し直す）。
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </Card>
   );

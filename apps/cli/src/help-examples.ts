@@ -113,7 +113,8 @@ export const HELP_EXAMPLES = {
   integrationCreate: examples(
     'alteroid integration create --name "CI" --source ci.main              # 無期限・既定の上限',
     'alteroid integration create --name "CI" --source ci.main --expires 90d --rate-per-minute 10',
-    'alteroid integration create --name "CI" --source ci.main --json      # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
+    'alteroid integration create --name "Claude Code の報告" --source alteroid-report --rate-per-minute 10   # 外の AI が MCP（POST /mcp）で不具合を報告する鍵。10 回/分に絞る',
+    'alteroid integration create --name "CI" --source ci.main --json     # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
     'alteroid integration list                                             # 状態・最終使用を見る',
   ),
   tokenPolicy: examples(

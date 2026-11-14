@@ -421,7 +421,7 @@ describe('鍵の能力は「自分の送信に付ける添付のアップロー�
   });
 });
 
-describe('本文の上限（maxBodyBytes）は /events* にだけ掛かり、アップロードには掛からない', () => {
+describe('本文の上限（maxBodyBytes）は添付のアップロード以外（/events* と /mcp）に掛かり、アップロードには掛からない', () => {
   it('1 MiB を超える画像は添付の上限内なら上げられ、同じ大きさの /events の本文は 413', async () => {
     const s = setup();
     const key = await issue(s);
