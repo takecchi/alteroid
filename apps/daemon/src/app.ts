@@ -39,6 +39,7 @@ import { openApiDocumentation, openApiExcludePaths } from './openapi.js';
 import { type WorkerToolBus } from './topology-activity.js';
 import { createAppContext } from './app-context.js';
 import { systemRoutes } from './app-routes-system.js';
+import { selfRoutes } from './app-routes-self.js';
 import { adminRoutes } from './app-routes-admin.js';
 import { memoryRoutes } from './app-routes-memory.js';
 import { authRoutes } from './app-routes-auth.js';
@@ -67,6 +68,8 @@ export interface AppDeps {
   stores: Stores;
   token: string;
   shutdown: () => void;
+  // `GET /self/prompt` の秘密走査が「デーモン自身の秘密の環境変数の値」を探す環境。無ければ `process.env`（テストが既知のダミー値を立てるための差し替え口）
+  env?: NodeJS.ProcessEnv;
   now?: () => Date;
   // `now` と同じ差し替え口: `/usage` の `ledgerTimeZone` が読む TZ 名の解決（既定は実行時の `Intl`）。テストが TZ の取れない状態を作るため
   resolveTimeZone?: () => string | undefined;
@@ -345,6 +348,8 @@ export function createApp(deps: AppDeps) {
     .use('*', authenticate)
 
     .route('/', systemRoutes(ctx, deps))
+
+    .route('/', selfRoutes(ctx, deps))
 
     .route('/', attachmentsRoutes(ctx, deps))
 

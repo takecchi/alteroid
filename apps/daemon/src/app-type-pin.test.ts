@@ -22,6 +22,7 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
 type ExpectedAppSchema = {
   '/health': '$get';
   '/status': '$get';
+  '/self/prompt': '$get';
   '/attachments': '$post' | '$get';
   '/attachments/limits': '$get';
   '/attachments/:id/meta': '$get';

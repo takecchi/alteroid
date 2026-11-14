@@ -1648,6 +1648,179 @@ export const resetResponseSchema = z.object({
   }),
 });
 
+// ---- GET /self/prompt（クローンが実際に焼いたプロンプトを読む。読み取り専用）----
+
+const selfPromptAxis = <T extends z.ZodType>(value: T) =>
+  z.union([
+    z.object({ available: z.literal(true), value }),
+    // 取れない軸は 0 や空配列にせず、取れない理由を値で持つ
+    z.object({ available: z.literal(false), reason: z.string() }),
+  ]);
+
+const selfPromptRows = <T extends z.ZodType>(row: T) =>
+  z.object({
+    rows: z.array(row),
+    // 上限で切り捨てた件数（切っていなければ 0）。黙って切らない
+    omitted: z.number().int().nonnegative(),
+  });
+
+const selfPromptFailureSchema = z.object({
+  ok: z.literal(false),
+  at: z.string(),
+  error: z.string(),
+});
+
+export const selfPromptMemoryDocumentSchema = z.object({
+  slug: z.string(),
+  type: z.string(),
+  description: z.string().nullable(),
+  // 文書の本文の文字数（本文は索引に焼かれない）
+  chars: z.number().int().nonnegative(),
+  // 焼いた索引の中でこの文書が占めた断片の長さ（カードなら要旨＋節の目次、fact なら目次の1行）。省かれた・取れなかった文書は null（0 ではない）
+  indexChars: z.number().int().nonnegative().nullable(),
+  // `premise-card` / `indexed-card` / `premise-stub` / `indexed-stub` / `toc-line`。焼かれていなければ null
+  indexForm: z.string().nullable(),
+  // 索引に焼かれなかった（省かれた）か。true のとき `indexNote` が理由を言う
+  omitted: z.boolean(),
+  // 省かれた・取れなかった理由。焼かれていれば null
+  indexNote: z.string().nullable(),
+});
+
+const selfPromptToolSchema = z.object({
+  name: z.string(),
+  source: z.literal('clone'),
+  // `full=0` では省く
+  description: z.string().optional(),
+  // `full=0` では省く
+  inputSchema: z.unknown().optional(),
+  descriptionChars: z.number().int().nonnegative(),
+  inputSchemaChars: z.number().int().nonnegative(),
+});
+
+const selfPromptContextUsageSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    at: z.string(),
+    totalTokens: z.number(),
+    rawMaxTokens: z.number(),
+    percentage: z.number(),
+    autoCompactThreshold: z.number().nullable(),
+    isAutoCompactEnabled: z.boolean(),
+    categories: selfPromptAxis(
+      selfPromptRows(
+        z.object({
+          name: z.string(),
+          tokens: z.number(),
+          kind: z.enum(['used', 'free', 'buffer', 'deferred']),
+        }),
+      ),
+    ),
+    mcpTools: selfPromptAxis(
+      selfPromptRows(
+        z.object({
+          name: z.string().nullable(),
+          serverName: z.string().nullable(),
+          tokens: z.number(),
+          isLoaded: z.boolean().nullable(),
+        }),
+      ),
+    ),
+    systemPromptSections: selfPromptAxis(
+      selfPromptRows(z.object({ name: z.string().nullable(), tokens: z.number() })),
+    ),
+    memoryFiles: selfPromptAxis(
+      selfPromptRows(
+        z.object({ path: z.string().nullable(), type: z.string().nullable(), tokens: z.number() }),
+      ),
+    ),
+    systemTools: selfPromptAxis(selfPromptRows(z.object({ name: z.string(), tokens: z.number() }))),
+    deferredBuiltinTools: selfPromptAxis(
+      selfPromptRows(z.object({ name: z.string(), tokens: z.number(), isLoaded: z.boolean() })),
+    ),
+    mcpInstructions: selfPromptAxis(
+      selfPromptRows(z.object({ serverName: z.string(), tokens: z.number() })),
+    ),
+    messageBreakdown: selfPromptAxis(
+      z.object({
+        toolCallTokens: z.number(),
+        toolResultTokens: z.number(),
+        attachmentTokens: z.number(),
+        assistantMessageTokens: z.number(),
+        userMessageTokens: z.number(),
+        toolCallsByType: selfPromptRows(
+          z.object({ name: z.string(), callTokens: z.number(), resultTokens: z.number() }),
+        ),
+      }),
+    ),
+  }),
+  selfPromptFailureSchema,
+]);
+
+export const selfPromptResponseSchema = z.object({
+  // `full=1`（既定）か。`false` のとき、本文・道具の説明・入力スキーマは省いてある（大きさの欄は残る）
+  full: z.boolean(),
+  // null = このプロセスでまだセッションを組んでいない（理由は `notice`）。0 や空配列は置かない
+  session: z.union([
+    z.object({
+      ok: z.literal(true),
+      builtAt: z.string(),
+      resumedFrom: z.string().nullable(),
+      sessionId: z.string().nullable(),
+      model: z.string(),
+    }),
+    selfPromptFailureSchema,
+    z.null(),
+  ]),
+  // 以下の欄は、セッションが組まれていない・組み立てに失敗した回は null（取れていない）
+  systemPrompt: z
+    .object({
+      // `full=1` のときだけ
+      text: z.string().optional(),
+      chars: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  memoryInPrompt: z
+    .object({
+      documents: z.array(selfPromptMemoryDocumentSchema),
+      // スナップショットが載せる件数の上限で切り捨てた文書の数（切っていなければ 0）
+      omittedDocuments: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  tools: z.array(selfPromptToolSchema).nullable(),
+  builtinTools: z
+    .object({
+      available: z.literal(false),
+      reason: z.string(),
+      // 名前と大きさだけは `contextUsage` から引ける。ターン境界をまだ観測していなければ null
+      systemTools: selfPromptAxis(selfPromptRows(z.object({ name: z.string(), tokens: z.number() }))).nullable(),
+      deferredBuiltinTools: selfPromptAxis(
+        selfPromptRows(z.object({ name: z.string(), tokens: z.number(), isLoaded: z.boolean() })),
+      ).nullable(),
+    })
+    .nullable(),
+  // 名前と種別だけ。接続設定の値（url・args・env・headers・command）は返さない
+  externalMcpServers: z
+    .array(z.object({ name: z.string(), type: z.enum(['stdio', 'http', 'sse']) }))
+    .nullable(),
+  externalMcpServersLive: z
+    .object({
+      at: z.string(),
+      failed: z.array(z.string()),
+      retained: z.array(z.string()),
+    })
+    .nullable(),
+  plugins: z.array(z.object({ name: z.string() })).nullable(),
+  // null = 今のセッションでまだターン境界を観測していない
+  contextUsage: selfPromptContextUsageSchema.nullable(),
+  // 取れなかった軸の理由・`full=0` で省いたもの・秘密走査の結果。人間が読む文
+  notice: z.array(z.string()),
+  // 秘密走査の結果。当たった規則の名前と件数だけ（値・位置・前後の文脈は無い）。`scanned` が false になる応答は無い（走査が落ちたら 500 で本文を返さない）
+  secretScan: z.object({
+    scanned: z.literal(true),
+    hits: z.array(z.object({ rule: z.string(), count: z.number().int().positive() })),
+  }),
+});
+
 // `describeRoute` を付けていない経路は元々 spec に載らないので二重の安全策だが、`/openapi.json` `/docs` 自身を外すことを明示しておく。
 export const openApiExcludePaths = ['/openapi.json', '/docs'];
 
@@ -1673,6 +1846,10 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
   ],
   tags: [
     { name: 'system', description: '死活監視・停止など、デーモン自体の管理' },
+    {
+      name: 'self',
+      description: 'クローン自身の観測（実際に焼いたプロンプトの読み取り。書き込みの口は無い）',
+    },
     { name: 'chat', description: '人間とクローンの対話（SSE）と会話終了（蒸留の契機）' },
     {
       name: 'conversations',

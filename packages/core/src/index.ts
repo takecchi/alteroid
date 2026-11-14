@@ -714,6 +714,27 @@ export { createPushChannel } from './push-channel.js';
 export { redactErrorText, redactSecretsInBody } from './denial-input-head.js';
 export { redactedExcerpt } from './redact.js';
 
+/** 応答へ載せる文字列の秘密走査（`GET /self/prompt`）。当たった箇所を `[redacted:<規則名>]` にし、規則ごとの件数だけを返す。 */
+export {
+  createSecretRedactor,
+  SECRET_ENV_VALUE_MIN_LENGTH,
+  type SecretHit,
+  type SecretRedactor,
+  type SecretRedactorOptions,
+} from './secret-redaction.js';
+
+/** クローンが焼いたプロンプトのスナップショットの型（`CloneHost#promptSnapshot` の戻り。`GET /self/prompt` が写す）。 */
+export type {
+  ClonePromptSnapshot,
+  PromptSnapshotContextUsage,
+  PromptSnapshotFailure,
+  PromptSnapshotMemoryDocument,
+  PromptSnapshotMemoryIndex,
+  PromptSnapshotSession,
+  PromptSnapshotTool,
+  SnapshotAxis,
+} from './clone-prompt-snapshot.js';
+
 /** テスト専用（本番の配線には出てこない）。帳面（`recentDroppedTraces()`）はプロセスの生存中ずっと共有されるので、前のテストの行と混ざらないよう断言の前に呼ぶ。 */
 export { clearRecentTracesForTesting } from './dropped-record.js';
 

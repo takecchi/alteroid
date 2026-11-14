@@ -13,7 +13,7 @@ const REDACTED = '[REDACTED]';
 const SECRET_ENV_NAME_PATTERN = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
 
 // パターンを語単位の一致にしない: `ACCESSKEY` のような区切りの無い名前が伏せ漏れになるため
-function isSecretEnvName(name: string): boolean {
+export function isSecretEnvName(name: string): boolean {
   const withoutAuthorWords = name
     .split(/[^A-Za-z0-9]+/)
     .filter((word) => !/^authors?$/i.test(word))
@@ -249,6 +249,31 @@ export function secretPatternsInBody(
     if (hit) hits.push(rule.name);
   }
   return hits;
+}
+
+// 伏せ字の `[REDACTED]` が元の文に在っても、新しく伏せた分と数え違えない: 退避してから規則を当て、最後に戻す。私用領域の文字で挟むのは、通常の文に現れないため
+const PRE_EXISTING_REDACTED_HOLDER = 'pre-existing-redacted';
+
+/**
+ * `CREDENTIAL_RULES` を規則ごとに当て、伏せた箇所を `[redacted:<規則名>]` に置き換えて、規則ごとの当たりの件数を返す（`GET /self/prompt` の秘密走査）。
+ * 規則の定義を二重に持たず、`redactSecretsInBody` と同じ規則を使う。値・位置・前後の文脈は返さない（名前と件数だけ）。
+ * `exclude` は呼び手が別の規則で置き換える規則の名前（その規則は当てない）。
+ */
+export function redactCredentialRulesNamed(
+  text: string,
+  exclude: ReadonlySet<SecretPatternName> = new Set(),
+): { text: string; hits: Map<SecretPatternName, number> } {
+  const hits = new Map<SecretPatternName, number>();
+  let result = text.split(REDACTED).join(PRE_EXISTING_REDACTED_HOLDER);
+  for (const rule of CREDENTIAL_RULES) {
+    if (exclude.has(rule.name)) continue;
+    const applied = rule.apply(result);
+    if (applied === result) continue;
+    const count = applied.split(REDACTED).length - 1;
+    hits.set(rule.name, (hits.get(rule.name) ?? 0) + count);
+    result = applied.split(REDACTED).join(`[redacted:${rule.name}]`);
+  }
+  return { text: result.split(PRE_EXISTING_REDACTED_HOLDER).join(REDACTED), hits };
 }
 
 function redactKnownSecretPatterns(text: string): string {
