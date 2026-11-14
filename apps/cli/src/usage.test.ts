@@ -1,4 +1,9 @@
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core';
+import {
+  USAGE_ESTIMATE_NOTICE,
+  ZERO_USAGE,
+  resolveLedgerTimeZone,
+  type UsageRow,
+} from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStderr, captureStdout } from './test-support.js';
@@ -800,6 +805,24 @@ describe('usageCommand --json（診断の材料として機械が読む口）', 
     const parsed = JSON.parse(read()) as Record<string, unknown>;
     expect(parsed['ledgerDateTimeZone']).toEqual({ state: 'known', name: 'America/Los_Angeles' });
     expect(parsed['ledgerTimeZone']).toBe('America/Los_Angeles');
+  });
+
+  it('実際の --json 出力を diagnostics analyze の読み手（resolveLedgerTimeZone）が known として読める', async () => {
+    replies.push(
+      { status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: 'Asia/Tokyo' } },
+      { status: 200, body: { ...aggregate({ rows: [] }), ledgerTimeZone: null } },
+    );
+    const readKnown = captureStdout();
+    await usageCommand({ json: true });
+    expect(resolveLedgerTimeZone(JSON.parse(readKnown()), undefined)).toEqual({
+      state: 'known',
+      name: 'Asia/Tokyo',
+      source: 'usage',
+    });
+
+    const readNull = captureStdout();
+    await usageCommand({ json: true });
+    expect(resolveLedgerTimeZone(JSON.parse(readNull()), undefined)).toEqual({ state: 'unknown' });
   });
 
   it('ledgerTimeZone が null（デーモンが解決できなかった）なら unavailable で、名前を埋めない', async () => {
