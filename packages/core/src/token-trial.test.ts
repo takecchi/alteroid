@@ -43,7 +43,9 @@ describe('selectTokenForTrial — 試す条件（設計点1）', () => {
     expect(result).toBeUndefined();
   });
 
-  it('現役が cooling でも、ready な候補が在れば何もしない', () => {
+  // 元の題: 「現役が cooling でも、ready な候補が在れば何もしない」（期待は undefined）。
+  // 経緯: 定期の復活チェック（案B）で、オーナーが「期限は信じず、とりあえず定期的に復活チェックする」と答えたため、ready な候補が在っても冷却中の鍵を試すへ反転した。
+  it('現役が cooling でも、ready な候補が在っても冷却中の鍵を試す（反転）', () => {
     const result = selectTokenForTrial({
       tokens: [
         token({ id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 }),
@@ -53,7 +55,72 @@ describe('selectTokenForTrial — 試す条件（設計点1）', () => {
       at: AT,
       lastTriedAt: {},
     });
+    expect(result?.id).toBe('a');
+  });
+
+  it('現役が ready でも、ready な鍵が在っても、冷却中の別の鍵を試す（期限が数日先でも）', () => {
+    const result = selectTokenForTrial({
+      tokens: [
+        token({ id: 'a', order: 0 }),
+        token({ id: 'b', order: 1, cooldownUntil: AT + 3 * 24 * 60 * 60 * 1000 }),
+      ],
+      active: active('a'),
+      at: AT,
+      lastTriedAt: {},
+    });
+    expect(result?.id).toBe('b');
+  });
+
+  it('ready な鍵が在っても、disabled / invalidated は試さない', () => {
+    const result = selectTokenForTrial({
+      tokens: [
+        token({ id: 'a', order: 0 }),
+        token({
+          id: 'b',
+          order: 1,
+          cooldownUntil: AT + 60 * 60 * 1000,
+          disabledAt: new Date(AT).toISOString(),
+        }),
+        token({
+          id: 'c',
+          order: 2,
+          cooldownUntil: AT + 60 * 60 * 1000,
+          invalidatedAt: new Date(AT).toISOString(),
+        }),
+      ],
+      active: active('a'),
+      at: AT,
+      lastTriedAt: {},
+    });
     expect(result).toBeUndefined();
+  });
+
+  it('ready な鍵が在っても、間隔（30分）が経っていない冷却中の鍵は試さず、倍の間隔と上限4時間を尊重する', () => {
+    const tokens = [
+      token({ id: 'a', order: 0 }),
+      token({ id: 'b', order: 1, cooldownUntil: AT + 24 * 60 * 60 * 1000 }),
+    ];
+    const common = { tokens, active: active('a'), at: AT } as const;
+    expect(
+      selectTokenForTrial({ ...common, lastTriedAt: { b: AT - TOKEN_TRIAL_INTERVAL_MS + 1 } }),
+    ).toBeUndefined();
+    expect(
+      selectTokenForTrial({ ...common, lastTriedAt: { b: AT - TOKEN_TRIAL_INTERVAL_MS } })?.id,
+    ).toBe('b');
+    expect(
+      selectTokenForTrial({
+        ...common,
+        lastTriedAt: { b: AT - TOKEN_TRIAL_BACKOFF_CAP_MS + 1 },
+        intervalMsFor: () => doubledTrialIntervalMs(TOKEN_TRIAL_BACKOFF_CAP_MS),
+      }),
+    ).toBeUndefined();
+    expect(
+      selectTokenForTrial({
+        ...common,
+        lastTriedAt: { b: AT - TOKEN_TRIAL_BACKOFF_CAP_MS },
+        intervalMsFor: () => doubledTrialIntervalMs(TOKEN_TRIAL_BACKOFF_CAP_MS),
+      })?.id,
+    ).toBe('b');
   });
 
   it('disabled / invalidated の候補は「ready な候補」として数えない（対象からも外れる）', () => {

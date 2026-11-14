@@ -100,6 +100,76 @@ async function tokenHoldersOf(deps: AppDeps): Promise<TokenHolder[] | undefined>
   return holders;
 }
 
+// 「無効 → 戻す」で戻された鍵（値の差し替えを伴わない `enable` だけ）。新規の行・値を差し替えた行・ラベルだけの変更は含めない:
+// 人間が「確認できた鍵を戻した」操作を指すのは、同じ値のまま disabledAt が有る → 無いに変わった行だけのため。
+function enabledTokenIdsOf(changes: readonly TokenPoolChange[]): string[] {
+  const valueSwapped = new Set(
+    changes
+      .filter((change) => change.operation === 'switch' && change.reason === 'value')
+      .map((change) => change.id),
+  );
+  return changes
+    .filter((change) => change.operation === 'enable' && !valueSwapped.has(change.id))
+    .map((change) => change.id);
+}
+
+// PUT /tokens の応答を試しの完了（最大30秒）に待たせないため、呼び出し側は待たずに投げる。ここで全部握る:
+// 試しの失敗・日誌の失敗で、保存済みの PUT を失敗させず、未処理の拒否も出さないため。
+// 日誌の文言は `POST /tokens/:id/try`（人間が手で試した）と区別がつくようにする: こちらは鍵を戻した契機の自動の試し。
+async function tryEnabledToken(deps: AppDeps, tokenId: string, actor: string): Promise<void> {
+  if (deps.tokenTry === undefined) return;
+  try {
+    const result = await deps.tokenTry.try(tokenId);
+    const label = (await deps.stores.tokens.list().catch(() => [])).find(
+      (row) => row.id === tokenId,
+    )?.label;
+    const subject = `「${label ?? '?'}」（id: ${tokenId}）`;
+    const head = `認証トークン${subject}を戻した（無効 → 有効）ので、その場で試した`;
+    let decision: string;
+    let detail: string;
+    switch (result.kind) {
+      case 'not_found':
+        return;
+      case 'not_tryable':
+        decision = `${head}が、試せなかった（${result.cause}）`;
+        detail = '試していない。';
+        break;
+      case 'too_soon':
+        decision = `${head}が、間隔内なので見送った（あと${String(result.retryAfterSeconds)}秒）`;
+        detail = '鍵ごとに最短 5 分の間隔の内（手動の試しと共有）。試していない。';
+        break;
+      case 'passed':
+        decision = `${head}: 通った${
+          result.cooldownCleared ? '（冷却を解いた）' : '（冷却中ではないので何も変えていない）'
+        }`;
+        detail = 'cloneModel の枠だけを確かめた。';
+        break;
+      case 'rejected':
+        decision = `${head}: 拒否された（${result.reason}）`;
+        detail = 'cloneModel の枠だけを確かめた。';
+        break;
+      case 'undecidable':
+        decision = `${head}が、判定できなかった（${result.reason}）`;
+        detail = '何も書いていない。';
+        break;
+    }
+    await appendJournalOrDrop(
+      deps.stores,
+      {
+        type: 'decision',
+        decision,
+        grounds:
+          `${actor}（PUT /tokens）。人間が鍵を戻した契機の自動の試し（人間が手で試したのではない）。${detail}` +
+          'id・ラベル・結果だけを書く（トークンの値は書かない）。',
+      },
+      '認証トークンの戻した直後の試しの日誌',
+      `id=${tokenId}`,
+    );
+  } catch (error) {
+    noteDroppedRecord('認証トークンの戻した直後の試し', `id=${tokenId}`, kindOfError(error));
+  }
+}
+
 export function tokensRoutes(deps: AppDeps) {
   return (
     new Hono<{ Variables: AuthVariables }>()
@@ -333,6 +403,11 @@ export function tokensRoutes(deps: AppDeps) {
               '認証トークンのプールの変更の日誌',
               `count=${String(requestedCount)}`,
             );
+          }
+          // 戻した鍵をその場で試す。応答を待たせない（試しは最大30秒）ので待たずに裏で走らせる（`tryEnabledToken` は投げない）。保存したあとに投げる: 保存できなかった回に試さないため。
+          const actor = describeActor(c.get('principal'));
+          for (const tokenId of enabledTokenIdsOf(state.changes)) {
+            void tryEnabledToken(deps, tokenId, actor);
           }
           // ここから先は保存した後: 失敗しても「保存できなかった」ではないので、上の `catch`（500）へ落とさず保存したと言って返す。原因は種類（`error.name`）だけを日誌に使う: メッセージには行の中身（トークンの値）が載りうる。
           let cause: unknown;
