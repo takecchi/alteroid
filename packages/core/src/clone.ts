@@ -2181,7 +2181,7 @@ class Clone implements CloneHost {
         items.push(
           buildExternalEventPrompt({
             source: event.source,
-            body: renderPayload(event.payload, event.at, event.attachments),
+            body: renderPayload(event.payload, event.at, event.attachments, event.source),
             ...(event.via === undefined ? {} : { viaKeyNames: [event.via.name] }),
           }),
         );
@@ -3719,7 +3719,7 @@ class Clone implements CloneHost {
 
   /** 受信箱の `external` の1件を処理する（`#handle` が振り分ける）。 */
   async #handleExternal(event: Extract<InboxEvent, { type: 'external' }>): Promise<void> {
-    const body = renderPayload(event.payload, event.at, event.attachments);
+    const body = renderPayload(event.payload, event.at, event.attachments, event.source);
     const attached = await this.#resolveExternalAttachments([event]);
     await this.#journalIncomingBody(event);
     await this.#runInternal(

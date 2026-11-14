@@ -112,6 +112,22 @@ export {
   describeSessionMissingKind,
   describeUnobservedOutcome,
 } from './digest.js';
+/** 外の AI の報告（`report_problem`）の形・整形・要約。daemon の入口と読む側が同じ定数を参照する。web / logic は軽い出口 `@alteroid/core/report-problem` から引く。 */
+export {
+  ALTEROID_REPORT_SOURCE,
+  REPORT_PROBLEM_CAUTION,
+  REPORT_PROBLEM_COMPONENTS,
+  REPORT_PROBLEM_LIMITS,
+  REPORT_PROBLEM_SEVERITIES,
+  externalSourceNote,
+  formatReportProblemForClone,
+  isAlteroidReportSource,
+  parseReportProblemJson,
+  parseReportProblemPayload,
+  reportProblemDetailRows,
+  summarizeReportProblem,
+} from './report-problem.js';
+export type { ReportProblemPayload } from './report-problem.js';
 /** 承認の状態（取り下げを先に見る）の判定は 1 つの関数に寄せてある。web は軽い出口 `@alteroid/core/answered-via` から引く。 */
 export { approvalSettledAt, approvalStateOf, isApprovalFieldSet } from './approval-state.js';
 export type { ApprovalState } from './approval-state.js';

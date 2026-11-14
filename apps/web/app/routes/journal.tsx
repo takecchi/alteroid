@@ -25,6 +25,7 @@ import {
   shiftForPrepend,
 } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
+import { JournalReportDetail } from '~/lib/journal-report-detail';
 import { useChipSelection } from '~/lib/use-chip-selection';
 import { useSearchParamDraft } from '~/lib/use-search-param-draft';
 import type { JournalEntryType } from '@alteroid/logic';
@@ -242,7 +243,12 @@ function JournalBody({
                     typeLabel={journalTypeLabel(entry.type)}
                     tone={JOURNAL_TONE[entry.type]}
                     summary={summarizeJournalEntry(entry, 'localized')}
-                    links={<JournalEntryLinks entry={entry} />}
+                    links={
+                      <>
+                        <JournalEntryLinks entry={entry} />
+                        <JournalReportDetail entry={entry} />
+                      </>
+                    }
                     raw={entry}
                     isLast={entry.id === lastId}
                     // 帯を出さない: 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増えるため
