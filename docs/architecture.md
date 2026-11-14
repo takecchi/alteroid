@@ -728,7 +728,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
   - 本文の大きさとレートの上限（既定 1 MiB・60回/分。鍵ごとに発行時に上書きできる）は**この資格にだけ**掛かる。本文の大きさは添付のアップロード以外（`/events*` と `/mcp`）に、回数はアップロードを含む全部に掛かる。人間と持ち主の経路には新しい制限を足していない（禁止2）。外の AI が `/mcp` で報告する鍵（source `alteroid-report`）は、既定を変えず、発行時に 10 回/分へ絞って渡す運用にする
   - `POST /mcp` は Streamable HTTP のステートレスな口で、道具は `report_problem` の1本だけである。報告は外部イベント（source は鍵に固定）としてクローンの受信箱へ届き、**task は自動では作らない**（クローンが判断して積む。[PRD「自律」](./PRD.md)）
   - 認証を要求しない構成でも、`altk_` の bearer が付いていれば照合と制限を掛ける
-  - `token-pool`・`runner-registry`（daemon 自身が受信箱へ出す知らせの名）は、`POST /events`・`POST /events/<source>`・`POST /mcp` でも連携の鍵の source としても使えない（400。前後の空白・大文字小文字・全角は正規化して判定する）。
+  - `token-pool`・`runner-registry`（daemon 自身が受信箱へ出す知らせの名）は、`POST /events`・`POST /events/<source>`・連携の鍵の source としては使えない（400）。`POST /mcp` でも同じ規則で断るが、返し方は HTTP の 400 ではなく MCP のツールエラー（`isError: true`。何も積まない）である。前後の空白・大文字小文字・全角は正規化して判定する。
 - **緩めたのは「持ち主か否か」の線だけである。** 認証（`authenticate`）は変えていない —— ログインしていない（401）・許可されていない（403）アカウントは、これらの口にも触れない。持ち主かどうかを見分ける口は残していない（下の項）
 - **持ち主の宣言の仕組みは無い。** 2026-10-05 の決定（ログインできる人＝持ち主。#2862）で通す・通さないに効かなくなったので、宣言の口（`/access/:id/owner*`）・CLI の `alteroid access owner`・`access list` の `[owner]` 表示を #2948 で畳んだ。以前に宣言した値は、ファイルの記憶のキーに残っていても読まない。pg の `auth_accounts.owner_declared_at` 列は移行で落とす
 
@@ -813,5 +813,5 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
   それで塞げるか再評価する
 - runner を跨いだ workspace の移送（共有 FS か git 再構築か）は M5 で決める。M4 では
   locator を残すところまで
-- 外部イベントの入口の形は決まっている: webhook は `POST /events*`（`POST /events`・`POST /events/<source>`）、外の AI からの自己報告は `POST /mcp`（MCP の `report_problem`）。MCP 経由のポーリングジョブは別機構にしない（定期ジョブ＋委譲で足りる）
+- 外部イベントの入口のうち、webhook は `POST /events*`（`POST /events`・`POST /events/<source>`）、外の AI からの自己報告は `POST /mcp`（MCP の `report_problem`）に決まった。MCP 経由のポーリングジョブの形は未決のままである
 - クローンの compaction で要約に何を残すか（走行中のマネージャー一覧・未処理の受信箱は消えると困る）は M1 の実測で決める。原則は「寿命モデル」のとおり: 残すべきものはそもそも要約ではなく記憶と JobStore に置く
