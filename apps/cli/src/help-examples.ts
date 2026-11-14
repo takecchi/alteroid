@@ -34,6 +34,19 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics summarize --journal diag.jsonl --usage usage.json --ledger-tz Asia/Tokyo',
     'alteroid diagnostics summarize --journal diag.jsonl --top 5                            # 委譲の上位を 5 件に',
   ),
+  diagnosticsReceivedList: examples(
+    'alteroid diagnostics received list                              # 新しい順に 20 件（id= を show / compare へ）',
+    'alteroid diagnostics received list --source ci-alteroid --limit 5',
+    'alteroid diagnostics received list --since 2026-11-01T00:00:00Z --json',
+  ),
+  diagnosticsReceivedShow: examples(
+    'alteroid diagnostics received show <id>                         # 要約の JSON 全文',
+    'alteroid diagnostics received show <id> --json                  # source・受信時刻つきで 1 行',
+  ),
+  diagnosticsReceivedCompare: examples(
+    'alteroid diagnostics received compare <idA> <idB>               # 同じ source の 2 件を並べる',
+    'alteroid diagnostics received compare <idA> <idB> --json        # 機械可読（取れない値は null）',
+  ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',
     'alteroid inbox remove --types timer --reason "古い定期の合図"            # 試算（消さない）',

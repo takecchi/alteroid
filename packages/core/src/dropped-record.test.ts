@@ -1522,6 +1522,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why: '外した日誌の行の id の並び（#4355）。数が多くなりうるうえ、跡の見分けに要らない。',
       },
     },
+    diagnostics_summary: {
+      source: { emit: 'size', token: 'source' },
+      principalKind: { emit: 'tag', token: 'principalKind' },
+      keyId: { emit: 'never', why: '連携の鍵の id。跡の見分けに要らない（`external_event.via` と同じ判断）。' },
+      payload: {
+        emit: 'never',
+        why: '受けた診断の要約の本体（最大 16 KiB）。跡（stderr）へ出さない。',
+      },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   const CONTEXT_USAGE_SHAPE_PLAN = {
@@ -1954,6 +1963,13 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       deletedBy: SECRET,
       hiddenCount: 4,
       hiddenEntryIds: [SECRET],
+    },
+    diagnostics_summary: {
+      type: 'diagnostics_summary',
+      source: SECRET,
+      principalKind: 'integration',
+      keyId: SECRET,
+      payload: { rows: { lines: 1 } },
     },
   };
 

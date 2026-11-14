@@ -106,6 +106,9 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       return `[${entry.event}] ${entry.text}`;
     case 'conversation_deleted':
       return `会話 ${entry.deletedConversationId} を削除した（${entry.hiddenCount} 件。${entry.deletedBy}）`;
+    case 'diagnostics_summary':
+      // 本体（最大 16 KiB）は一覧の1行に載せない。全文は日誌の個別の読み（id 指定）か `alteroid diagnostics received show`
+      return `${entry.source} から診断の要約を受け取った（全文は alteroid diagnostics received show ${entry.id}）`;
     case 'github_observation':
       return entry.result.status === 'ok'
         ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +

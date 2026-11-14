@@ -15,6 +15,11 @@ import { z } from 'zod';
 import type { AppContext } from './app-context.js';
 import type { AuthVariables } from './auth.js';
 import { deliberateClient, isWellFormedString } from './app-shared.js';
+import {
+  DIAGNOSTICS_NOT_PERSISTED_MESSAGE,
+  acceptDiagnosticsSummary,
+  checkDiagnosticsSummary,
+} from './diagnostics-summary-intake.js';
 
 // 鍵でない資格（operator・アカウント）が呼ぶときの source は `ALTEROID_REPORT_SOURCE`（core が持つ。読む側と同じ定数）。鍵のときは鍵の source を使い、引数からは変えられない。
 // 列挙と上限も core の `REPORT_PROBLEM_*` を参照する（読む側の整形と入口がずれない）。
@@ -40,6 +45,11 @@ const reportProblemInput = z.strictObject({
   environment: text(REPORT_PROBLEM_LIMITS.environment).optional(),
   logs: text(REPORT_PROBLEM_LIMITS.logs).optional(),
   attachmentIds: z.array(text(200, 1)).max(5).optional(),
+});
+
+// 要約の中身は入口の検査（`checkDiagnosticsSummary`）が strict の型で見る。ここで型を直に渡さない: MCP の SDK の検査が失敗すると、zod の文面が入力の値を抱えうるため。object であることだけをここで言う。
+const reportDiagnosticsSummaryInput = z.strictObject({
+  summary: z.record(z.string(), z.unknown()),
 });
 
 const reportProblemOutput = z.object({
@@ -140,6 +150,52 @@ export function mcpRoutes(ctx: AppContext) {
         }
       },
     );
+    server.registerTool(
+      'report_diagnostics_summary',
+      {
+        title: '診断の要約を送る',
+        description:
+          '別の alteroid の消費の診断の要約（`alteroid diagnostics summarize` の出力）を、日誌へ積んでもらう。' +
+          '受信箱へは積まず、クローンは起きない。要約は strict の型（最大 16 KiB）で検査し、通らない・秘密らしい文字列を含むものは何も積まずに断る。' +
+          '同じ source・同じ period（start と end）の再送は、積まずに duplicate: true を返す（先着）。period が null の要約は断る。',
+        inputSchema: reportDiagnosticsSummaryInput,
+        outputSchema: reportProblemOutput,
+      },
+      async (args) => {
+        const source = principal.kind === 'integration' ? principal.source : ALTEROID_REPORT_SOURCE;
+        if (hasNul(source) || !isWellFormedString(source) || isReservedEventSource(source)) {
+          return toolError('この source は使えない（何も積んでいない）。');
+        }
+        const checked = checkDiagnosticsSummary(args.summary, process.env);
+        if (!checked.ok) return toolError(checked.message);
+        const { period } = checked.value;
+        // period が null の要約は `acceptDiagnosticsSummary` が断る（錠は取るが何も積まない）
+        const lockKey = JSON.stringify([
+          'diagnostics-summary',
+          source,
+          period?.start ?? null,
+          period?.end ?? null,
+        ]);
+        try {
+          const result = await withEventReceiptLock(lockKey, () =>
+            acceptDiagnosticsSummary({
+              journal: ctx.stores.journal,
+              principal,
+              source,
+              summary: checked.value,
+            }),
+          );
+          if (result.kind !== 'accepted') return toolError(result.message);
+          const structuredContent = { ok: true as const, id: result.id, duplicate: result.duplicate };
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(structuredContent) }],
+            structuredContent,
+          };
+        } catch {
+          return toolError(DIAGNOSTICS_NOT_PERSISTED_MESSAGE);
+        }
+      },
+    );
     return server;
   }
 
@@ -148,14 +204,17 @@ export function mcpRoutes(ctx: AppContext) {
     '/mcp',
     describeRoute({
       tags: ['mcp'],
-      summary: 'MCP（Streamable HTTP、ステートレス）。道具は report_problem の1本だけ',
+      summary:
+        'MCP（Streamable HTTP、ステートレス）。道具は report_problem と report_diagnostics_summary の2本だけ',
       description:
-        '外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。' +
+        '外の AI が MCP の道具で、クローンの受信箱へ問題を報告する（`report_problem`）口と、別の alteroid の消費の診断の要約を日誌へ送る（`report_diagnostics_summary`）口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。' +
         '`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。' +
-        '連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` の1本だけ' +
+        '連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` と `report_diagnostics_summary` の2本だけ' +
         '（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。' +
         '受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは' +
-        '何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。',
+        '何も積まず、ツールエラー（`isError: true`）で返す。' +
+        '`report_diagnostics_summary` は受信箱へ積まず（クローンを起こさない）、strict の型・秘密の走査に通らない要約や period が null の要約は何も積まずに断り、' +
+        '日誌の `diagnostics_summary` の行として積む（読むのは `GET /journal?type=diagnostics_summary`）。応答の本文は JSON-RPC。',
       responses: {
         200: {
           description: 'JSON-RPC の応答（ツールエラーも 200 の `isError: true` で返る）。',

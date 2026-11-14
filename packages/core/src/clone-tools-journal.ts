@@ -13,6 +13,7 @@ import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } f
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
 import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-format.js';
 import { describeGithubCi } from './progress-github.js';
+import { describeDiagnosticsSummaryDigest } from './diagnostics-summary-format.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
 import { JOURNAL_ENTRY_TYPES, describeAnsweredVia, type JournalEntry } from './schema.js';
 import {
@@ -179,10 +180,17 @@ function journalAttachmentHead(
 
 const JOURNAL_LISTING_MODELS = 3;
 
+// 診断の要約の一覧の1行の上限（period・5つの数字が収まる長さ。`JOURNAL_TEXT_EXCERPT` とは別に持つ: 片方だけ直したくなったときに一緒に動かないため）
+const JOURNAL_DIAGNOSTICS_DIGEST = 240;
+
 // 一覧の本文の抜粋。turn_usage だけは、先頭のモデルの行（本文の先頭から models の数だけ）を行ごとに切り、残り（数え直し・文脈・compaction の行）はこれまでどおりまとめて1本の上限で切る:
 // 全部を1行に潰して切ると、1つ目のモデルの行（cache 内訳つき）で字数が尽き、2つ目以降のモデルが一覧に出ないため。
 // モデルの行は JOURNAL_LISTING_MODELS 本まで。超えた分は「…ほか N モデル」に畳む（全部は id 指定の全文読みで出る）ので、行の長さは「モデル最大3行 + 残り120字」で頭打ちになる
 function journalListingBody(entry: JournalEntry, body: string): string {
+  // 診断の要約は全文（最大 16 KiB）を載せず、要点の数字の1行に畳む（一覧は予算を件数で壊さない）
+  if (entry.type === 'diagnostics_summary') {
+    return excerptRow(describeDiagnosticsSummaryDigest(entry.payload), JOURNAL_DIAGNOSTICS_DIGEST);
+  }
   if (entry.type !== 'turn_usage') return excerptRow(body, JOURNAL_TEXT_EXCERPT);
   const modelCount = Object.keys(entry.models).length;
   const lines = body.split('\n');
@@ -424,6 +432,12 @@ function renderJournalEntry(
       return {
         head: '[conversation_deleted]',
         body: `会話 ${entry.deletedConversationId} を削除した（${entry.hiddenCount} 件。${entry.deletedBy}）`,
+      };
+    case 'diagnostics_summary':
+      // 本文は要約の JSON 全文（id 指定の頁送りで全部出る）。一覧では `journalListingBody` が要点の1行へ畳む
+      return {
+        head: `[diagnostics_summary ${field(entry.source)} ${entry.principalKind}]`,
+        body: JSON.stringify(entry.payload),
       };
   }
 }
