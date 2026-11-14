@@ -128,7 +128,8 @@ function makeSender(
     now: () => new Date(),
     fetch: fetchSpy as unknown as typeof fetch,
     env: { [DIAGNOSTICS_SINK_KEY_ENV]: KEY },
-    resolveTimeZone: () => 'Asia/Tokyo',
+    // 台帳の TZ はプロセスの TZ と突き合わせて採る（`ledgerTimeZone`）ので、試験は実行器の TZ（手元は JST、CI は UTC）をそのまま引く
+    resolveTimeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     writeLine: (line) => lines.push(line),
     ...overrides,
   });
@@ -364,7 +365,27 @@ describe('いつ・何を送るか', () => {
     const summary = (
       JSON.parse(bodies[0] ?? '{}') as { params: { arguments: { summary: DiagnosticsSummary } } }
     ).params.arguments.summary;
-    expect(summary.ledgerDateTimeZone).toMatchObject({ state: 'known', name: 'Asia/Tokyo' });
+    expect(summary.ledgerDateTimeZone).toMatchObject({
+      state: 'known',
+      name: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+  });
+
+  it('台帳の TZ が解決できないときは、推測せず「取れない」と要約に残す', async () => {
+    await withData();
+    const bodies: string[] = [];
+    const { sender } = makeSender(
+      async (_url, init) => {
+        bodies.push(String(init.body));
+        return rpcOk(false);
+      },
+      { resolveTimeZone: () => undefined },
+    );
+    await sender.runOnce();
+    const summary = (
+      JSON.parse(bodies[0] ?? '{}') as { params: { arguments: { summary: DiagnosticsSummary } } }
+    ).params.arguments.summary;
+    expect(summary.ledgerDateTimeZone.state).not.toBe('known');
   });
 
   it('診断の行が1行も無い日は送らず、not_generated（no_diagnostics）を1回だけ残す', async () => {
