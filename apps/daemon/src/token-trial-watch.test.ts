@@ -117,7 +117,9 @@ describe('token-trial-watch: 試す条件と対象', () => {
     expect(trial.calls).toEqual([]);
   });
 
-  it('現役が cooling で ready な候補が在れば試さない', async () => {
+  // 元の題: 「現役が cooling で ready な候補が在れば試さない」（期待は trial.calls が空）。
+  // 経緯: 定期の復活チェック（案B）で、オーナーが「期限は信じず、とりあえず定期的に復活チェックする」と答えたため、ready な候補が在っても冷却中の鍵を試すへ反転した。
+  it('現役が cooling で ready な候補が在っても、冷却中の鍵を試す（反転）', async () => {
     const stores = createMemoryStores();
     await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
     await seedToken(stores, { id: 'b', order: 1 });
@@ -128,6 +130,95 @@ describe('token-trial-watch: 試す条件と対象', () => {
       recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       recordTrialSuccess: () => Promise.resolve(ROTATED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+    await settle();
+    watch.stop();
+    expect(trial.calls).toEqual(['a']);
+  });
+
+  it('現役が ready で、冷却中の別の鍵が数日先の期限でも試す。通っても現役は奪わず、世代も層の撒き直しも動かない（実物の回し手）', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0 });
+    await seedToken(stores, {
+      id: 'b',
+      order: 1,
+      cooldownUntil: AT + 3 * 24 * 60 * 60 * 1000,
+      lastRejectedAt: new Date(AT).toISOString(),
+      lastRejectedReason: '上限',
+    });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 7, rotatedAt: '' });
+    const { rotator, spreadCalls } = realRotator(stores);
+    const outcomes: TokenRotationOutcome[] = [];
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: (input) => rotator.recordTrialVerdict(input),
+      trial: trial.port,
+      recordTrialSuccess: (input) => rotator.recordTrialSuccess(input),
+      onOutcome: async (outcome) => {
+        outcomes.push(outcome);
+      },
+      tickMs: 5,
+      now: () => AT,
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    watch.stop();
+
+    expect(trial.calls).toEqual(['b']);
+    const row = (await stores.tokens.list()).find((t) => t.id === 'b');
+    expect(row?.cooldownUntil).toBeUndefined();
+    expect(row?.lastRejectedAt).toBeUndefined();
+    expect(await stores.tokens.readActive()).toMatchObject({ tokenId: 'a', generation: 7 });
+    expect(spreadCalls).toEqual([]);
+    expect(outcomes.every((outcome) => outcome.kind !== 'rotated')).toBe(true);
+  });
+
+  it('冷却中の鍵が複数在っても1回の目盛りで1本だけ（ready な鍵が在っても）', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0 });
+    await seedToken(stores, { id: 'b', order: 1, cooldownUntil: AT + 60 * 60 * 1000 });
+    await seedToken(stores, { id: 'c', order: 2, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const trial = fakeTrial({ verdict: 'undecidable', reason: '判定できない' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+    await settle();
+    watch.stop();
+    expect(trial.calls).toEqual(['b']);
+  });
+
+  it('ready な鍵が在っても、冷却中の鍵が disabled / invalidated なら試さない', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0 });
+    await seedToken(stores, {
+      id: 'b',
+      order: 1,
+      cooldownUntil: AT + 60 * 60 * 1000,
+      disabledAt: new Date(AT).toISOString(),
+    });
+    await seedToken(stores, {
+      id: 'c',
+      order: 2,
+      cooldownUntil: AT + 60 * 60 * 1000,
+      invalidatedAt: new Date(AT).toISOString(),
+    });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      recordTrialSuccess: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
       tickMs: 5,
       now: () => AT,
@@ -325,7 +416,10 @@ describe('token-trial-watch: 通ったときの記録と知らせ（実物の回
 
     const row = (await stores.tokens.list()).find((t) => t.id === 'a');
     expect(row?.cooldownUntil).toBeUndefined();
-    expect(outcomes).toHaveLength(1);
+    // 元の期待: `toHaveLength(1)`。経緯: 定期の復活チェック（案B）で、a が通って ready になっても冷却中の b が次の目盛りで試されるようになったため、40ms の間に2回目（b の試し）の知らせが出る。
+    // 1回の目盛りで試すのは1本のまま（目盛りごとの本数は「1回の目盛りで1本だけ」の歯が見張る）。最初の知らせが a の試しで、回ったことは変わらない。
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]?.kind).toBe('rotated');
     expect(outcomes[0]?.reason).toBe('trial_succeeded');
   });
 
