@@ -241,7 +241,7 @@ export function integrationRoutes(
           description:
             '外のサービスへ渡す鍵を発行する。**鍵の種類そのものが「固定の 1 source で外部イベントを送る」' +
             'という 1 つの能力だけを表す**（選べる許可の一覧は無い）。通れるのは `POST /events`（本文の ' +
-            'source が鍵の source と一致するとき）と `POST /events/:source`（パスが一致するとき）、MCP の報告 `POST /mcp`（道具は `report_problem` の1本。source は鍵の source に固定）、' +
+            'source が鍵の source と一致するとき）と `POST /events/:source`（パスが一致するとき）、MCP の報告 `POST /mcp`（道具は `report_problem` と `report_diagnostics_summary` の2本。source は鍵の source に固定）、' +
             '自分の添付を上げる `POST /attachments` だけで、' +
             'それ以外の口は **すべて 403**（鍵の管理の口を含む）。本文は既定で 1 MiB、回数は既定で 60 回/分' +
             'まで（鍵ごとに上書きできる。この上限は連携の鍵にだけ掛かる）。**値（`altk_...`）はこの応答で' +

@@ -25,6 +25,7 @@ export const JOURNAL_TONE = {
   subagent_stall: 'warn',
   github_observation: 'neutral',
   conversation_deleted: 'neutral',
+  diagnostics_summary: 'neutral',
 } satisfies Record<JournalEntryType, JournalTone>;
 
 export const JOURNAL_TYPES = Object.keys(JOURNAL_TONE) as [JournalEntryType, ...JournalEntryType[]];
@@ -48,6 +49,7 @@ export const JOURNAL_TYPE_LABEL = {
   subagent_stall: '作業者の停滞',
   github_observation: 'GitHub の観測',
   conversation_deleted: '会話の削除',
+  diagnostics_summary: '受け取った診断の要約',
 } satisfies Record<JournalEntryType, string>;
 
 export function journalTypeLabel(type: string): string {

@@ -268,7 +268,7 @@
   },
   {
     "name": "journal_read",
-    "description": "日誌を新しい順に読む。過去の一点を掘るには since/until で窓を閉じること （新しい順に返るので、until を指定しないと最新分しか見えない）。 一覧の本文は抜粋で、全文が要る1件は id を渡して取る。 q で本文を語で探せる（他の絞りと併用できる）。 q で探すときは新しい側から1日ずつ遡り、時間の予算（8 秒）を使い切ったら、どこまで探したかと続きの until を最初の行で名乗って止まる。 文脈窓超過の失敗は本文に `context_window_failure` を含むので、q で引ける。 **q が当たらないことは「日誌にその語が無い」を意味しない** — tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象に入っていない。 with で exchange の相手を絞れる（他の絞りと併用できる）。 **with を指定すると exchange 以外の種別は1件も返らない** — types で別途除く必要はない。 応答に「続きは journal_read afterId=… afterAt=…」と出たら、その2つをそのまま渡すと その行の次（新しい順なら、より古い側）から読み継げる（ほかの絞りは同じものを渡す）。 頁の行が全部読めない形だったときも、これで読めない区間の向こうへ進める。",
+    "description": "日誌を新しい順に読む。過去の一点を掘るには since/until で窓を閉じること （新しい順に返るので、until を指定しないと最新分しか見えない）。 一覧の本文は抜粋で、全文が要る1件は id を渡して取る。 q で本文を語で探せる（他の絞りと併用できる）。 q で探すときは新しい側から1日ずつ遡り、時間の予算（8 秒）を使い切ったら、どこまで探したかと続きの until を最初の行で名乗って止まる。 文脈窓超過の失敗は本文に `context_window_failure` を含むので、q で引ける。 **q が当たらないことは「日誌にその語が無い」を意味しない** — tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象に入っていない。 with で exchange の相手を絞れる（他の絞りと併用できる）。 **with を指定すると exchange 以外の種別は1件も返らない** — types で別途除く必要はない。 応答に「続きは journal_read afterId=… afterAt=…」と出たら、その2つをそのまま渡すと その行の次（新しい順なら、より古い側）から読み継げる（ほかの絞りは同じものを渡す）。 頁の行が全部読めない形だったときも、これで読めない区間の向こうへ進める。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -305,7 +305,8 @@
               "turn_timing",
               "http_timing",
               "github_observation",
-              "conversation_deleted"
+              "conversation_deleted",
+              "diagnostics_summary"
             ]
           }
         },

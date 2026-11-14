@@ -40,6 +40,15 @@ export {
   type BuildDiagnosticsSummaryOptions,
   type DiagnosticsSummary,
 } from './diagnostics-summary.js';
+export {
+  compareDiagnosticsSummaries,
+  describeDiagnosticsSummaryDigest,
+  describeSummaryPeriod,
+  readStoredDiagnosticsSummary,
+  renderSummaryComparison,
+  type ReceivedSummaryRef,
+  type SummaryComparison,
+} from './diagnostics-summary-format.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
 export {
   accountUsageStateSchema,

@@ -116,8 +116,8 @@
     "list-empty#2": 8,
     "list-empty#3": 15,
     "list-empty#4": 15,
-    "list-empty#5": 158,
-    "list-empty#6": 158,
+    "list-empty#5": 178,
+    "list-empty#6": 178,
     "list-empty-seeded#1": 15,
     "list-empty-seeded#2": 15,
     "list-empty-seeded#3": 15,
@@ -184,33 +184,33 @@
     "q-search#7": 322,
     "q-search#8": 316,
     "q-search#9": 310,
-    "q-search#10": 177,
-    "q-search#11": 177,
-    "q-search#12": 217,
-    "q-search#13": 380,
-    "q-search#14": 177,
-    "q-search#15": 180,
+    "q-search#10": 197,
+    "q-search#11": 197,
+    "q-search#12": 237,
+    "q-search#13": 400,
+    "q-search#14": 197,
+    "q-search#15": 200,
     "q-search#16": 108,
     "q-search#17": 416,
     "q-search#18": 162,
     "q-default-search#1": 496,
-    "q-default-search#2": 177,
+    "q-default-search#2": 197,
     "q-default-search#3": 496,
-    "q-empty-journal#1": 177,
-    "q-empty-journal#2": 217,
-    "q-budget-zero#1": 369,
-    "q-budget-zero#2": 373,
-    "q-budget-zero#3": 469,
+    "q-empty-journal#1": 197,
+    "q-empty-journal#2": 237,
+    "q-budget-zero#1": 389,
+    "q-budget-zero#2": 393,
+    "q-budget-zero#3": 489,
     "q-budget-hits#1": 416,
     "q-budget-hits#2": 204,
     "q-budget-hits#3": 416,
     "q-budget-hits#4": 243,
     "q-budget-seconds#1": 303,
-    "q-budget-seconds#2": 373,
+    "q-budget-seconds#2": 393,
     "q-budget-second-slice#1": 303,
-    "q-budget-second-slice#2": 373,
+    "q-budget-second-slice#2": 393,
     "q-budget-slice-wide#1": 219,
-    "q-budget-slice-wide#2": 177,
+    "q-budget-slice-wide#2": 197,
     "fold-ignored#1": 418,
     "fold-ignored#2": 418,
     "fold-ignored#3": 496,
@@ -687,12 +687,12 @@
       "text": "（その条件に当たる日誌は無い）"
     },
     "list-empty#5": {
-      "length": 158,
-      "text": "\"\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。"
+      "length": 178,
+      "text": "\"\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。"
     },
     "list-empty#6": {
-      "length": 158,
-      "text": "\"\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。"
+      "length": 178,
+      "text": "\"\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。"
     },
     "list-empty-seeded#1": {
       "length": 15,
@@ -959,28 +959,28 @@
       "text": "2026-10-27T00:00:00.000Z [exchange human/inbound] conversation=conv-b id=id-6\n  別の日の質問。deploy の続き。\n2026-10-26T00:03:00.000Z [decision] id=id-4\n  待つ（根拠: deploy は止まっている）\n2026-10-26T00:00:00.000Z [exchange human/inbound] conversation=conv-a id=id-1\n  デプロイの手順を教えて。Deploy が止まる。\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-search#10": {
-      "length": 177,
-      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-search#11": {
-      "length": 177,
-      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-search#12": {
-      "length": 217,
-      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2026-10-26T00:00:00.000Z まで探した。それより古い側は見ていない）"
+      "length": 237,
+      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2026-10-26T00:00:00.000Z まで探した。それより古い側は見ていない）"
     },
     "q-search#13": {
-      "length": 380,
-      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2020-01-01T00:00:00.000Z まで探した。それより古い側は見ていない）\nこの記憶ストアの日誌の最古は 2026-10-26T00:00:00.000Z。指定の since（2020-01-01T00:00:00.000Z）から 2026-10-26T00:00:00.000Z までの区間は判定できない（該当する行が無かったのか、日誌がそこまで遡れないのかは、この返り値だけからは区別できない）。"
+      "length": 400,
+      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2020-01-01T00:00:00.000Z まで探した。それより古い側は見ていない）\nこの記憶ストアの日誌の最古は 2026-10-26T00:00:00.000Z。指定の since（2020-01-01T00:00:00.000Z）から 2026-10-26T00:00:00.000Z までの区間は判定できない（該当する行が無かったのか、日誌がそこまで遡れないのかは、この返り値だけからは区別できない）。"
     },
     "q-search#14": {
-      "length": 177,
-      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-search#15": {
-      "length": 180,
-      "text": "\"--dry-run\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 200,
+      "text": "\"--dry-run\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-search#16": {
       "length": 108,
@@ -999,32 +999,32 @@
       "text": "2026-10-28T01:00:00.000Z [exchange human/inbound] id=id-10\n  会話 id の無い発言 Deploy\n2026-10-28T00:00:00.000Z [memory_update deploy-rules (clone) append bytes=10→20] id=id-9\n  deploy の注意を足した\n2026-10-27T00:00:00.000Z [exchange human/inbound] conversation=conv-b id=id-6\n  別の日の質問。deploy の続き。\n2026-10-26T00:03:00.000Z [decision] id=id-4\n  待つ（根拠: deploy は止まっている）\n2026-10-26T00:00:00.000Z [exchange human/inbound] conversation=conv-a id=id-1\n  デプロイの手順を教えて。Deploy が止まる。\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-default-search#2": {
-      "length": 177,
-      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"存在しない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-default-search#3": {
       "length": 496,
       "text": "2026-10-28T01:00:00.000Z [exchange human/inbound] id=id-10\n  会話 id の無い発言 Deploy\n2026-10-28T00:00:00.000Z [memory_update deploy-rules (clone) append bytes=10→20] id=id-9\n  deploy の注意を足した\n2026-10-27T00:00:00.000Z [exchange human/inbound] conversation=conv-b id=id-6\n  別の日の質問。deploy の続き。\n2026-10-26T00:03:00.000Z [decision] id=id-4\n  待つ（根拠: deploy は止まっている）\n2026-10-26T00:00:00.000Z [exchange human/inbound] conversation=conv-a id=id-1\n  デプロイの手順を教えて。Deploy が止まる。\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-empty-journal#1": {
-      "length": 177,
-      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "q-empty-journal#2": {
-      "length": 217,
-      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2026-10-26T00:00:00.000Z まで探した。それより古い側は見ていない）"
+      "length": 237,
+      "text": "\"deploy\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（since=2026-10-26T00:00:00.000Z まで探した。それより古い側は見ていない）"
     },
     "q-budget-zero#1": {
-      "length": 369,
-      "text": "\"ふくろう\" は、この窓（2026-10-28T00:00:00.000Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-28T00:00:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"ふくろう\" until=2026-10-27T23:59:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted）にだけ書かれている語は、ここでは当たらない。"
+      "length": 389,
+      "text": "\"ふくろう\" は、この窓（2026-10-28T00:00:00.000Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-28T00:00:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"ふくろう\" until=2026-10-27T23:59:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary）にだけ書かれている語は、ここでは当たらない。"
     },
     "q-budget-zero#2": {
-      "length": 373,
-      "text": "\"当たらない語\" は、この窓（2026-10-28T00:00:00.000Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-28T00:00:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-27T23:59:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted）にだけ書かれている語は、ここでは当たらない。"
+      "length": 393,
+      "text": "\"当たらない語\" は、この窓（2026-10-28T00:00:00.000Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-28T00:00:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-27T23:59:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary）にだけ書かれている語は、ここでは当たらない。"
     },
     "q-budget-zero#3": {
-      "length": 469,
-      "text": "\"ふくろう\" は、この窓（2026-10-26T00:10:00.000Z 〜 2026-10-27T00:10:00.000Z）には無い（判定できない）。日誌を 2026-10-26T00:10:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"ふくろう\" until=2026-10-26T00:09:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted）にだけ書かれている語は、ここでは当たらない。\nこの記憶ストアの日誌の最古は 2026-10-26T00:00:00.000Z。それより前は判定できない（該当する行が無かったのか、日誌がそこまで遡れないのかは、この返り値だけからは区別できない）。"
+      "length": 489,
+      "text": "\"ふくろう\" は、この窓（2026-10-26T00:10:00.000Z 〜 2026-10-27T00:10:00.000Z）には無い（判定できない）。日誌を 2026-10-26T00:10:00.000Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"ふくろう\" until=2026-10-26T00:09:59.999Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary）にだけ書かれている語は、ここでは当たらない。\nこの記憶ストアの日誌の最古は 2026-10-26T00:00:00.000Z。それより前は判定できない（該当する行が無かったのか、日誌がそこまで遡れないのかは、この返り値だけからは区別できない）。"
     },
     "q-budget-hits#1": {
       "length": 416,
@@ -1047,24 +1047,24 @@
       "text": "（\"ふくろう\" は、日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（3 秒）を使い切った。2026-10-26T23:59:59.999Z より古い側は見ていない。古い側を探すには journal_read until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す））\n2026-10-27T09:20:00.000Z [exchange human/inbound] conversation=conv-b id=id-3\n  ふくろう 二つ目の窓\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-budget-seconds#2": {
-      "length": 373,
-      "text": "\"当たらない語\" は、この窓（2026-10-26T23:59:59.999Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（3 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted）にだけ書かれている語は、ここでは当たらない。"
+      "length": 393,
+      "text": "\"当たらない語\" は、この窓（2026-10-26T23:59:59.999Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（3 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary）にだけ書かれている語は、ここでは当たらない。"
     },
     "q-budget-second-slice#1": {
       "length": 303,
       "text": "（\"ふくろう\" は、日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（8 秒）を使い切った。2026-10-26T23:59:59.999Z より古い側は見ていない。古い側を探すには journal_read until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す））\n2026-10-27T09:20:00.000Z [exchange human/inbound] conversation=conv-b id=id-3\n  ふくろう 二つ目の窓\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-budget-second-slice#2": {
-      "length": 373,
-      "text": "\"当たらない語\" は、この窓（2026-10-26T23:59:59.999Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted）にだけ書かれている語は、ここでは当たらない。"
+      "length": 393,
+      "text": "\"当たらない語\" は、この窓（2026-10-26T23:59:59.999Z 〜 2026-10-29T00:00:00.000Z）には無い（判定できない）。日誌を 2026-10-26T23:59:59.999Z まで遡ったところで時間の予算（8 秒）を使い切り、それより古い側は見ていない。古い側を探すには journal_read q=\"当たらない語\" until=2026-10-26T23:59:59.998Z を渡す（ほかの絞りは同じものを渡す）。\n探す対象に入っていない欄（tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary）にだけ書かれている語は、ここでは当たらない。"
     },
     "q-budget-slice-wide#1": {
       "length": 219,
       "text": "2026-10-27T09:20:00.000Z [exchange human/inbound] conversation=conv-b id=id-3\n  ふくろう 二つ目の窓\n2026-10-26T00:00:00.000Z [exchange human/inbound] conversation=conv-a id=id-1\n  ふくろう とても古い\n（本文は抜粋。全文は journal_read id=<id> で取れる）"
     },
     "q-budget-slice-wide#2": {
-      "length": 177,
-      "text": "\"当たらない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
+      "length": 197,
+      "text": "\"当たらない語\" に当たる日誌は無い（この条件の中では）。ただし tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation・conversation_deleted・diagnostics_summary は探す対象外で、そこにだけ書かれた語は当たらない。\n（日誌の先頭まで探した）"
     },
     "fold-ignored#1": {
       "length": 418,

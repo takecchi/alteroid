@@ -325,6 +325,7 @@ export const JOURNAL_ENTRY_TOPOLOGY_TRIGGER = {
   http_timing: 'always',
   github_observation: 'always',
   conversation_deleted: 'always',
+  diagnostics_summary: 'always',
 } as const satisfies Record<JournalEntry['type'], 'always' | 'when-mapped'>;
 
 export function journalEntryMayChangeTopology(entry: JournalEntry): boolean {
