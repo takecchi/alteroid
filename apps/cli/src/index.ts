@@ -464,6 +464,20 @@ diagnosticsReceivedCommand
     ).diagnosticsReceivedCompareCommand(idA, idB, options);
   });
 
+diagnosticsCommand
+  .command('sent')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsSent)
+  .description(
+    'このデーモンが別の alteroid へ診断の要約を送った試みの結果（日誌の diagnostics_summary_send）を新しい順に1件1行で並べる（日時・period・outcome・attempt・reason）。定期送信は ALTEROID_DIAGNOSTICS_SINK_URL と ALTEROID_DIAGNOSTICS_SINK_KEY が両方そろったときだけ動く',
+  )
+  .option('--since <iso>', 'この時刻以降（ISO 8601）')
+  .option('--until <iso>', 'この時刻以前（ISO 8601）')
+  .option('--limit <n>', '出す件数（1〜200。既定 20）')
+  .option('--json', '整形せず JSON で（機械が読む）')
+  .action(async (options: { since?: string; until?: string; limit?: string; json?: boolean }) => {
+    await (await import('./diagnostics-sent.js')).diagnosticsSentCommand(options);
+  });
+
 const runnersProgram = program
   .command('runners')
   .description('委譲先の器と、デーモン / runner がいま走っている版を見る')

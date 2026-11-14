@@ -161,6 +161,34 @@ describe('runner が配る鍵', () => {
     expect(env.ALTEROID_RUNNER_TOKEN).toBeUndefined();
   });
 
+  it('診断の要約の送り先の鍵は、器の環境変数からも `credential set` の配布（scope all）からも、マネージャーの子プロセスへ渡らない', async () => {
+    const fake = fakeSdk();
+    const credentials = createCredentialStore({ dir: join(dir, 'creds'), seed: {}, names: [] });
+    host = createRunnerHost({
+      runnerId: 'runner-primary',
+      workspacePath: dir,
+      emit: () => undefined,
+      queryFn: fake.fn,
+      env: {
+        PATH: process.env.PATH ?? '',
+        ALTEROID_DIAGNOSTICS_SINK_KEY: 'altk_dummy_from_vessel',
+        GH_TOKEN: 'ghp_x',
+      },
+      credentials,
+    });
+    await host.setCredentials([
+      { name: 'ALTEROID_DIAGNOSTICS_SINK_KEY', value: 'altk_dummy_pushed' },
+      { name: 'GH_TOKEN', value: 'ghp_x' },
+    ]);
+
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const env = fake.started[0]?.options.env ?? {};
+
+    expect(env.ALTEROID_DIAGNOSTICS_SINK_KEY).toBeUndefined();
+    // 道具の鍵は今までどおり渡る（伏せすぎない）
+    expect(env.GH_TOKEN).toBe('ghp_x');
+  });
+
   it('指紋は出すが、値は出さない', async () => {
     const credentials = createCredentialStore({
       dir: join(dir, 'creds'),

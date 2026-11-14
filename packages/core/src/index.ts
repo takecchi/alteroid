@@ -389,6 +389,8 @@ export { DAEMON_FORCED_EXIT_MS } from './shutdown-grace.js';
 export { LEASE_DRAIN_MS } from './lease.js';
 /** デーモンは `RunnerRegistry` しか見ない: 固定 URL も runner のローカルパスも前提にしない。 */
 export {
+  DIAGNOSTICS_SINK_KEY_ENV,
+  SINK_KEY_ENV_KEYS,
   createRunnerHost,
   placedManagerModels,
   RunnerPluginExtractError,

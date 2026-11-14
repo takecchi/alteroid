@@ -55,6 +55,7 @@ import {
   reasonOf,
   redactErrorText,
   resolveCloneModel,
+  SINK_KEY_ENV_KEYS,
   staleObservedRecoveryForBlockedKey,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
@@ -106,6 +107,7 @@ import {
   startAttachmentPruning,
 } from './attachment-prune.js';
 import { startCloneMcpConfigSweeping } from './clone-mcp-config-sweep.js';
+import { startDiagnosticsSummarySending } from './diagnostics-summary-sender.js';
 import { bindHostnameOf, workspaceOf } from './boot-env.js';
 import { AUTH_WITHHELD_ENV_KEYS, planAuth, unknownAuthModeNote } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
@@ -231,7 +233,11 @@ function runnerSeeds(options: {
           // クローン側とは別のファイルにする: こちらには伏せる鍵の `unset` が付くため。
           profile: createProfileVessel({
             path: options.profilePath,
-            withheldEnvKeys: [...WITHHELD_ENV_KEYS, ...options.withheldEnvKeys],
+            withheldEnvKeys: [
+              ...WITHHELD_ENV_KEYS,
+              ...SINK_KEY_ENV_KEYS,
+              ...options.withheldEnvKeys,
+            ],
           }),
         }),
     },
@@ -415,6 +421,9 @@ export async function main(): Promise<void> {
 
   const storage = await openStorage();
   const { paths } = storage;
+  // 子プロセス（枠の観測・鍵の試し・同一プロセスの runner）の env から落とす名前。`credential set` が断る名前の一覧（`storage.withheldEnvKeys` + `WITHHELD_ENV_KEYS`）には足さない:
+  // 診断の送り先の鍵は `credential set` で置くので、断る一覧に入れると置けなくなる。落とすのは子の env だけ。
+  const childWithheldEnvKeys = [...storage.withheldEnvKeys, ...SINK_KEY_ENV_KEYS];
 
   // 日誌の書き手は `journalBus` を通す: 通さない書き手の追記は `GET /journal/stream` に流れないため。
   const journalBus = createJournalBus(storage.stores.journal);
@@ -492,7 +501,7 @@ export async function main(): Promise<void> {
   const seeds = runnerSeeds({
     workspace,
     env: localRunnerEnv,
-    withheldEnvKeys: storage.withheldEnvKeys,
+    withheldEnvKeys: childWithheldEnvKeys,
     profilePath: join(paths.state, 'runner-profile.sh'),
     onRunnerUnknown: reportRunnerUnknown,
     onRunnerDropped: reportRunnerDropped,
@@ -753,13 +762,13 @@ export async function main(): Promise<void> {
       if (measuredBy !== undefined) tokenLoadBook.record(measuredBy.tokenId, state);
       tokenWatch?.observeAccount(state, measuredBy);
     },
-    withheldEnvKeys: storage.withheldEnvKeys,
+    withheldEnvKeys: childWithheldEnvKeys,
   });
 
   const tokenLoadSampler = startTokenLoadSampling({
     queryFn: query,
     cwd: paths.root,
-    withheldEnvKeys: storage.withheldEnvKeys,
+    withheldEnvKeys: childWithheldEnvKeys,
     tokens: () => stores.tokens.list(),
     activeTokenId: () => agentTokenHolder.identity()?.tokenId,
     book: tokenLoadBook,
@@ -789,7 +798,7 @@ export async function main(): Promise<void> {
         probeTokenCandidate(query, {
           token: token.value,
           cwd: paths.root,
-          withheldEnvKeys: storage.withheldEnvKeys,
+          withheldEnvKeys: childWithheldEnvKeys,
         }),
     },
     spread: tokenSpread,
@@ -840,7 +849,8 @@ export async function main(): Promise<void> {
     profileService,
     credentialService,
     // `storage.withheldEnvKeys` は使わない: pg 構成では `ALTEROID_DATABASE_URL` を含み、それはクローンが記憶ストアへ到達するために要る鍵のため。
-    withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
+    // 診断の送り先の鍵も落とす: 送るのはデーモンだけで、クローンの Bash に見せる理由が無い（`credential set` では置けるまま。伏せるのは子プロセスの env だけ）
+    withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS, ...SINK_KEY_ENV_KEYS],
     mcpServerService,
     pluginDistributionService,
     permissionRuleService,
@@ -944,6 +954,9 @@ export async function main(): Promise<void> {
   });
   // 起動時に1回、その後は周期。デーモンが異常終了して /tmp に残ったクローンの MCP 設定（資格入り）を掃く（#5222）
   const cloneMcpConfigSweeper = startCloneMcpConfigSweeping({ journal: stores.journal });
+  // 診断の要約の定期送信（別の alteroid へ日1回）。環境変数 2 つが両方そろったときだけ動く。読むのは `credential set`（scope app / all）の値を書き写した後の `process.env`。
+  // LLM もクローンのターンも使わず、日誌（`stores.journal`）と台帳を直接読む。
+  const diagnosticsSender = startDiagnosticsSummarySending({ env: process.env, stores });
 
   // 割り当てた鍵1本を休ませた結果を日誌へ残し、持ち主を移す（#6633）
   async function settleCooledToken(
@@ -1172,7 +1185,7 @@ export async function main(): Promise<void> {
         cwd: paths.root,
         // クローンの層と同じモデルを渡す: 枠がモデル別のことがあり、層とモデルが違うと試しが通っても層は通らない偽陽性になるため。
         model: cloneModel,
-        withheldEnvKeys: storage.withheldEnvKeys,
+        withheldEnvKeys: childWithheldEnvKeys,
       }),
   };
 
@@ -1385,6 +1398,7 @@ export async function main(): Promise<void> {
     archiveFolder.stop();
     attachmentPruner.stop();
     cloneMcpConfigSweeper.stop();
+    diagnosticsSender?.stop();
     tokenWatch?.stop();
     tokenTrialWatch?.stop();
     // 窓に残っている器喪失の知らせは、クローンが止まる前に送る。

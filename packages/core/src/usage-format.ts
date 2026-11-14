@@ -332,6 +332,23 @@ export function ledgerTimeZone(
   }
 }
 
+// 台帳の `date` の時間帯の申告（`usage --json` の `ledgerDateTimeZone`）。CLI とデーモンの定期送信が同じものを作る（片方だけ言い方が変わると、要約の「台帳の日付の切り方」の読みがずれる）。
+// 推測の TZ を埋めない: 器の既定が変わっている構成で、嘘の時間帯を機械が信じるため。取れないときは「取れない」と出す
+export const LEDGER_DATE_TIMEZONE_UNAVAILABLE = {
+  state: 'unavailable',
+  note:
+    '台帳の date はサーバのローカル時刻（TZ）で切った日付で、その TZ は API の応答から取れない' +
+    '（古いデーモン、またはデーモンが TZ を解決できなかった）。' +
+    '日誌の at・窓は UTC のため、日付を突き合わせるときは日誌側をサーバの TZ へ直す必要がある',
+} as const;
+
+export function ledgerDateTimeZoneFromName(
+  name: unknown,
+): { state: 'known'; name: string } | typeof LEDGER_DATE_TIMEZONE_UNAVAILABLE {
+  if (typeof name === 'string' && name !== '') return { state: 'known', name };
+  return LEDGER_DATE_TIMEZONE_UNAVAILABLE;
+}
+
 // 器（fs / pg / インメモリ）ごとに書かない: 器だけ違う判断をすると、同じ照会で本物と違う結果を返すため
 export function isBeforeUsageStart(start: string | null, from: string | undefined): boolean {
   if (start === null) return true;

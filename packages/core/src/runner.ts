@@ -411,6 +411,12 @@ export const WITHHELD_ENV_KEYS = [
   'ALTEROID_RUNNER_SOCKET',
 ] as const;
 
+// 診断の要約の定期送信の送り先の鍵（別の alteroid へ要約を書き込むだけの鍵）。送るのはデーモンだけなので、マネージャー・作業者の子プロセスへは渡さない。
+// `WITHHELD_ENV_KEYS` に入れない: あちらは `alteroid credential set` が「鍵として配れない」と断る名前の一覧にも使われ、
+// この鍵は credential set で置く（器の環境変数を焼き直さない）ため。置いた値が `scope: all` で runner へ降りても、子プロセスの env を作る最後（`#baseChildEnv`）でここが落とす。
+export const DIAGNOSTICS_SINK_KEY_ENV = 'ALTEROID_DIAGNOSTICS_SINK_KEY';
+export const SINK_KEY_ENV_KEYS = [DIAGNOSTICS_SINK_KEY_ENV] as const;
+
 // 重ね順をここ1か所に置く: セッションの env（`RunnerSession#childEnv`）と接続先の検査（`Host#anthropicRoute`）が別々に書かれると、表示が実際の env とずれるため
 function childEnvLayers(input: {
   env: NodeJS.ProcessEnv;
@@ -942,7 +948,11 @@ class Host implements RunnerHost {
       options.emit(event);
     };
     this.#env = options.env ?? process.env;
-    this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
+    this.#withheldEnvKeys = [
+      ...WITHHELD_ENV_KEYS,
+      ...SINK_KEY_ENV_KEYS,
+      ...(options.withheldEnvKeys ?? []),
+    ];
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
     this.#fenceMemoryMax = options.fenceMemoryMax ?? FENCE_MEMORY_MAX;
