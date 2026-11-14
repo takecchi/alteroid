@@ -355,6 +355,17 @@ describe('open-claude-sdk-pr.sh', () => {
       path,
       `#!/usr/bin/env bash
 set -euo pipefail
+
+# トークン検査（\`gh api user\`）。他の呼び出しの並びを動かさないよう、別のログへ書く。
+if [ "\${1:-}" = 'api' ]; then
+  printf '%s\\n' "$*" >> "\${FAKE_GH_API_LOG:-/dev/null}"
+  case "\${FAKE_GH_API_STATUS:-ok}" in
+    unauthorized) echo 'gh: Bad credentials (HTTP 401)' >&2; exit 1 ;;
+    unreachable) echo 'dial tcp: lookup api.github.com: no such host' >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+
 {
   for arg in "$@"; do
     printf '%s\\n' "$arg"
@@ -752,6 +763,89 @@ fi
 
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain('Allow GitHub Actions to create and approve pull requests');
+      expect(existsSync(s.pushLog)).toBe(true);
+    });
+  });
+
+  describe('push 前の ALTEROID_PR_TOKEN 検査（#6800）', () => {
+    function prepare() {
+      const s = setup();
+      writeFileSync(
+        join(s.workdir, 'pnpm-workspace.yaml'),
+        "catalog:\n  '@anthropic-ai/claude-agent-sdk': ^0.3.238\n",
+      );
+      const apiLog = join(s.root, 'gh-api.log');
+      return { s, apiLog };
+    }
+
+    it('401 のとき、ALTEROID_PR_TOKEN を名指しして非0で止まり、commit も push も PR 作成も起きない', () => {
+      const { s, apiLog } = prepare();
+
+      const result = run(
+        s,
+        { FAKE_GH_PR_NUMBER: '', FAKE_GH_API_LOG: apiLog, FAKE_GH_API_STATUS: 'unauthorized' },
+        { allowFailure: true },
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('ALTEROID_PR_TOKEN が失効・無効');
+      expect(result.stdout).toContain('ALTEROID_PR_TOKEN が失効・無効なので push せずに止めた');
+      expect(existsSync(s.pushLog)).toBe(false);
+      expect(git(s.workdir, ['log', '-1', '--format=%s']).trim()).toBe('init');
+      expect(parseGhCalls(s.ghLog)).toEqual([]);
+    });
+
+    it('401 でも GITHUB_TOKEN へ自動で切り替えない（gh pr create に進まない）', () => {
+      const { s, apiLog } = prepare();
+
+      run(
+        s,
+        { FAKE_GH_PR_NUMBER: '', FAKE_GH_API_LOG: apiLog, FAKE_GH_API_STATUS: 'unauthorized' },
+        { allowFailure: true },
+      );
+
+      expect(parseGhCalls(s.ghLog).some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(false);
+    });
+
+    it('🔴 陰性対照: トークンが有効なとき、検査は1回走り、従来どおり push と PR 作成まで進む', () => {
+      const { s, apiLog } = prepare();
+
+      const result = run(s, { FAKE_GH_PR_NUMBER: '', FAKE_GH_API_LOG: apiLog });
+
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(apiLog, 'utf8').trim().split('\n')).toEqual(['api user --silent']);
+      expect(existsSync(s.pushLog)).toBe(true);
+      expect(parseGhCalls(s.ghLog).some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(true);
+      expect(result.stderr).not.toContain('失効・無効');
+    });
+
+    it('401 ではない失敗（判定できない）のときは、警告だけ出して先へ進む', () => {
+      const { s, apiLog } = prepare();
+
+      const result = run(s, {
+        FAKE_GH_PR_NUMBER: '',
+        FAKE_GH_API_LOG: apiLog,
+        FAKE_GH_API_STATUS: 'unreachable',
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('ALTEROID_PR_TOKEN の有効性を確かめられなかった');
+      expect(result.stderr).not.toContain('失効・無効');
+      expect(existsSync(s.pushLog)).toBe(true);
+    });
+
+    it('SDK_CI_TRIGGERED が true でない回（GITHUB_TOKEN に倒れている）は、検査自体をしない', () => {
+      const { s, apiLog } = prepare();
+
+      const result = run(s, {
+        FAKE_GH_PR_NUMBER: '',
+        FAKE_GH_API_LOG: apiLog,
+        FAKE_GH_API_STATUS: 'unauthorized',
+        SDK_CI_TRIGGERED: 'false',
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(apiLog)).toBe(false);
       expect(existsSync(s.pushLog)).toBe(true);
     });
   });

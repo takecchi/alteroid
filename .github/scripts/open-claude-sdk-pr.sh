@@ -149,6 +149,41 @@ if [ -n "$ci_missing" ]; then
   echo '::warning::この PR には CI が付かない（GITHUB_TOKEN 制約。ALTEROID_PR_TOKEN を secret に置くと解消する。詳細は本文と #867）' >&2
 fi
 
+# **push の前に `ALTEROID_PR_TOKEN` が生きているかを確かめる。**
+#
+# PAT が失効しても `secrets.ALTEROID_PR_TOKEN || secrets.GITHUB_TOKEN` は空のときしか
+# フォールバックしないので、無効な値がそのまま `git push` へ渡り、`Authentication
+# failed` という原因の名前を持たないエラーで毎晩赤くなる（実測: 2026-11-06 以降の
+# 12 run 以上が同じ形で落ちた。Issue #6800）。ここで名指しで落とす。
+#
+# **`GITHUB_TOKEN` へ自動で切り替えない。** それで作った PR には `pull_request` の
+# CI が付かない（上の #867）。失効は人（オーナー）がトークンを差し替えて直すもので、
+# 黙って別の資格に倒すと「CI の付かない PR」が静かに増える。
+#
+# **確かめるのは `SDK_CI_TRIGGERED=true`（= PAT が置かれている回）だけ。**
+# `GITHUB_TOKEN` に倒れている回は `GET /user` が 403 になるので、検査すると
+# 毎回誤って落ちる。**3つ目の状態を持つ:** 401 は「無効」と確定して止める。ネット
+# ワーク障害などで判定できないときは警告だけ出して先へ進む（push の結果が最終的な
+# 判定を持つ。判定できないものを「無効」へ倒して、有効なトークンの回を止めない）。
+# トークンの値は渡していないし、出力にも出さない（`gh` のエラー文に値は含まれない）。
+if [ "$ci_triggered" = 'true' ]; then
+  if ! token_check_err="$($GH api user --silent 2>&1)"; then
+    if printf '%s' "$token_check_err" | grep -q -E 'HTTP 401|Bad credentials'; then
+      outcome='ALTEROID_PR_TOKEN が失効・無効なので push せずに止めた'
+      {
+        echo '::error::ALTEROID_PR_TOKEN が失効・無効（GitHub が 401 を返した）。push せずに止める。'
+        echo 'fine-grained PAT（Contents: RW / Pull requests: RW）を発行し直して'
+        echo 'secret ALTEROID_PR_TOKEN を差し替えること。GITHUB_TOKEN へは自動で切り替えない'
+        echo '（CI の付かない PR ができるため。#867）。'
+        printf '%s\n' "$token_check_err"
+      } >&2
+      exit 1
+    fi
+    echo '::warning::ALTEROID_PR_TOKEN の有効性を確かめられなかった（401 ではない失敗）。push の結果に委ねて先へ進む' >&2
+    printf '%s\n' "$token_check_err" >&2
+  fi
+fi
+
 git config user.name "$bot_name"
 git config user.email "$bot_email"
 
