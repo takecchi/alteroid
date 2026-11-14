@@ -1,4 +1,5 @@
 import type { AgentPluginLoad } from './agent-events.js';
+import type { ClonePromptSnapshot } from './clone-prompt-snapshot.js';
 import type { ManagerPool } from './manager.js';
 import type { ApprovalSelection, ChatStreamEvent, InboxEvent } from './schema.js';
 
@@ -180,6 +181,9 @@ export interface CloneHost {
 
   // init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない
   pluginLoad(): ClonePluginLoadObservation | undefined;
+
+  // 内部 API（口は PR-2 の読み取り専用の経路）。メモリ上だけ・凍結した値。セッションを起こさず、SDK も呼ばない
+  promptSnapshot(): ClonePromptSnapshot;
 
   stop(options?: { farewellDeadlineAt?: number }): Promise<void>;
 }

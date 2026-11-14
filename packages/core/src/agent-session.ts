@@ -106,9 +106,14 @@ export interface AgentContextUsage {
     kind: 'used' | 'free' | 'buffer' | 'deferred';
   }[];
   // `serverName` は SDK が持つ欄（#5291）。持たない駆動役のために任意にし、無い道具は畳みの側が 'unknown' へ寄せる。
-  mcpTools?: readonly { name?: string; serverName?: string; tokens: number }[];
-  memoryFiles?: readonly { tokens: number }[];
-  systemPromptSections?: readonly { tokens: number }[];
+  mcpTools?: readonly { name?: string; serverName?: string; tokens: number; isLoaded?: boolean }[];
+  // 下の6欄の `name` / `path` / `type` は、クローンが毎ターン払っているものの中身を読むためだけに持つ（`clone-prompt-snapshot.ts`）。日誌へは畳んだ値しか書かない（`contextUsageObservationOf`）
+  memoryFiles?: readonly { path?: string; type?: string; tokens: number }[];
+  systemPromptSections?: readonly { name?: string; tokens: number }[];
+  // SDK 組み込みの道具は、名前と大きさ（tokens）までしか取れない。説明・入力スキーマの欄は SDK の型のどこにも無い
+  systemTools?: readonly { name: string; tokens: number }[];
+  deferredBuiltinTools?: readonly { name: string; tokens: number; isLoaded: boolean }[];
+  mcpInstructions?: readonly { serverName: string; tokens: number }[];
   // 会話の履歴の内訳。持たない駆動役のために任意にする（無い回は日誌の欄も作らない）。
   messageBreakdown?: {
     toolCallTokens: number;

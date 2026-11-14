@@ -7,7 +7,7 @@ import type { CloneHost } from './host.js';
  *
  * 既定は「何も起きていない」答えにする: `attach` は進行中のターンも待ちの発言も無い、`interruptTurn` は止めるものが無い（`idle`）、
  * `reopenSession` はセッションが無かった（`now`）、`sessionRefusal`・`activeTurn` は `null`、
- * `forgetConversation` は何もしない、`anthropicRoute` は空、`toolSearchRoute` は空の文字列、`pluginLoad` は観測なし（`undefined`）。
+ * `forgetConversation` は何もしない、`anthropicRoute` は空、`toolSearchRoute` は空の文字列、`pluginLoad` は観測なし（`undefined`）、`promptSnapshot` はまだ何も組んでいない（両方 `null`）。
  * `managers` の既定は {@link fakeManagerPool} の既定のまま。
  */
 export function fakeCloneHost(overrides: Partial<CloneHost> = {}): CloneHost {
@@ -33,6 +33,7 @@ export function fakeCloneHost(overrides: Partial<CloneHost> = {}): CloneHost {
     anthropicRoute: () => [],
     toolSearchRoute: () => '',
     pluginLoad: () => undefined,
+    promptSnapshot: () => ({ session: null, contextUsage: null }),
     stop: () => Promise.resolve(),
     ...overrides,
   };

@@ -217,10 +217,11 @@ import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
 import { UnreadableApprovalError } from './store.js';
 import type { PendingInboxEvent, Stores } from './store.js';
-import { createCloneMcpServer, type ToolContext } from './tools.js';
+import { createCloneMcpServer, createCloneTools, type ToolContext } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
+import { ClonePromptSnapshotState, type ClonePromptSnapshot } from './clone-prompt-snapshot.js';
 import { quotaNoticeOfEnded, quotaNoticeOfError } from './clone-distill-quota-notice.js';
 import { describeReopenArchive } from './clone-reopen.js';
 import {
@@ -949,6 +950,11 @@ class Clone implements CloneHost {
   });
 
   readonly #distillMemory = new CloneDistillMemoryState();
+  /**
+   * 本セッションが実際に焼いたプロンプトと、直近のターン境界の文脈占有の中身（メモリ上のみ・上書きで1件）。
+   * 蒸留のサイドクエリ（`#distillFromTranscript`）では置かない: 本セッションの値を、別の SDK セッションの値で上書きしないため。
+   */
+  readonly #promptSnapshot = new ClonePromptSnapshotState();
   /**
    * 直近の状況の要約（digest）を組み立てる協力者（`clone-digest.ts`）。日誌は書かない。
    * 口は呼ばれるまで読まない関数で組む（`#stores`・`#managers`・`#tokenSavingExcerpt` は constructor の中で入る）。
@@ -4249,14 +4255,29 @@ class Clone implements CloneHost {
     });
     this.#distillMemory.recordBuiltSizes(systemPrompt.length, memory.length);
 
+    const tools = this.#cloneToolsFor(this.#toolContext());
+    const externalMcpServers = await this.#externalMcpServers();
+    const plugins = await this.#plugins();
+    // 焼いた値そのものを置く（`documents` / `systemPrompt` / `externalMcpServers` は上で組んだもの。読み直さない）。道具の定義は `createMcpServer` と同じ `createCloneTools` から取る
+    this.#promptSnapshot.recordSession({
+      builtAt: readAt,
+      resumedFrom: resume,
+      model: this.#model,
+      systemPrompt,
+      documents,
+      tools: () => createCloneTools(this.#toolContext()),
+      externalMcpServers,
+      pluginPaths: plugins.map((plugin) => plugin.path),
+    });
+
     return {
       model: this.#model,
       modelPlaced: this.#modelOverridden,
       permissionMode: this.#permissionMode,
       input: this.#inputStream(),
-      tools: this.#cloneToolsFor(this.#toolContext()),
-      externalMcpServers: await this.#externalMcpServers(),
-      plugins: await this.#plugins(),
+      tools,
+      externalMcpServers,
+      plugins,
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
@@ -4418,6 +4439,7 @@ class Clone implements CloneHost {
   // `typeof` で検査し、読めない形は `null` のままにする: 読み違えて投げると本セッションの起動そのものが壊れる。読めた配列だけが「0本」を名乗れる。
   #captureInitFacts(facts: AgentRuntimeFacts): void {
     this.#sdkSession.setSdkSessionId(facts.sessionId);
+    this.#promptSnapshot.fillSessionId(facts.sessionId);
     this.#sdkModel = facts.model;
     this.#claudeCodeVersion = facts.agentVersion;
     this.#apiKeySource = facts.apiKeySource;
@@ -4833,11 +4855,31 @@ class Clone implements CloneHost {
     const startedAt = Date.now();
     try {
       const usage = await contextUsageWithin(q.contextUsage(), this.#contextUsageTimeoutMs);
+      // 追加の SDK 呼び出しはしない: 既に聞いた答えの生の値を控えるだけ。差し替わった後のセッションの欄を、前のセッションの値で上書きしない
+      if (this.#sdkSession.query === q) {
+        this.#promptSnapshot.recordContextUsage(usage, new Date().toISOString());
+      }
       // 写し方は `contextUsageObservationOf` に1つだけ置く: 担当の層（`runner.ts`）と同じ形で残すため
       return contextUsageObservationOf(usage, startedAt);
     } catch (error) {
-      return failedContextUsageObservation(error, startedAt);
+      const failed = failedContextUsageObservation(error, startedAt);
+      // 理由は日誌に載せるのと同じ（`describeProbeError` を通した）文字列。古い成功値は置き換わる
+      if (this.#sdkSession.query === q) {
+        this.#promptSnapshot.recordContextUsageFailure(
+          failed.error ?? '理由不明',
+          new Date().toISOString(),
+        );
+      }
+      return failed;
     }
+  }
+
+  /**
+   * 本セッションが実際に焼いたプロンプトと、直近のターン境界の文脈占有の生の値（読み取り専用・凍結済み）。口（HTTP・CLI）はまだ無い。
+   * 日誌・ファイルには書かない: メモリ上だけで、再起動後は次のセッションが始まるまで空。
+   */
+  promptSnapshot(): ClonePromptSnapshot {
+    return this.#promptSnapshot.snapshot();
   }
 
   /**
