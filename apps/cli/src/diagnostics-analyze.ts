@@ -32,6 +32,7 @@ async function readInput(label: string, path: string): Promise<string> {
   } catch (error) {
     throw new Error(
       `${label} を読めませんでした（${path}: ${error instanceof Error ? error.message : String(error)}）`,
+      { cause: error },
     );
   }
 }
