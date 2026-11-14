@@ -7,6 +7,7 @@ import { resolveEnumEnv } from './placed-env.js';
 import { describePage, page, renderListing } from './excerpt.js';
 import { describeTokenDiff } from './token-diff.js';
 import { resolveMemoryCursor } from './memory-cursor.js';
+import { memoryDescriptionContract } from './memory-description-contract.js';
 import {
   applyMemoryFrontmatterPatch,
   assertNeverMemoryDocKind,
@@ -24,6 +25,7 @@ import {
   lookupMemorySection,
   measureMemoryFloor,
   MEMORY_OUTLINE_SIDES,
+  MEMORY_TOC_LINE_LIMIT,
   MEMORY_SECTION_MOVE_LIST_BUDGET,
   parseMemoryFrontmatter,
   renderMemoryListing,
@@ -1287,6 +1289,7 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           '節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる。',
         'どれも本文は焼かれない——premise / indexed の節の本文は memory_section_read で開く。判断の前提なら premise、',
         '事実の蓄積で毎回全文を読む必要が無いものなら fact）・parent（親文書の slug。階層を作る）の3つだけ。',
+        memoryDescriptionContract(MEMORY_TOC_LINE_LIMIT),
         'ネスト・複数行・引用符の解釈は無い（値は文字列としてそのまま読む）。狭い形から外れると malformed として',
         '扱われ、文書は消えずに premise のまま残る（本文はプロンプトには載らず、memory_section_read で開く）。',
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
@@ -1500,6 +1503,7 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         'description・type・parent のうち少なくとも1つを渡すこと（1つも渡さない呼びは断る。何も変わらない）。',
         'type に渡せるのは premise・indexed・fact のいずれかだけ（それ以外の値は断る。綴りを間違えたまま黙って書かない）。',
         'premise は「要旨＋節の目次」がプロンプトへ焼かれ、indexed は要旨だけが焼かれて節の目次は焼かれない（節を確かめるにはまず memory_outline を呼ぶこと）、fact は目次の1行だけになる（どれも本文は焼かれない）。区分が変わったときは、その変化が応答に出る。',
+        memoryDescriptionContract(MEMORY_TOC_LINE_LIMIT),
         '**統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書には使えない**',
         '（断られる。ask_human で人間に確認を通せば次のターンで実行できる）。会話の中の書き込みは通る。',
       ].join(' '),
@@ -1508,7 +1512,9 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
         description: z
           .string()
           .optional()
-          .describe('要旨（目次の1行に載る）。渡さなければ既存の値のまま'),
+          .describe(
+            '要旨（目次の1行に載る）。約束事（本文を開かなくても守ること）を先頭に、本文を開く条件を続けて書く。本文は書かない。渡さなければ既存の値のまま',
+          ),
         type: z
           .string()
           .optional()
