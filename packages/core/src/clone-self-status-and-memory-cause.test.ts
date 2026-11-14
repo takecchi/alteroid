@@ -671,4 +671,84 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     s.openGate();
     await s.clone.stop();
   });
+
+  // #6127: 蒸留のやり直しが、1回目の追記の上へ同じ内容をもう一度積まない
+  describe('蒸留の追記は、同じ内容が末尾にあれば書かない（#6127）', () => {
+    async function inDistillTurn(
+      run: (s: ReturnType<typeof setupGated>) => Promise<void>,
+    ): Promise<ReturnType<typeof setupGated>> {
+      const s = setupGated();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '1本目の入力');
+      s.release(0, 0);
+      await waitForDone(s.events);
+      const endPromise = s.clone.endConversation('conv-1');
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, '蒸留ターンの入力');
+      await run(s);
+      s.release(0, 1);
+      await endPromise;
+      s.openGate();
+      await s.clone.stop();
+      return s;
+    }
+
+    it('同じ追記を蒸留が2回呼んでも、本文にも日誌にも1回分しか残らない', async () => {
+      const s = await inDistillTurn(async (t) => {
+        const args = { slug: 'values', content: '追記した学び\n', summary: '二重追記の試験' };
+        await callTool(t.tools(), 'memory_append', args);
+        await callTool(t.tools(), 'memory_append', args);
+      });
+
+      const body = (await s.stores.persona.read('values'))!.content;
+      expect(body.split('追記した学び').length - 1).toBe(1);
+      const entries = await s.stores.journal.list({ types: ['memory_update'] });
+      expect(entries.filter((e) => 'action' in e && e.action === 'append')).toHaveLength(1);
+    });
+
+    it('🔴 陰性対照: 通常ターン（cause: clone）が同じ内容を続けて追記したときは、止めずに2回とも書く', async () => {
+      const s = setupGated();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '通常ターンの入力');
+      const args = { slug: 'values', content: '意図して繰り返す\n', summary: '通常ターンの追記' };
+      await callTool(s.tools(), 'memory_append', args);
+      await callTool(s.tools(), 'memory_append', args);
+
+      const body = (await s.stores.persona.read('values'))!.content;
+      expect(body.split('意図して繰り返す').length - 1).toBe(2);
+
+      s.release(0, 0);
+      await waitForDone(s.events);
+      const stopPromise = s.clone.stop();
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 2, 'shutdown 蒸留の入力');
+      s.release(0, 1);
+      await stopPromise;
+    });
+
+    it('末尾と違う内容、または行の頭から揃っていない短い追記は、蒸留でも書く', async () => {
+      const s = await inDistillTurn(async (t) => {
+        await callTool(t.tools(), 'memory_append', {
+          slug: 'values',
+          content: 'いまの学びあ\n',
+          summary: '1回目',
+        });
+        // 既存の末尾「あ」と文字が重なるだけの別の追記は、守りの対象ではない
+        await callTool(t.tools(), 'memory_append', {
+          slug: 'values',
+          content: 'あ',
+          summary: '2回目',
+        });
+        await callTool(t.tools(), 'memory_append', {
+          slug: 'values',
+          content: '別の学び\n',
+          summary: '3回目',
+        });
+      });
+
+      const body = (await s.stores.persona.read('values'))!.content;
+      expect(body).toContain('いまの学びあ');
+      expect(body).toContain('別の学び');
+      const entries = await s.stores.journal.list({ types: ['memory_update'] });
+      expect(entries.filter((e) => 'action' in e && e.action === 'append')).toHaveLength(3);
+    });
+  });
 });

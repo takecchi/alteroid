@@ -1180,6 +1180,14 @@ function renderMemoryWriteResult(args: {
   );
 }
 
+// 蒸留のやり直しで同じ追記が二重になる筋を止める判定（#6127）。末尾へ行の頭からそのまま付いているときだけ真にする:
+// 行の頭を見ないと、短い追記（「あ」など）が既存の末尾の文字と偶然重なって、本物の追記を黙って捨てるため
+function alreadyAtTail(existing: string, appended: string): boolean {
+  const body = existing.trimEnd();
+  const start = body.length - appended.length;
+  return start >= 0 && body.endsWith(appended) && (start === 0 || body[start - 1] === '\n');
+}
+
 export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
   const { stores, memoryCause } = shared;
   return [
@@ -1375,6 +1383,17 @@ export function memoryTools(context: ToolContext, shared: CloneToolsShared) {
           stores.persona.read(slug),
           stores.persona.documents(),
         ]);
+        // 蒸留のときだけ止める: 人間や通常のターンが意図して同じ文を足すのは止めない。置き場の `append` は冪等でなく、
+        // 拾い直しが同じ transcript から蒸留を丸ごとやり直すと、1回目の追記の上へ同じ内容が積まれうる（#6127）
+        if (
+          memoryCause() === 'distill' &&
+          before !== null &&
+          alreadyAtTail(before.content, stripNul(content).trim())
+        ) {
+          return text(
+            `記憶 ${slug} の末尾に同じ内容がすでにあるので追記していない（蒸留のやり直しで二重にしないため）。`,
+          );
+        }
         const written = await stores.persona.append(slug, content);
         const memoryAfter = await stores.persona.documents();
         await appendJournalOrThrow(
