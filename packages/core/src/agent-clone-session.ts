@@ -49,8 +49,23 @@ export interface AgentCloneSessionSpec {
   onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
 }
 
+/** 差し替えの結果。名前だけを持つ（`env` / `headers` / `args` には鍵が入りうる）。 */
+export interface AgentCloneMcpServersApplied {
+  added: string[];
+  removed: string[];
+  /** 接続できなかった登録の名前（理由は載せない: URL に資格が入りうる）。 */
+  failed: string[];
+  /** 登録から外れたが、セッションを起こしたときの登録ファイルから来たので、このセッションには残る名前（外せるのは開き直したとき）。 */
+  retained: string[];
+}
+
 export interface AgentCloneSession {
   readEvents(onEvent: (event: AgentEvent) => Promise<void>): Promise<void>;
+  /**
+   * 走っているセッションの人間の MCP 連携を置き直す（クローン自身の道具は残す）。持たない provider は省く:
+   * 反映できない旨は呼び手が日誌に残し、次のセッションから効く。
+   */
+  setExternalMcpServers?(servers: McpServers): Promise<AgentCloneMcpServersApplied>;
   interrupt(): Promise<unknown>;
   close(): void;
   contextUsage(): Promise<AgentContextUsage>;

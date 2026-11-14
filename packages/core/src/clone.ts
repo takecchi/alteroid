@@ -756,6 +756,10 @@ class Clone implements CloneHost {
   #observedPermissionMode: string | null = null;
   // `null`（init 未観測）と `[]`（SDK が0本と報告）を畳まない: `self.ts` 側で区別する手段が無くなるため
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
+  // 登録が変わって、走っているセッションへまだ置き直していない。立てたまま次のターンの境界まで持ち越す
+  #mcpServersPending = false;
+  #mcpServersApplying = false;
+  #unsubscribeMcpServersPushed: (() => void) | undefined;
   // `null` は「観測していない」（init に `plugins` が無いときも前の観測を残さず `null` へ戻す）。`at` は init を受けた時刻
   #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
@@ -1143,6 +1147,11 @@ class Clone implements CloneHost {
     this.#onScheduledRunClaimed = onScheduledRunClaimed;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
+    // 開き直さない: 開き直すと文脈の連続性が切れるため。ターンの途中は待ち、境界で置き直す
+    this.#unsubscribeMcpServersPushed = mcpServerService?.onPushed(() => {
+      this.#mcpServersPending = true;
+      void this.#applyMcpServersAtBoundary();
+    });
     this.#managers =
       managers ??
       createManagerPool({
@@ -1757,6 +1766,7 @@ class Clone implements CloneHost {
 
   async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {
     this.#daily.dispose();
+    this.#unsubscribeMcpServersPushed?.();
     // `#inbox.closed` も見る: 読み切りのあいだ `#stopped` はまだ立っておらず、`#stopped` だけで守ると2度目の呼びが本体をもう一度走らせるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
 
@@ -5635,6 +5645,55 @@ class Clone implements CloneHost {
     const conversationId = this.#sdkSession.turn?.conversationId ?? null;
     this.#sdkSession.finishTurn();
     if (conversationId !== null) this.#progress.clear(conversationId);
+    if (this.#mcpServersPending) void this.#applyMcpServersAtBoundary();
+  }
+
+  /**
+   * 走っているセッションがなければ何もしない: 次に開くセッションが `#externalMcpServers()` で最新を読むため。
+   * 失敗しても投げない（push の購読者とターンの終わりから呼ばれる）。次のセッションから効く。
+   */
+  async #applyMcpServersAtBoundary(): Promise<void> {
+    if (this.#mcpServersApplying) return;
+    this.#mcpServersApplying = true;
+    try {
+      while (this.#mcpServersPending && this.#sdkSession.turn === null) {
+        this.#mcpServersPending = false;
+        const session = this.#sdkSession.query;
+        if (session === null || this.#sdkSession.inputEndedForRecycle) return;
+        await this.#reflectMcpServers(session);
+      }
+    } catch (error) {
+      noteDroppedRecord('MCP 登録の反映', 'clone', error);
+    } finally {
+      this.#mcpServersApplying = false;
+    }
+  }
+
+  async #reflectMcpServers(session: AgentCloneSession): Promise<void> {
+    if (session.setExternalMcpServers === undefined) {
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が変わったが、この provider は走行中のセッションへ置き直せない。次のセッションから効く。`,
+      );
+      return;
+    }
+    try {
+      const applied = await session.setExternalMcpServers(await this.#externalMcpServers());
+      const list = (names: readonly string[]): string =>
+        names.length === 0 ? 'なし' : names.join('、');
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_DECISION_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映した（開き直していない。追加: ${list(applied.added)}／除去: ${list(applied.removed)}／接続失敗: ${list(applied.failed)}）` +
+          (applied.retained.length === 0
+            ? ''
+            : `。登録から外れたが、このセッションには残る: ${list(applied.retained)}（外れるのは次のセッションから）`),
+      );
+    } catch (error) {
+      await this.#journalSelf(
+        'outbound',
+        `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録の変更を走行中のセッションへ反映できなかった（例外の種類: ${error instanceof Error ? error.name : typeof error}。文面は載せない: 登録の URL やヘッダの資格が混ざりうる）。次のセッションから効く。`,
+      );
+    }
   }
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {
