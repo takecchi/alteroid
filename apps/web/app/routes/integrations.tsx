@@ -276,8 +276,8 @@ function IssueForm({ onIssued }: { onIssued: (issued: IntegrationKeyIssued) => v
             </Button>
             <FieldHint id="integration-report-hint">
               source を {REPORT_SOURCE}、1分あたりの回数を {String(REPORT_RATE_PER_MINUTE)}{' '}
-              回に入れる（外の AI が alteroid の不具合を報告する鍵。既定の {String(DEFAULT_RATE_PER_MINUTE)}{' '}
-              回/分より絞って渡すのを勧める）
+              回に入れる（外の AI が alteroid の不具合を報告する鍵。既定の{' '}
+              {String(DEFAULT_RATE_PER_MINUTE)} 回/分より絞って渡すのを勧める）
             </FieldHint>
           </div>
         </div>
@@ -422,8 +422,9 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
         {key.source === REPORT_SOURCE && (
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">
-              Claude Code から報告に使う。次のコマンドの &lt;上の値&gt; を上の鍵の値に置き換えて登録すると、その
-              Claude Code が MCP の道具 report_problem で alteroid の不具合をクローンの受信箱へ報告できる（task
+              Claude Code から報告に使う。次のコマンドの &lt;上の値&gt;
+              を上の鍵の値に置き換えて登録すると、その Claude Code が MCP の道具 report_problem で
+              alteroid の不具合をクローンの受信箱へ報告できる（task
               は自動では作られず、クローンが判断する）
             </span>
             <CodeBlock label="claude mcp add">{claudeMcpAddCommand(origin)}</CodeBlock>
