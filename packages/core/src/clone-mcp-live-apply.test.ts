@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
+import { fakeSdk, flushPendingMicrotasks, waitForDone, wireEvents } from './clone-test-harness.js';
 import { createClone } from './clone.js';
 import { createMcpServerService } from './mcp-server-service.js';
 import { createMemoryStores, humanMessage } from './testing.js';
@@ -98,7 +98,7 @@ describe('クローン — MCP 登録の変更を走行中のセッションへ�
     await expect.poll(() => calls[0]?.inputs.length, { timeout: 3000 }).toBe(1);
 
     await mcpServerService.apply({ github: GITHUB });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushPendingMicrotasks();
     expect(mcpSetCalls[0], 'ターンの途中で差し替えている').toHaveLength(0);
 
     release();

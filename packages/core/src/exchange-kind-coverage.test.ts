@@ -372,6 +372,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#pump': 'thinning',
     '#record': 'human',
     '#recordWorkerLimit': 'decision',
+    '#reflectMcpServers': 'decision,failure',
     '#reopenSession': 'decision',
     '#reportFailure': 'failure,human,thinning',
     '#restoreUnreadPass': 'thinning',
