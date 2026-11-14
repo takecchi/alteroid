@@ -140,6 +140,46 @@ describe('integration create', () => {
     ]);
   });
 
+  it('source が alteroid-report なら Claude Code への登録コマンドを添え、10 回/分より多ければ絞る推奨も添える（値は例に書かない）', async () => {
+    setReply('POST', '/integration-keys', {
+      status: 200,
+      body: { key: view({ source: 'alteroid-report' }), value: SECRET_VALUE },
+    });
+    const out = captureStdout();
+    await integrationCreateCommand({ name: 'R', source: 'alteroid-report' }, NOW);
+    const text = out();
+    expect(text.split(SECRET_VALUE)).toHaveLength(2);
+    expect(text).toContain(
+      'claude mcp add --transport http alteroid-report http://127.0.0.1:4517/mcp',
+    );
+    expect(text).toContain('--header "Authorization: Bearer $ALTEROID_INTEGRATION_KEY"');
+    expect(text).toContain('--rate-per-minute 10 に絞って発行するのを勧めます');
+
+    setReply('POST', '/integration-keys', {
+      status: 200,
+      body: {
+        key: view({
+          source: 'alteroid-report',
+          limits: { maxBodyBytes: 1_048_576, ratePerMinute: 10 },
+        }),
+        value: SECRET_VALUE,
+      },
+    });
+    const out2 = captureStdout();
+    await integrationCreateCommand({ name: 'R', source: 'alteroid-report' }, NOW);
+    expect(out2()).not.toContain('に絞って発行するのを勧めます');
+  });
+
+  it('source が alteroid-report でなければ登録コマンドは出さない', async () => {
+    setReply('POST', '/integration-keys', {
+      status: 200,
+      body: { key: view(), value: SECRET_VALUE },
+    });
+    const out = captureStdout();
+    await integrationCreateCommand({ name: 'CI', source: 'ci.main' }, NOW);
+    expect(out()).not.toContain('claude mcp add');
+  });
+
   it('--json: 標準出力はデーモンの応答の JSON だけ（値を含む）。警告は標準エラーへ（#3220）', async () => {
     setReply('POST', '/integration-keys', {
       status: 200,

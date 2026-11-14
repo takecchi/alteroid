@@ -178,6 +178,25 @@ export async function integrationCreateCommand(
   stdout.write(renderIntegrationCreated(created.key, created.value, target.baseUrl));
 }
 
+// 外の AI が `POST /mcp` の `report_problem` で報告する鍵の source（デーモンの `MCP_REPORT_SOURCE` と同じ値）と、絞る推奨値（デーモンの既定は 60 回/分のまま）。Web 側は `apps/web/app/lib/integration-example.ts` に同じ値を持つ（CLI は Web を import できない）
+const REPORT_SOURCE = 'alteroid-report';
+const REPORT_RATE_PER_MINUTE = 10;
+
+function renderReportGuide(key: IntegrationKeyView, baseUrl: string): string[] {
+  if (key.source !== REPORT_SOURCE) return [];
+  return [
+    '',
+    'Claude Code から報告に使う（MCP の report_problem で alteroid の不具合をクローンの受信箱へ報告できる）:',
+    `  claude mcp add --transport http ${REPORT_SOURCE} ${baseUrl}/mcp \\`,
+    `    --header "Authorization: Bearer $ALTEROID_INTEGRATION_KEY"`,
+    ...(key.limits.ratePerMinute > REPORT_RATE_PER_MINUTE
+      ? [
+          `  報告用の鍵は --rate-per-minute ${String(REPORT_RATE_PER_MINUTE)} に絞って発行するのを勧めます（この鍵は ${String(key.limits.ratePerMinute)} 回/分。後から変えられないので、絞るなら失効して発行し直してください）`,
+        ]
+      : []),
+  ];
+}
+
 // 値を書くのはここの1か所だけ: 値が2回出ると、端末のログから拾える場所が増えるため
 function renderIntegrationCreated(key: IntegrationKeyView, value: string, baseUrl: string): string {
   const lines = [
@@ -197,6 +216,7 @@ function renderIntegrationCreated(key: IntegrationKeyView, value: string, baseUr
     `    -H "Content-Type: application/json" \\`,
     `    -d '{"message":"hello"}'`,
     `  （${baseUrl} は、この端末から見える接続先です。外のサービスから届く値とは限らないので、渡す先の設定には自分の公開 URL に置き換えてください）`,
+    ...renderReportGuide(key, baseUrl),
     '',
     `失効するには: alteroid integration revoke ${key.id}`,
   ];
