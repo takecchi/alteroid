@@ -47,6 +47,7 @@ export {
   formatUsd,
   isBeforeUsageStart,
   isDelegationActorId,
+  ledgerTimeZone,
   sumUsageRows,
   summarizeUsage,
   usageDate,

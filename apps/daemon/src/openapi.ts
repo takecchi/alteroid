@@ -697,6 +697,9 @@ export const usageResponseSchema = usageAggregateSchema.extend({
   // `from` / `to` などの絞り込みに影響されない（全期間を突き合わせる）: 変わると、照会範囲の外の委譲が「記録が無い」に化けるため。
   unrecordedManagers: z.array(unrecordedManagerSchema),
   today: usageDateSchema,
+  // 台帳の `date`（と `today`）を切る TZ の IANA 名。日誌の `at` と窓は UTC なので、並べるときはどちらかにそろえる。
+  // optional にせず null: 取れないこと（Intl が解決できない TZ 設定）を欄の不在や `UTC` の既定値と読み違えさせないため。
+  ledgerTimeZone: z.string().nullable(),
 });
 
 export const managerActionResponseSchema = z.object({

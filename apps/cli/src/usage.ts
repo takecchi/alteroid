@@ -97,14 +97,24 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   stdout.write(`${renderUsage(aggregate)}\n`);
 }
 
-// 台帳の `date` の時間帯は、API の応答のどこにも載っていない（`today` は日付だけ。`/health` / `/status` にも無い）。
-// 推測の TZ を埋めない: 器の既定（Asia/Tokyo）が変わっている構成で、嘘の時間帯を機械が信じるため。API に欄を足さず「取れない」と出す
+// 台帳の `date` の時間帯は、応答の `ledgerTimeZone`（デーモンが実際に使っている TZ の IANA 名）から取る。
+// 推測の TZ を埋めない: 器の既定（Asia/Tokyo）が変わっている構成で、嘘の時間帯を機械が信じるため。
+// 欄が無い（古いデーモン）か null（デーモンが解決できなかった）ときは「取れない」と出す
 export const LEDGER_DATE_TIMEZONE_UNAVAILABLE = {
   state: 'unavailable',
   note:
-    '台帳の date はサーバのローカル時刻（TZ）で切った日付で、その TZ は API の応答から取れない。' +
+    '台帳の date はサーバのローカル時刻（TZ）で切った日付で、その TZ は API の応答から取れない' +
+    '（古いデーモン、またはデーモンが TZ を解決できなかった）。' +
     '日誌の at・窓は UTC のため、日付を突き合わせるときは日誌側をサーバの TZ へ直す必要がある',
 } as const;
+
+export function ledgerDateTimeZoneOf(
+  aggregate: Record<string, unknown>,
+): { state: 'known'; name: string } | typeof LEDGER_DATE_TIMEZONE_UNAVAILABLE {
+  const name = aggregate['ledgerTimeZone'];
+  if (typeof name === 'string' && name !== '') return { state: 'known', name };
+  return LEDGER_DATE_TIMEZONE_UNAVAILABLE;
+}
 
 // `resets` を必ず出す: 数え直しの件数は累積の信用に関わり、欄ごと無いと「0 件」と読み分けられないため。
 // 応答に無い（古いデーモン）ときは [] ではなく null: 「無かった」と「取れなかった」を分ける
@@ -112,7 +122,7 @@ export function withDiagnosticsFields(aggregate: UsageJsonSource): Record<string
   return {
     ...aggregate,
     resets: aggregate.resets ?? null,
-    ledgerDateTimeZone: LEDGER_DATE_TIMEZONE_UNAVAILABLE,
+    ledgerDateTimeZone: ledgerDateTimeZoneOf(aggregate),
   };
 }
 
