@@ -13,14 +13,8 @@ import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } f
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
 import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-format.js';
 import { describeGithubCi } from './progress-github.js';
-import { describeDiagnosticsSummaryDigest } from './diagnostics-summary-format.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
-import {
-  JOURNAL_ENTRY_TYPES,
-  describeAnsweredVia,
-  type JournalEntry,
-  type JournalEntryType,
-} from './schema.js';
+import { JOURNAL_ENTRY_TYPES, describeAnsweredVia, type JournalEntry } from './schema.js';
 import {
   EXCHANGE_WITH_VALUES,
   JournalAnchorNotFoundError,
@@ -185,17 +179,10 @@ function journalAttachmentHead(
 
 const JOURNAL_LISTING_MODELS = 3;
 
-// 診断の要約の一覧の1行の上限（period・5つの数字が収まる長さ。`JOURNAL_TEXT_EXCERPT` とは別に持つ: 片方だけ直したくなったときに一緒に動かないため）
-const JOURNAL_DIAGNOSTICS_DIGEST = 240;
-
 // 一覧の本文の抜粋。turn_usage だけは、先頭のモデルの行（本文の先頭から models の数だけ）を行ごとに切り、残り（数え直し・文脈・compaction の行）はこれまでどおりまとめて1本の上限で切る:
 // 全部を1行に潰して切ると、1つ目のモデルの行（cache 内訳つき）で字数が尽き、2つ目以降のモデルが一覧に出ないため。
 // モデルの行は JOURNAL_LISTING_MODELS 本まで。超えた分は「…ほか N モデル」に畳む（全部は id 指定の全文読みで出る）ので、行の長さは「モデル最大3行 + 残り120字」で頭打ちになる
 function journalListingBody(entry: JournalEntry, body: string): string {
-  // 診断の要約は全文（最大 16 KiB）を載せず、要点の数字の1行に畳む（一覧は予算を件数で壊さない）
-  if (entry.type === 'diagnostics_summary') {
-    return excerptRow(describeDiagnosticsSummaryDigest(entry.payload), JOURNAL_DIAGNOSTICS_DIGEST);
-  }
   if (entry.type !== 'turn_usage') return excerptRow(body, JOURNAL_TEXT_EXCERPT);
   const modelCount = Object.keys(entry.models).length;
   const lines = body.split('\n');
@@ -438,20 +425,6 @@ function renderJournalEntry(
         head: '[conversation_deleted]',
         body: `会話 ${entry.deletedConversationId} を削除した（${entry.hiddenCount} 件。${entry.deletedBy}）`,
       };
-    case 'diagnostics_summary':
-      // 本文は要約の JSON 全文（id 指定の頁送りで全部出る）。一覧では `journalListingBody` が要点の1行へ畳む
-      return {
-        head: `[diagnostics_summary ${field(entry.source)} ${entry.principalKind}]`,
-        body: JSON.stringify(entry.payload),
-      };
-    case 'diagnostics_summary_send':
-      return {
-        head: `[diagnostics_summary_send ${entry.outcome}]`,
-        body:
-          `${entry.period.start} 〜 ${entry.period.end} の診断の要約を ${entry.sinkHost} へ送る試み（${entry.attempt} 回目）: ${entry.outcome}` +
-          (entry.httpStatus === undefined ? '' : ` HTTP ${entry.httpStatus}`) +
-          (entry.reason === undefined ? '' : ` 理由 ${entry.reason}`),
-      };
   }
 }
 
@@ -642,17 +615,6 @@ function checkJournalListArgs(
 }
 
 // ストアへ渡す問い合わせ。`[]`（空配列）もそのまま転送する: `{}` へ落とすと「0件」の契約が「絞らない」に化け、契約の歯からも見えないため
-// `types` を省略した一覧から外す種別: 日々届く（受け取った診断の要約）・日々積まれる（送信の結果）ので、既定の一覧を埋めて判断の記録を押し出す。
-// 他の診断の種別（turn_usage など）は外していない（これまでどおり既定の一覧に出る）。ここに足した2つだけが、`types` で名指ししたときにだけ出る。
-// ストアの問い合わせに「除く」の口は無いので、省略時は残りの種別を明示して渡す（ストア3実装の契約を広げない）。
-const DEFAULT_LISTING_EXCLUDED_TYPES: readonly JournalEntryType[] = [
-  'diagnostics_summary',
-  'diagnostics_summary_send',
-];
-const DEFAULT_LISTING_TYPES: JournalEntryType[] = JOURNAL_ENTRY_TYPES.filter(
-  (type) => !DEFAULT_LISTING_EXCLUDED_TYPES.includes(type),
-);
-
 function buildJournalQuery(
   args: JournalListArgs,
   requested: number,
@@ -663,7 +625,7 @@ function buildJournalQuery(
     limit: requested,
     ...(normalized.normalizedSince === undefined ? {} : { since: normalized.normalizedSince }),
     ...(normalized.normalizedUntil === undefined ? {} : { until: normalized.normalizedUntil }),
-    types: types === undefined ? DEFAULT_LISTING_TYPES : types,
+    ...(types === undefined ? {} : { types }),
     ...(q === undefined ? {} : { q }),
     ...(withFilter === undefined ? {} : { with: withFilter }),
     ...(order === undefined ? {} : { order }),
@@ -1033,7 +995,7 @@ export function journalTools(context: ToolContext, shared: CloneToolsShared) {
           .array(z.enum(JOURNAL_ENTRY_TYPES))
           .optional()
           .describe(
-            '例 {"types":["escalation"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別（ただし diagnostics_summary と diagnostics_summary_send は、日々積まれて一覧を埋めるので、名指ししたときだけ出る）',
+            '例 {"types":["escalation"]}。配列で渡し、値は引用符で囲む。種別で絞る。省略すると全種別',
           ),
         // 説明文は `conversation_read` の `q` と変えない: 同じ語で探す口の言い方が違うと違う意味論を疑われるため
         q: z

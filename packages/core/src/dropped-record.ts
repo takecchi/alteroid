@@ -737,15 +737,6 @@ export function journalEntryShape(entry: JournalEntryInput): string {
     // `deletedConversationId` / `deletedBy` は出さない（`exchange.conversationId` を出さないのと同じ判断）。
     case 'conversation_deleted':
       return `conversation_deleted hiddenCount=${entry.hiddenCount}`;
-    // `source` は鍵の source（人間が付けた名前）なので長さだけにする。本体（`payload`）と鍵の id は出さない。
-    case 'diagnostics_summary':
-      return `diagnostics_summary principalKind=${tag(entry.principalKind)} ${size(entry.source, 'source')}`;
-    // `outcome` / `reason` は固定の語彙、`attempt` は数。`sinkHost` は送り先が分かるので出さない。
-    case 'diagnostics_summary_send':
-      return (
-        `diagnostics_summary_send outcome=${entry.outcome} attempt=${entry.attempt}` +
-        (entry.reason === undefined ? '' : ` reason=${entry.reason}`)
-      );
   }
 }
 

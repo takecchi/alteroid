@@ -378,22 +378,6 @@ diagnosticsCommand
   );
 
 diagnosticsCommand
-  .command('summarize')
-  .addHelpText('after', HELP_EXAMPLES.diagnosticsSummarize)
-  .description(
-    '`diagnostics export` の出力（と任意で `usage --json` の出力）から、別の alteroid へ送る診断の要約（JSON）を標準出力へ出す。出力が送る内容のすべて（記憶・会話・鍵は載らない。秘密らしい文字列があれば断る。通信しない）',
-  )
-  .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
-  .option('--usage <file>', '`usage --json` の出力（任意）')
-  .option('--ledger-tz <iana>', '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う）')
-  .option('--top <n>', '委譲の上位に出す件数（1〜20。既定 10）')
-  .action(
-    async (options: { journal?: string; usage?: string; ledgerTz?: string; top?: string }) => {
-      await (await import('./diagnostics-summarize.js')).diagnosticsSummarizeCommand(options);
-    },
-  );
-
-diagnosticsCommand
   .command('export')
   .addHelpText('after', HELP_EXAMPLES.diagnosticsExport)
   .description(
@@ -408,74 +392,6 @@ diagnosticsCommand
   .option('--page-size <n>', '1 頁に読む行数（1〜1000。既定 500）')
   .action(async (options: { type?: string; since?: string; until?: string; pageSize?: string }) => {
     await (await import('./diagnostics.js')).diagnosticsExportCommand(options);
-  });
-
-const diagnosticsReceivedCommand = diagnosticsCommand
-  .command('received')
-  .description(
-    '別の alteroid が送ってきた診断の要約（日誌の diagnostics_summary）を読む。一覧・全文・同じ source の2件の比較',
-  );
-
-diagnosticsReceivedCommand
-  .command('list')
-  .addHelpText('after', HELP_EXAMPLES.diagnosticsReceivedList)
-  .description(
-    '受け取った診断の要約を新しい順に1件1行で並べる（受信時刻・source・period・要点の数字）。全文は show',
-  )
-  .option('--source <source>', 'この source（送ってきた鍵の source）だけ')
-  .option('--since <iso>', 'この受信時刻以降（ISO 8601）')
-  .option('--until <iso>', 'この受信時刻以前（ISO 8601）')
-  .option('--limit <n>', '出す件数（1〜200。既定 20）')
-  .option('--json', '整形せず JSON で（機械が読む）')
-  .action(
-    async (options: {
-      source?: string;
-      since?: string;
-      until?: string;
-      limit?: string;
-      json?: boolean;
-    }) => {
-      await (await import('./diagnostics-received.js')).diagnosticsReceivedListCommand(options);
-    },
-  );
-
-diagnosticsReceivedCommand
-  .command('show')
-  .addHelpText('after', HELP_EXAMPLES.diagnosticsReceivedShow)
-  .description('受け取った診断の要約の JSON 全文を出す')
-  .argument('<id>', '`received list` の id=')
-  .option('--json', '受信の行（source・受信時刻つき）ごと1行で')
-  .action(async (id: string, options: { json?: boolean }) => {
-    await (await import('./diagnostics-received.js')).diagnosticsReceivedShowCommand(id, options);
-  });
-
-diagnosticsReceivedCommand
-  .command('compare')
-  .addHelpText('after', HELP_EXAMPLES.diagnosticsReceivedCompare)
-  .description(
-    '同じ source の2件を並べる（キャッシュの読み出し率・read÷creation・起点の割合・プロンプトの大きさ・compaction・resets）。取れないものは取れないと出す。事実の並べだけで、原因は断定しない',
-  )
-  .argument('<idA>', '比べる1件目の id')
-  .argument('<idB>', '比べる2件目の id')
-  .option('--json', '整形せず JSON で（機械が読む）')
-  .action(async (idA: string, idB: string, options: { json?: boolean }) => {
-    await (
-      await import('./diagnostics-received.js')
-    ).diagnosticsReceivedCompareCommand(idA, idB, options);
-  });
-
-diagnosticsCommand
-  .command('sent')
-  .addHelpText('after', HELP_EXAMPLES.diagnosticsSent)
-  .description(
-    'このデーモンが別の alteroid へ診断の要約を送った試みの結果（日誌の diagnostics_summary_send）を新しい順に1件1行で並べる（日時・period・outcome・attempt・reason）。定期送信は ALTEROID_DIAGNOSTICS_SINK_URL と ALTEROID_DIAGNOSTICS_SINK_KEY が両方そろったときだけ動く',
-  )
-  .option('--since <iso>', 'この時刻以降（ISO 8601）')
-  .option('--until <iso>', 'この時刻以前（ISO 8601）')
-  .option('--limit <n>', '出す件数（1〜200。既定 20）')
-  .option('--json', '整形せず JSON で（機械が読む）')
-  .action(async (options: { since?: string; until?: string; limit?: string; json?: boolean }) => {
-    await (await import('./diagnostics-sent.js')).diagnosticsSentCommand(options);
   });
 
 const runnersProgram = program

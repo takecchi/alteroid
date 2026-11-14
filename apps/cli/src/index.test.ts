@@ -405,54 +405,8 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     return command.commands.map((c) => c.name()).sort();
   }
 
-  it('alteroid diagnostics received は list・show・compare を持つ', () => {
-    const received = program.commands
-      .find((c) => c.name() === 'diagnostics')
-      ?.commands.find((c) => c.name() === 'received');
-    expect((received?.commands ?? []).map((c) => c.name()).sort()).toEqual([
-      'compare',
-      'list',
-      'show',
-    ]);
-    const list = received?.commands.find((c) => c.name() === 'list');
-    expect((list?.options ?? []).map((o) => o.long).sort()).toEqual([
-      '--json',
-      '--limit',
-      '--since',
-      '--source',
-      '--until',
-    ]);
-  });
-
-  it('alteroid diagnostics sent は --since・--until・--limit・--json を受ける', () => {
-    const sent = program.commands
-      .find((c) => c.name() === 'diagnostics')
-      ?.commands.find((c) => c.name() === 'sent');
-    expect((sent?.options ?? []).map((o) => o.long).sort()).toEqual([
-      '--json',
-      '--limit',
-      '--since',
-      '--until',
-    ]);
-  });
-
-  it('alteroid diagnostics は export・analyze・summarize・received・sent を持ち、analyze は日誌・台帳・時間帯を受ける', () => {
-    expect(subcommandNames('diagnostics')).toEqual([
-      'analyze',
-      'export',
-      'received',
-      'sent',
-      'summarize',
-    ]);
-    const summarizeCommand = program.commands
-      .find((c) => c.name() === 'diagnostics')
-      ?.commands.find((c) => c.name() === 'summarize');
-    expect((summarizeCommand?.options ?? []).map((o) => o.long).sort()).toEqual([
-      '--journal',
-      '--ledger-tz',
-      '--top',
-      '--usage',
-    ]);
+  it('alteroid diagnostics は export と analyze を持ち、analyze は日誌・台帳・時間帯を受ける', () => {
+    expect(subcommandNames('diagnostics')).toEqual(['analyze', 'export']);
     const analyzeCommand = program.commands
       .find((c) => c.name() === 'diagnostics')
       ?.commands.find((c) => c.name() === 'analyze');

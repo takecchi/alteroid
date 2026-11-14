@@ -23,36 +23,6 @@ export type TurnFailureKind = z.infer<typeof turnFailureKindSchema>;
 
 const isoDateTime = z.string().datetime({ offset: true });
 
-// 診断の要約の定期送信（`diagnostics_summary_send`）の結果と理由。理由は固定の語彙だけで、自由文を持たない。
-export const DIAGNOSTICS_SEND_OUTCOMES = [
-  'sent',
-  'duplicate',
-  'rejected',
-  'failed',
-  'not_generated',
-] as const;
-export const DIAGNOSTICS_SEND_REASONS = [
-  'timeout',
-  'network',
-  'http_5xx',
-  'http_4xx',
-  'unauthorized',
-  'forbidden',
-  'payload_too_large',
-  'rate_limited',
-  'receiver_rejected',
-  'unexpected_response',
-  'too_many_rows',
-  'read_failed',
-  'secret_pattern',
-  'schema_invalid',
-  'build_failed',
-  'oversize',
-  'no_diagnostics',
-] as const;
-export type DiagnosticsSendOutcome = (typeof DIAGNOSTICS_SEND_OUTCOMES)[number];
-export type DiagnosticsSendReason = (typeof DIAGNOSTICS_SEND_REASONS)[number];
-
 export const memorySlugSchema = z
   .string()
   .min(1)
@@ -837,31 +807,6 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // 会話 id を持たないが、この会話から生まれた本文を写している日誌の行（task〔古い行では廃止した台帳〕へ積んだ・直した・片付けた `decision`）。読む口はこの id の行も外す。行そのものは書き換えない
     hiddenEntryIds: z.array(z.string()).optional(),
   }),
-  // 別の alteroid から届いた診断の要約（`POST /mcp` の `report_diagnostics_summary`）。受信箱・`external_event` には書かない: 書くとクローンのターンが起きて、消費を調べる仕組みが消費を増やすため。
-  // 欄名を `summary` にしない: 検索欄（`JOURNAL_SEARCH_FIELDS`）に `summary` があり、pg は `entry->>'summary'` が入れ子の本体を JSON の文字列にして `q=` に当ててしまう（JS 側は当てない）。
-  // `payload` を `diagnosticsSummarySchema` にしない: 型の定義が日誌の型の一覧（`SUMMARY_JOURNAL_TYPES`）をこのファイルから引くので循環する。受け入れの検査は入口（デーモン）が `diagnosticsSummarySchema` でする。読む側が版のずれで行ごと読めなくならない利点もある。
-  z.object({
-    type: z.literal('diagnostics_summary'),
-    id: z.string(),
-    at: isoDateTime,
-    source: z.string(),
-    principalKind: z.enum(['integration', 'operator', 'account']),
-    keyId: z.string().optional(),
-    payload: z.record(z.string(), z.unknown()),
-  }),
-  // 診断の要約を別の alteroid へ送った試みの結果（1試行1行）。送ったか・何回試したかの正本で、「その日はもう送ったか」の判定もここから読む。
-  // `reason` は固定の語彙だけ: 受け手のメッセージや例外の文面（値を抱えうる）は載せない。`sinkHost` は host だけ（パス・鍵は載せない）。
-  z.object({
-    type: z.literal('diagnostics_summary_send'),
-    id: z.string(),
-    at: isoDateTime,
-    period: z.object({ start: isoDateTime, end: isoDateTime }),
-    outcome: z.enum(DIAGNOSTICS_SEND_OUTCOMES),
-    attempt: z.number().int().positive(),
-    httpStatus: z.number().int().optional(),
-    reason: z.enum(DIAGNOSTICS_SEND_REASONS).optional(),
-    sinkHost: z.string(),
-  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -920,8 +865,6 @@ const journalEntryTypeNames = {
   http_timing: true,
   github_observation: true,
   conversation_deleted: true,
-  diagnostics_summary: true,
-  diagnostics_summary_send: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
