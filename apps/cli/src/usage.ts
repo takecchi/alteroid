@@ -1,4 +1,4 @@
-import { stdout } from './terminal-out.js';
+import { stderr, stdout } from './terminal-out.js';
 
 import {
   ACCOUNT_USAGE_TITLE,
@@ -32,6 +32,8 @@ export interface UsageOptions {
   site?: string;
   // `narrowUsageAxis` を通さない: 値の集合が閉じていない（プールの中身は器ごとに違う）ため
   token?: string;
+  // 整形せず、デーモンの応答をそのまま JSON で標準出力へ出す（診断の材料として機械が読む口）
+  json?: boolean;
 }
 
 export function narrowUsageAxis<T extends string>(
@@ -55,7 +57,9 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   }
   const target = await resolveTarget();
   if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
+    // `--json` の案内を標準出力へ出さない: `| jq` へ渡せなくなるため
+    if (options.json === true) stderr.write(`${target.note}\n`);
+    else stdout.write(`${target.note}\n`);
     return;
   }
   const client = createClient(target.baseUrl, target.headers);
@@ -81,6 +85,12 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   }
   const aggregate = await response.json();
   const dateOrderNotice = describeUsageDateOrder(options.from, options.to);
+  if (options.json === true) {
+    // 応答を欄ごと素通しする（`breakdown` / `today` も落とさない）。`writeRaw` を使う: 端末向けの掃除は JSON の中身を変えるため
+    if (dateOrderNotice !== null) stderr.write(`${dateOrderNotice}\n`);
+    stdout.writeRaw(`${JSON.stringify(aggregate)}\n`);
+    return;
+  }
   if (dateOrderNotice !== null) {
     stdout.write(`${dateOrderNotice}\n`);
   }
