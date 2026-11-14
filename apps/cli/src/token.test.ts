@@ -21,6 +21,7 @@ const {
   tokenEnableCommand,
   tokenPolicyCommand,
   tokenRemoveUnreadableCommand,
+  tokenTryCommand,
 } = await import('./token.js');
 
 interface Reply {
@@ -940,5 +941,94 @@ describe('alteroid token remove-unreadable の確認（#3141）', () => {
       restore();
     }
     expect(sent.length).toBe(0);
+  });
+});
+
+describe('alteroid token try', () => {
+  it('通って冷却を解いたら、そう言う（POST /tokens/:id/try を1回だけ撃つ）', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 200,
+      body: { result: 'passed', cooldownCleared: true, note: 'x' },
+    });
+    const read = captureStdout();
+
+    await tokenTryCommand('tok-a');
+
+    expect(read()).toContain('トークン（id tok-a）は通りました。冷却を解きました。');
+    expect(sent.filter((call) => call.method === 'POST')).toHaveLength(1);
+  });
+
+  it('拒否されたら理由と、冷却がそのままであることを言う', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 200,
+      body: {
+        result: 'rejected',
+        reason: 'rate_limit_event が rejected を運んだ',
+        cooldownKept: true,
+        note: 'x',
+      },
+    });
+    const read = captureStdout();
+
+    await tokenTryCommand('tok-a');
+
+    const out = read();
+    expect(out).toContain('拒否されました: rate_limit_event が rejected を運んだ');
+    expect(out).toContain('冷却はそのままです。');
+  });
+
+  it('判定できなかったら、試せなかったと言い、何も変えていないと言う', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 200,
+      body: { result: 'undecidable', reason: '締め切りに間に合わなかった', note: 'x' },
+    });
+    const read = captureStdout();
+
+    await tokenTryCommand('tok-a');
+
+    const out = read();
+    expect(out).toContain('試せませんでした（判定できなかった）: 締め切りに間に合わなかった');
+    expect(out).toContain('何も変えていません。');
+  });
+
+  it('結果のあとに、確かめられるのは cloneModel の枠だけだという注記を出す', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 200,
+      body: { result: 'passed', cooldownCleared: false, note: 'x' },
+    });
+    const read = captureStdout();
+
+    await tokenTryCommand('tok-a');
+
+    expect(read()).toContain('確かめられるのはクローンのモデル（cloneModel）の枠だけです');
+  });
+
+  it('間隔内（429）は、あと何秒かを言って失敗にする', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 429,
+      body: { error: 'x', result: 'too_soon', retryAfterSeconds: 123 },
+    });
+
+    await expect(tokenTryCommand('tok-a')).rejects.toThrow('あと 123 秒で試せます');
+  });
+
+  it('外されている鍵（409）は、試さなかったと言って失敗にする', async () => {
+    setReply('POST', '/tokens/tok-a/try', {
+      status: 409,
+      body: { error: 'x', result: 'not_tryable', cause: 'disabled' },
+    });
+
+    await expect(tokenTryCommand('tok-a')).rejects.toThrow(
+      '外されている（disabled）ので試しませんでした',
+    );
+  });
+
+  it('id が無い鍵（404）は、デーモンの言葉をそのまま失敗にする', async () => {
+    setReply('POST', '/tokens/nope/try', {
+      status: 404,
+      body: { error: 'その id の認証トークンが無い' },
+    });
+
+    await expect(tokenTryCommand('nope')).rejects.toThrow('その id の認証トークンが無い');
   });
 });

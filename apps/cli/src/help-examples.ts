@@ -117,6 +117,10 @@ export const HELP_EXAMPLES = {
     'alteroid integration create --name "CI" --source ci.main --json     # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
     'alteroid integration list                                             # 状態・最終使用を見る',
   ),
+  tokenTry: examples(
+    'alteroid token list                                    # id を確かめる',
+    'alteroid token try <id>                                # いま試す。冷却中の鍵が通れば冷却を解く',
+  ),
   tokenPolicy: examples(
     'alteroid token policy                                  # いまの設定を見る',
     'alteroid token policy free_exhausted                   # 無料枠が尽きたら回す',

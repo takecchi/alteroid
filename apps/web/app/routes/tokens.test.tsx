@@ -1827,3 +1827,88 @@ describe('/tokens 画面 — 週の枠のリセット（#6651）', () => {
     expect(within(bob).queryByText('週の枠のリセット')).toBeNull();
   });
 });
+
+describe('/tokens 画面 — いま試す', () => {
+  function stubTry(reply: { status: number; body: unknown }) {
+    const posts: string[] = [];
+    const rows = [
+      { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' as const },
+      {
+        id: 't-d',
+        label: 'token-d',
+        order: 1,
+        sha256: 'd'.repeat(12),
+        source: 'stored' as const,
+        disabledAt: '2026-08-01T00:00:00.000Z',
+      },
+    ];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? String(input);
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/journal')) return json({ entries: [] });
+      if (method === 'POST' && url.includes('/try')) {
+        posts.push(new URL(url).pathname);
+        return json(reply.body, reply.status);
+      }
+      return json({ tokens: rows, settings: DEFAULT_SETTINGS });
+    }) as typeof fetch;
+    return { posts };
+  }
+
+  it('押すと POST /tokens/:id/try を撃ち、通ったことを出す', async () => {
+    const { posts } = stubTry({
+      status: 200,
+      body: { result: 'passed', cooldownCleared: true, note: 'x' },
+    });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'token-a をいま試す' }));
+
+    expect(await screen.findByText('通りました。冷却を解きました。')).toBeTruthy();
+    expect(posts).toEqual(['/tokens/t-a/try']);
+  });
+
+  it('拒否されたら理由と、冷却がそのままであることを出す', async () => {
+    stubTry({
+      status: 200,
+      body: { result: 'rejected', reason: '枠が尽きている', cooldownKept: true, note: 'x' },
+    });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'token-a をいま試す' }));
+
+    expect(
+      await screen.findByText('拒否されました: 枠が尽きている。冷却はそのままです。'),
+    ).toBeTruthy();
+  });
+
+  it('間隔内（429）は、あと何秒かを出す', async () => {
+    stubTry({
+      status: 429,
+      body: { error: 'x', result: 'too_soon', retryAfterSeconds: 200 },
+    });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'token-a をいま試す' }));
+
+    expect(await screen.findByText(/あと 200 秒で試せます/)).toBeTruthy();
+  });
+
+  it('無効化した行では押せない。注記（cloneModel の枠だけ）が見える', async () => {
+    stubTry({ status: 200, body: { result: 'passed', note: 'x' } });
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(
+      (screen.getByRole('button', { name: 'token-d をいま試す' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'token-a をいま試す' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.getByText(/確かめられるのはクローンのモデルの枠だけです/)).toBeTruthy();
+  });
+});

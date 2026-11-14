@@ -41,6 +41,7 @@ import {
   useSetTokenDisabled,
   useSetTokenPolicy,
   useTokens,
+  useTryToken,
   ApiError,
   TokenNotFoundError,
   TokenPoolChangedError,
@@ -64,8 +65,10 @@ import {
   describeRecovery,
   describeRotateOn,
   describeTokenLoad,
+  describeTryResult,
   DISTRIBUTION_OPTIONS,
   ROTATE_ON_OPTIONS,
+  TOKEN_TRY_SCOPE_NOTE,
   tokenAvailabilityAt,
   weeklyResetSchedule,
 } from './tokens-describe';
@@ -281,6 +284,11 @@ function PoolCard({
         subtitle="登録済みのトークン。値そのものは出ない"
         action={<Badge>{sorted.length}</Badge>}
       />
+      {sorted.length > 0 && (
+        <p className="px-4 pt-3 text-xs text-muted-foreground">
+          「いま試す」は本物の1ターンを使います。{TOKEN_TRY_SCOPE_NOTE}。
+        </p>
+      )}
       {targetMissing && (
         <WarnNote className="m-4">
           <code className="font-mono break-all">{targetTokenId}</code>{' '}
@@ -401,8 +409,12 @@ function TokenRow({
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
   const setDisabled = useSetTokenDisabled();
   const removeToken = useRemoveToken();
+  const tryToken = useTryToken();
+  const [tryResult, setTryResult] = useState<Awaited<ReturnType<typeof tryToken>> | undefined>(
+    undefined,
+  );
   const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | null>(null);
+  const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | 'try' | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
   // 409（ほかで変わった）のときだけ、同じ操作を「このまま置き直す」で撃ち直せるよう持つ
   const [retry, setRetry] = useState<(() => void) | undefined>(undefined);
@@ -430,6 +442,21 @@ function TokenRow({
       await setDisabled(token.id, next);
     } catch (caught) {
       fail(caught, () => void toggleDisabled(next));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function tryNow() {
+    setBusy('try');
+    setFailure(undefined);
+    setRetry(undefined);
+    setTryResult(undefined);
+    onGone(undefined);
+    try {
+      setTryResult(await tryToken(token.id));
+    } catch (caught) {
+      fail(caught, () => void tryNow());
     } finally {
       setBusy(null);
     }
@@ -570,7 +597,31 @@ function TokenRow({
       />
 
       <TokenWriteError error={failure} className="mt-2" onRetry={retry} />
+      {tryResult !== undefined &&
+        (() => {
+          const described = describeTryResult(tryResult);
+          return described.tone === 'ok' ? (
+            <p
+              role="status"
+              className="mt-2 rounded-md border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok"
+            >
+              {described.text}
+            </p>
+          ) : (
+            <WarnNote className="mt-2">{described.text}</WarnNote>
+          );
+        })()}
       <div className="mt-2 flex flex-wrap gap-1.5">
+        {/* 外した・失効した鍵では押せない: デーモンも 409 で断るが、押せないことを先に見せる */}
+        <Button
+          size="sm"
+          aria-label={`${token.label} をいま試す`}
+          loading={busy === 'try'}
+          disabled={busy !== null || availability === 'disabled' || availability === 'invalidated'}
+          onClick={() => void tryNow()}
+        >
+          いま試す
+        </Button>
         {token.disabledAt === undefined ? (
           <Button
             size="sm"

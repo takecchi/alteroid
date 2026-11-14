@@ -64,16 +64,16 @@ describe('createApp の経路の一覧が固定値と一致する', () => {
     expect(routesOf(['https://www.example.com'])).toEqual(PIN.withCors);
   });
 
-  it('空振りでない: 経路が 111 本（use の ALL と /openapi.json・/docs を除く）ある', () => {
+  it('空振りでない: 経路が 112 本（use の ALL と /openapi.json・/docs を除く）ある', () => {
     const collapsed = collapse(PIN.withoutCors);
     const real = collapsed.filter(
       (key) => !key.startsWith('ALL ') && key !== 'GET /openapi.json' && key !== 'GET /docs',
     );
-    expect(real).toHaveLength(111);
+    expect(real).toHaveLength(112);
     expect(collapsed).toContain('GET /openapi.json');
     expect(collapsed).toContain('GET /docs');
     // 型の側の経路（鎖）には /openapi.json・/docs が載らず、実行時だけに 2 本多い。
-    expect(PIN.withoutCors.length).toBeGreaterThan(111);
+    expect(PIN.withoutCors.length).toBeGreaterThan(112);
   });
 
   it('同じ (method, path) が離れた場所に 2 度出ない（出るなら後ろは前に隠される）', () => {

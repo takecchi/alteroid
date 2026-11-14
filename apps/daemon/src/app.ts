@@ -12,6 +12,7 @@ import type {
   Scheduler,
   Stores,
   TokenPoolService,
+  ManualTokenTry,
 } from '@alteroid/core';
 import {
   createPluginPreviewStore,
@@ -104,6 +105,8 @@ export interface AppDeps {
   codexAuth?: CodexChatgptAuthService;
   // 回さない: ここが生やすのは器の読み書きの口だけで、検知・切替は無い。
   tokens?: TokenPoolService;
+  // 鍵を1回試す口（人間の手動。`startTokenTrialWatch` の自動の試しとは間隔を共有しない）。無ければ `POST /tokens/:id/try` は 400
+  tokenTry?: ManualTokenTry;
   // 鍵ごとの枠の観測（#6633）。無ければ `GET /tokens` は `loads` を載せない
   tokenLoads?: () => readonly { tokenId: string; state: AccountUsageState }[];
   // 無ければ `storage.state` は `unknown`: 確かめる手段が無いことを `ok` に化けさせない。毎リクエストでは叩かない。

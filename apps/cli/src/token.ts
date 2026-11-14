@@ -356,6 +356,63 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
   stdout.write(describeCarriedOver(view));
 }
 
+type TokenTryView =
+  | InferResponseType<DaemonClient['tokens'][':id']['try']['$post'], 200>
+  | InferResponseType<DaemonClient['tokens'][':id']['try']['$post'], 409>
+  | InferResponseType<DaemonClient['tokens'][':id']['try']['$post'], 429>;
+
+const TRY_SCOPE_NOTE =
+  '確かめられるのはクローンのモデル（cloneModel）の枠だけです（モデル別の枠では、通っても層は通らないことがあります）。\n';
+
+const NOT_TRYABLE_CAUSE: Readonly<Record<string, string>> = {
+  disabled: '外されている（disabled）ので',
+  invalidated: '失効している（invalidated）ので',
+  no_value: '値が無いので',
+};
+
+export async function tokenTryCommand(id: string): Promise<void> {
+  const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
+  const view = (await request(
+    target,
+    `/tokens/${encodeURIComponent(id)}/try`,
+    { method: 'POST' },
+    [409, 429],
+  )) as TokenTryView;
+
+  if (view.result === 'too_soon') {
+    // 試していないので例外にする: 何もせず 0 で返すと、スクリプトが「確かめた」と誤読するため
+    throw new Error(
+      `直前に試したばかりです。あと ${String(view.retryAfterSeconds)} 秒で試せます（試していません）。`,
+    );
+  }
+  if (view.result === 'not_tryable') {
+    throw new Error(
+      `トークン（id ${id}）は${NOT_TRYABLE_CAUSE[view.cause] ?? '試せない状態なので'}試しませんでした。`,
+    );
+  }
+  if (view.result === 'passed') {
+    stdout.write(
+      view.cooldownCleared === true
+        ? `トークン（id ${id}）は通りました。冷却を解きました。\n`
+        : `トークン（id ${id}）は通りました（冷却中ではなかったので、何も変えていません）。\n`,
+    );
+  } else if (view.result === 'rejected') {
+    stdout.write(
+      `トークン（id ${id}）は拒否されました: ${view.reason ?? '理由は分かりません'}\n` +
+        (view.cooldownKept === true
+          ? '冷却はそのままです。\n'
+          : '冷却中ではなかったので、何も変えていません。\n'),
+    );
+  } else {
+    stdout.write(
+      `トークン（id ${id}）は試せませんでした（判定できなかった）: ${view.reason ?? '理由は分かりません'}\n` +
+        '何も変えていません。\n',
+    );
+  }
+  stdout.write(TRY_SCOPE_NOTE);
+}
+
 const ROTATE_ON_VALUES: readonly string[] = ['free_exhausted', 'overage_exhausted', 'off'];
 const DISTRIBUTION_VALUES: readonly string[] = ['failover', 'balanced'];
 
@@ -445,9 +502,16 @@ async function putTokens(
   })) as PutTokensView;
 }
 
-async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
+// `passThrough` の状態は失敗として投げず本文を返す: 手動の試しの 409 / 429 は「試さなかった」という結果そのもので、本文に理由と待ち秒数が載るため
+async function request(
+  target: Target,
+  path: string,
+  init: RequestInit = {},
+  passThrough: readonly number[] = [],
+): Promise<unknown> {
   const response = await fetchDaemon(target, path, init);
 
+  if (!response.ok && passThrough.includes(response.status)) return response.json();
   if (!response.ok) {
     if (response.status === 403) {
       // `not_operator` の文言を消さない: デーモン側で門が戻ったとき `unknown` へ落ちて案内が消えるため

@@ -31422,6 +31422,158 @@
         }
       }
     },
+    "/tokens/{id}/try": {
+      "post": {
+        "operationId": "postTokensByIdTry",
+        "tags": ["tokens"],
+        "summary": "この鍵をいま試す（人間が手で試す）",
+        "description": "鍵ごとに1ターンだけ本物の試し（自動の試しと同じ `runTokenTrial`）を走らせる。**確かめられるのは `cloneModel` の枠だけ**（モデル別の枠では、通っても層は通らない偽陽性がありうる）。冷却中の鍵が通れば冷却を解いて回し手の見直しにつなぐ。拒否されたら冷却はそのまま（拒否が期限を運んでいれば自動の試しと同じく冷却を書く）。判定できなければ何も書かない。冷却中でない鍵も試せるが、結果を返すだけで冷却も回し手も動かさない。鍵ごとに最短 5 分の間隔があり、内なら試さずに 429（`retryAfterSeconds` と `Retry-After`）。手動の最終試行時刻はデーモンのメモリだけで持ち、自動の試しの間隔には触れない。無効（disabled）・失効（invalidated）・値なしの鍵は試さずに 409。結果は日誌に残る（値は書かない）。連携の鍵では叩けない（403）。",
+        "responses": {
+          "200": {
+            "description": "試した結果（`passed` / `rejected` / `undecidable`）。値は含まない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "enum": ["passed", "rejected", "undecidable"]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "cooldownCleared": {
+                      "type": "boolean"
+                    },
+                    "cooldownKept": {
+                      "type": "boolean"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["result", "note"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "トークンの試しの器が配線されていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。連携の鍵（integration）の資格もここで 403。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その id の鍵が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "試せない鍵（`cause`: disabled / invalidated / no_value）。試していない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "string",
+                      "const": "not_tryable"
+                    },
+                    "cause": {
+                      "type": "string",
+                      "enum": ["disabled", "invalidated", "no_value"]
+                    }
+                  },
+                  "required": ["error", "result", "cause"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "最短の間隔（5 分）の内。試していない。`retryAfterSeconds` 後にやり直す。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "string",
+                      "const": "too_soon"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["error", "result", "retryAfterSeconds"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      }
+    },
     "/archive": {
       "get": {
         "operationId": "getArchive",

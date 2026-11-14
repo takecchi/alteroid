@@ -87,6 +87,7 @@ import {
   tokenPolicyCommand,
   tokenRemoveCommand,
   tokenRemoveUnreadableCommand,
+  tokenTryCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
 import {
@@ -1113,6 +1114,16 @@ tokenCommand
   .description('外したトークンを戻す')
   .action(async (id: string) => {
     await tokenEnableCommand(id);
+  });
+
+tokenCommand
+  .command('try <id>')
+  .description(
+    'この鍵をいま試す（本物の1ターン。通れば冷却を解く。確かめられるのは cloneModel の枠だけで、モデル別の枠では通っても層は通らないことがある。鍵ごとに5分の間隔）',
+  )
+  .addHelpText('after', HELP_EXAMPLES.tokenTry)
+  .action(async (id: string) => {
+    await tokenTryCommand(id);
   });
 
 tokenCommand

@@ -1324,6 +1324,31 @@ export const tokensPolicyUpdateRequestSchema = z.object({
   distribution: tokenDistributionSchema.optional(),
 });
 
+// 確かめられるのは `cloneModel` の枠だけ: 枠がモデル別のとき、試しが通っても層（別のモデル）は通らないことがある（偽陽性）。応答にも毎回載せる
+export const TOKEN_TRY_SCOPE_NOTE =
+  '確かめられるのはクローンのモデル（cloneModel）の枠だけです（モデル別の枠では、通っても層は通らないことがあります）';
+
+// 値（鍵）は載せない: `reason` は値を伏せた後の文面。`passed` の `cooldownCleared` は、冷却中の鍵が通って冷却を解いたときだけ true（冷却中でない鍵は何も書かない）。`rejected` の `cooldownKept` も冷却中の鍵だけ true
+export const tokenTryResponseSchema = z.object({
+  result: z.enum(['passed', 'rejected', 'undecidable']),
+  reason: z.string().optional(),
+  cooldownCleared: z.boolean().optional(),
+  cooldownKept: z.boolean().optional(),
+  note: z.string(),
+});
+
+export const tokenTryTooSoonResponseSchema = z.object({
+  error: z.string(),
+  result: z.literal('too_soon'),
+  retryAfterSeconds: z.number().int().positive(),
+});
+
+export const tokenTryNotTryableResponseSchema = z.object({
+  error: z.string(),
+  result: z.literal('not_tryable'),
+  cause: z.enum(['disabled', 'invalidated', 'no_value']),
+});
+
 // ここで zod の形にする: core の `dropped-record.ts` は stderr へ出す文字列とプレーンな TS の型しか持たず、zod スキーマが無いため。
 const droppedTraceOriginSchema = z.literal('daemon');
 
