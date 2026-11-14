@@ -1,4 +1,7 @@
-import { describeUnreadableJournalTimeBoundary, normalizeJournalTimeBoundary } from '@alteroid/core';
+import {
+  describeUnreadableJournalTimeBoundary,
+  normalizeJournalTimeBoundary,
+} from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { describeFailedResponse } from './format.js';

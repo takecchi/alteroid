@@ -146,10 +146,7 @@ export interface DiagnosticsSender {
   runOnce(): Promise<SendRunResult>;
 }
 
-type RowsRead =
-  | { kind: 'ok'; jsonl: string }
-  | { kind: 'too_many_rows' }
-  | { kind: 'read_failed' };
+type RowsRead = { kind: 'ok'; jsonl: string } | { kind: 'too_many_rows' } | { kind: 'read_failed' };
 
 async function readDiagnosticsRows(
   journal: Pick<JournalStore, 'listPage'>,
@@ -276,7 +273,8 @@ function classifyRpcBody(text: string): SinkDispatch {
   } catch {
     return { kind: 'outcome', outcome: 'failed', reason: 'unexpected_response' };
   }
-  const rpc = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const rpc =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   if (typeof rpc['error'] === 'object' && rpc['error'] !== null) {
     return { kind: 'outcome', outcome: 'rejected', reason: 'receiver_rejected' };
   }
@@ -426,7 +424,9 @@ export function createDiagnosticsSender(deps: DiagnosticsSenderDeps): Diagnostic
     if (httpStatus >= 400) {
       await response.body?.cancel().catch(() => undefined);
       const retryAfterMs =
-        httpStatus === 429 ? parseRetryAfterMs(response.headers.get('retry-after'), nowMs) : undefined;
+        httpStatus === 429
+          ? parseRetryAfterMs(response.headers.get('retry-after'), nowMs)
+          : undefined;
       return {
         kind: 'outcome',
         outcome: 'rejected',
@@ -473,7 +473,7 @@ export function createDiagnosticsSender(deps: DiagnosticsSenderDeps): Diagnostic
     }
 
     const sent = await dispatch(built.body, now.getTime());
-    if (sent.outcome === 'sent' || sent.outcome === 'duplicate') {
+    if (!('reason' in sent)) {
       await record(period, attempt, sent.outcome, {
         ...(sent.httpStatus === undefined ? {} : { httpStatus: sent.httpStatus }),
       });

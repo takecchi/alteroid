@@ -424,8 +424,26 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     ]);
   });
 
-  it('alteroid diagnostics は export・analyze・summarize・received を持ち、analyze は日誌・台帳・時間帯を受ける', () => {
-    expect(subcommandNames('diagnostics')).toEqual(['analyze', 'export', 'received', 'summarize']);
+  it('alteroid diagnostics sent は --since・--until・--limit・--json を受ける', () => {
+    const sent = program.commands
+      .find((c) => c.name() === 'diagnostics')
+      ?.commands.find((c) => c.name() === 'sent');
+    expect((sent?.options ?? []).map((o) => o.long).sort()).toEqual([
+      '--json',
+      '--limit',
+      '--since',
+      '--until',
+    ]);
+  });
+
+  it('alteroid diagnostics は export・analyze・summarize・received・sent を持ち、analyze は日誌・台帳・時間帯を受ける', () => {
+    expect(subcommandNames('diagnostics')).toEqual([
+      'analyze',
+      'export',
+      'received',
+      'sent',
+      'summarize',
+    ]);
     const summarizeCommand = program.commands
       .find((c) => c.name() === 'diagnostics')
       ?.commands.find((c) => c.name() === 'summarize');
