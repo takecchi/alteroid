@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mcpServersSchema } from '@alteroid/core';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -226,10 +227,23 @@ describe('/integrations 画面 — 発行', () => {
     );
     expect(command).toContain('--header "Authorization: Bearer <上の値>"');
     expect(command).not.toContain(SECRET_VALUE);
-    expect(document.body.textContent?.split(SECRET_VALUE)).toHaveLength(2);
+    // 値が出るのは「連携の鍵の値」と MCP サーバの JSON の2か所だけ（curl・claude mcp add は伏せたまま）
+    expect(document.body.textContent?.split(SECRET_VALUE)).toHaveLength(3);
+    const json = screen.getByText(/"alteroid-report"/, { selector: 'pre, code' }).textContent ?? '';
+    expect(JSON.parse(json)).toEqual({
+      'alteroid-report': {
+        type: 'http',
+        url: 'http://daemon.test/mcp',
+        headers: { Authorization: `Bearer ${SECRET_VALUE}` },
+      },
+    });
+    expect(mcpServersSchema.safeParse(JSON.parse(json)).success).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
+    expect(document.body.textContent).not.toContain(SECRET_VALUE);
   });
 
-  it('source が alteroid-report 以外の鍵には、登録コマンドを出さない', async () => {
+  it('source が alteroid-report 以外の鍵には、登録コマンドも MCP サーバの JSON も出さない', async () => {
     stubKeys();
     renderScreen();
     await screen.findByText('CI');
@@ -238,6 +252,7 @@ describe('/integrations 画面 — 発行', () => {
     fireEvent.click(screen.getByRole('button', { name: '発行する' }));
     await screen.findByText('発行した: 新しい鍵');
     expect(document.body.textContent).not.toContain('claude mcp add');
+    expect(document.body.textContent).not.toContain('MCP サーバの JSON');
   });
 
   it('名前が 200 文字を超えたら、黙って切らず欄の下で言い、送らない（CLI と同じ上限）', async () => {

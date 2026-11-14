@@ -1,6 +1,32 @@
+import { mcpServersSchema } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { claudeMcpAddCommand, daemonOrigin, ORIGIN_PLACEHOLDER } from './integration-example';
+import {
+  claudeMcpAddCommand,
+  daemonOrigin,
+  mcpServerJson,
+  ORIGIN_PLACEHOLDER,
+} from './integration-example';
+
+describe('別の alteroid の「設定 — MCP サーバ」に貼る JSON', () => {
+  it('JSON としてパースでき、mcpServersSchema を通り、url と鍵の値が入る', () => {
+    const parsed: unknown = JSON.parse(mcpServerJson('http://127.0.0.1:7777', 'altk_secret'));
+    expect(parsed).toEqual({
+      'alteroid-report': {
+        type: 'http',
+        url: 'http://127.0.0.1:7777/mcp',
+        headers: { Authorization: 'Bearer altk_secret' },
+      },
+    });
+    expect(mcpServersSchema.safeParse(parsed).success).toBe(true);
+  });
+
+  it('接続先が分からないときは推測せず印を置く（それでも型は通る）', () => {
+    const json = mcpServerJson(null, 'altk_secret');
+    expect(json).toContain(`${ORIGIN_PLACEHOLDER}/mcp`);
+    expect(mcpServersSchema.safeParse(JSON.parse(json)).success).toBe(true);
+  });
+});
 
 describe('連携の鍵の送り方の例の接続先（#3531）', () => {
   it('絶対 URL ならそのまま（末尾のスラッシュは落とす）', () => {

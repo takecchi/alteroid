@@ -1,6 +1,7 @@
 import {
   claudeMcpAddCommand,
   daemonOrigin,
+  mcpServerJson,
   ORIGIN_PLACEHOLDER,
   REPORT_RATE_PER_MINUTE,
   REPORT_SOURCE,
@@ -383,7 +384,7 @@ function buildInput(fields: {
   return problems.length > 0 ? { ok: false, problems } : { ok: true, input };
 }
 
-// 送り方の例に値を書かない: 値が画面に2回出てしまうため
+// curl と claude mcp add の例に値を書かない: 値が画面に何度も出てしまうため。ただし MCP サーバの JSON は貼れる形が目的なので、報告用の鍵のときだけ値を埋める（オーナーの要望）
 function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClose: () => void }) {
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
@@ -428,6 +429,13 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
               は自動では作られず、クローンが判断する）
             </span>
             <CodeBlock label="claude mcp add">{claudeMcpAddCommand(origin)}</CodeBlock>
+            <span className="text-xs text-muted-foreground">
+              別の alteroid の Web UI「設定 — MCP サーバ」に貼ると、その alteroid
+              のクローンとマネージャーが report_problem
+              で報告できる。既に登録があるときは、中の1件として足す （この JSON
+              には鍵の値が入っている）
+            </span>
+            <CodeBlock label="MCP サーバの JSON">{mcpServerJson(origin, value)}</CodeBlock>
             {key.limits.ratePerMinute > REPORT_RATE_PER_MINUTE && (
               <p className="text-[11px] break-words text-warn">
                 この鍵の回数の上限は {String(key.limits.ratePerMinute)} 回/分。報告用の鍵は{' '}
