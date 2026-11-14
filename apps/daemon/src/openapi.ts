@@ -1792,7 +1792,9 @@ export const selfPromptResponseSchema = z.object({
       available: z.literal(false),
       reason: z.string(),
       // 名前と大きさだけは `contextUsage` から引ける。ターン境界をまだ観測していなければ null
-      systemTools: selfPromptAxis(selfPromptRows(z.object({ name: z.string(), tokens: z.number() }))).nullable(),
+      systemTools: selfPromptAxis(
+        selfPromptRows(z.object({ name: z.string(), tokens: z.number() })),
+      ).nullable(),
       deferredBuiltinTools: selfPromptAxis(
         selfPromptRows(z.object({ name: z.string(), tokens: z.number(), isLoaded: z.boolean() })),
       ).nullable(),

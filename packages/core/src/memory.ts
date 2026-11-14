@@ -920,11 +920,7 @@ function renderIndexedPart(part: MemoryPart, seen?: string): string {
 
 /** 索引の中で、その文書が焼かれた形。`stub` はカードを落として1行にした分、`toc-line` は fact の目次の1行 */
 export type MemoryBakedForm =
-  | 'premise-card'
-  | 'indexed-card'
-  | 'premise-stub'
-  | 'indexed-stub'
-  | 'toc-line';
+  'premise-card' | 'indexed-card' | 'premise-stub' | 'indexed-stub' | 'toc-line';
 
 /**
  * 文書ごとに索引へ焼いた断片。`chars` は断片そのものの長さで、断片のあいだの区切り（空行）と節の見出し行（`<!-- memory: index -->` など）は含まない。
@@ -1022,7 +1018,10 @@ function buildMemoryDocumentSections(
   if (demoted.length > 0) {
     const stubKindOf = (part: MemoryPart): MemoryDocKind =>
       indexedSlugs.has(part.slug) ? 'indexed' : 'premise';
-    const stubFill = fillListingBudget(premiseStubItems(demoted, stubKindOf), MEMORY_PREMISE_STUB_BUDGET);
+    const stubFill = fillListingBudget(
+      premiseStubItems(demoted, stubKindOf),
+      MEMORY_PREMISE_STUB_BUDGET,
+    );
     demoted.forEach((entry, index) => {
       bake.set(
         entry.part.slug,

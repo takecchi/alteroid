@@ -17,6 +17,10 @@
       "description": "死活監視・停止など、デーモン自体の管理"
     },
     {
+      "name": "self",
+      "description": "クローン自身の観測（実際に焼いたプロンプトの読み取り。書き込みの口は無い）"
+    },
+    {
       "name": "chat",
       "description": "人間とクローンの対話（SSE）と会話終了（蒸留の契機）"
     },
@@ -233,6 +237,1139 @@
             }
           }
         }
+      }
+    },
+    "/self/prompt": {
+      "get": {
+        "operationId": "getSelfPrompt",
+        "tags": ["self"],
+        "summary": "クローンが実際に焼いたプロンプトを読む（読み取り専用）",
+        "description": "クローンが**いま実際に焼いている**システムプロンプト全文・記憶の索引の中身・道具の説明と入力スキーマ・外部 MCP の登録（名前と種別だけ）・プラグイン（名前だけ）・直近のターン境界の文脈占有を返す。**メモリ上の1件を読むだけで、何も書かない**（日誌にもファイルにも書かない。再起動後は次のセッションが始まるまで `session: null`）。資格は他の口と同じ（アクセストークンも実行環境の持ち主も通る。新しい資格・スコープは無い）。**連携の鍵（`altk_`）は通らない**（既定で拒否）。`full=1`（既定）は全文を返し、`full=0` は `systemPrompt.text`・`tools[].description`・`tools[].inputSchema` を省いて大きさ（`chars` 系）だけを返す。`1`/`0` 以外は 400（黙って既定にしない）。**取れない軸は 0 や空配列にせず `null` にして、理由を `notice` に書く**（まだセッションが組まれていない・組み立てに失敗した・ターン境界をまだ観測していない）。`memoryInPrompt[].indexChars` は、焼いた索引の中でその文書が占めた断片の長さ（カードは要旨＋節の目次、fact は目次の1行）。索引から省かれた文書は `omitted: true` で `indexChars: null`、理由は `indexNote`。SDK 組み込みの道具の定義（説明・入力スキーマ）は取れない（`builtinTools.reason`）。名前と大きさだけは `builtinTools.systemTools` / `deferredBuiltinTools` に在る。**外部 MCP の接続設定の値（url・args・env・headers・command）は返さない**（`GET /mcp-servers` は値を含むので、ここでは使わない）。**返す全部の文字列を応答を返す直前に1回走査し、鍵らしい値は `[redacted:<規則名>]` に置き換える**（連携の鍵・GitHub・Anthropic/OpenAI・AWS・Bearer・JWT・PEM 秘密鍵・デーモン自身の秘密の環境変数の値など）。当たった規則の名前と件数だけを `secretScan` と `notice` に出し、値・位置・前後の文脈は出さない。当たり0件でも「走査した」を出す。**走査が落ちたら応答を返さずに 500**（走査できていない全文を返さない）。",
+        "responses": {
+          "200": {
+            "description": "クローンが焼いたプロンプトの内容。取れていない軸は `null`（理由は `notice`）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "full": {
+                      "type": "boolean"
+                    },
+                    "session": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "builtAt": {
+                              "type": "string"
+                            },
+                            "resumedFrom": {
+                              "type": ["string", "null"]
+                            },
+                            "sessionId": {
+                              "type": ["string", "null"]
+                            },
+                            "model": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["ok", "builtAt", "resumedFrom", "sessionId", "model"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean",
+                              "const": false
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["ok", "at", "error"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "systemPrompt": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "chars": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["chars"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "memoryInPrompt": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "documents": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "slug": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": ["string", "null"]
+                                  },
+                                  "chars": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "indexChars": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "indexForm": {
+                                    "type": ["string", "null"]
+                                  },
+                                  "omitted": {
+                                    "type": "boolean"
+                                  },
+                                  "indexNote": {
+                                    "type": ["string", "null"]
+                                  }
+                                },
+                                "required": [
+                                  "slug",
+                                  "type",
+                                  "description",
+                                  "chars",
+                                  "indexChars",
+                                  "indexForm",
+                                  "omitted",
+                                  "indexNote"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "omittedDocuments": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["documents", "omittedDocuments"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tools": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "type": "string",
+                                "const": "clone"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "inputSchema": {},
+                              "descriptionChars": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "inputSchemaChars": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["name", "source", "descriptionChars", "inputSchemaChars"],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "builtinTools": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "available": {
+                              "type": "boolean",
+                              "const": false
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "systemTools": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": ["name", "tokens"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "deferredBuiltinTools": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  },
+                                                  "isLoaded": {
+                                                    "type": "boolean"
+                                                  }
+                                                },
+                                                "required": ["name", "tokens", "isLoaded"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "reason",
+                            "systemTools",
+                            "deferredBuiltinTools"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "externalMcpServers": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": ["stdio", "http", "sse"]
+                              }
+                            },
+                            "required": ["name", "type"],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "externalMcpServersLive": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "at": {
+                              "type": "string"
+                            },
+                            "failed": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "retained": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["at", "failed", "retained"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "plugins": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["name"],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "contextUsage": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "ok": {
+                                  "type": "boolean",
+                                  "const": true
+                                },
+                                "at": {
+                                  "type": "string"
+                                },
+                                "totalTokens": {
+                                  "type": "number"
+                                },
+                                "rawMaxTokens": {
+                                  "type": "number"
+                                },
+                                "percentage": {
+                                  "type": "number"
+                                },
+                                "autoCompactThreshold": {
+                                  "type": ["number", "null"]
+                                },
+                                "isAutoCompactEnabled": {
+                                  "type": "boolean"
+                                },
+                                "categories": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  },
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "enum": ["used", "free", "buffer", "deferred"]
+                                                  }
+                                                },
+                                                "required": ["name", "tokens", "kind"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "mcpTools": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": ["string", "null"]
+                                                  },
+                                                  "serverName": {
+                                                    "type": ["string", "null"]
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  },
+                                                  "isLoaded": {
+                                                    "type": ["boolean", "null"]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "name",
+                                                  "serverName",
+                                                  "tokens",
+                                                  "isLoaded"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "systemPromptSections": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": ["string", "null"]
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": ["name", "tokens"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "memoryFiles": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "path": {
+                                                    "type": ["string", "null"]
+                                                  },
+                                                  "type": {
+                                                    "type": ["string", "null"]
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": ["path", "type", "tokens"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "systemTools": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": ["name", "tokens"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "deferredBuiltinTools": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  },
+                                                  "isLoaded": {
+                                                    "type": "boolean"
+                                                  }
+                                                },
+                                                "required": ["name", "tokens", "isLoaded"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "mcpInstructions": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "rows": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "serverName": {
+                                                    "type": "string"
+                                                  },
+                                                  "tokens": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": ["serverName", "tokens"],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "omitted": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": ["rows", "omitted"],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "messageBreakdown": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "value": {
+                                          "type": "object",
+                                          "properties": {
+                                            "toolCallTokens": {
+                                              "type": "number"
+                                            },
+                                            "toolResultTokens": {
+                                              "type": "number"
+                                            },
+                                            "attachmentTokens": {
+                                              "type": "number"
+                                            },
+                                            "assistantMessageTokens": {
+                                              "type": "number"
+                                            },
+                                            "userMessageTokens": {
+                                              "type": "number"
+                                            },
+                                            "toolCallsByType": {
+                                              "type": "object",
+                                              "properties": {
+                                                "rows": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "name": {
+                                                        "type": "string"
+                                                      },
+                                                      "callTokens": {
+                                                        "type": "number"
+                                                      },
+                                                      "resultTokens": {
+                                                        "type": "number"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "name",
+                                                      "callTokens",
+                                                      "resultTokens"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  }
+                                                },
+                                                "omitted": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": ["rows", "omitted"],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "required": [
+                                            "toolCallTokens",
+                                            "toolResultTokens",
+                                            "attachmentTokens",
+                                            "assistantMessageTokens",
+                                            "userMessageTokens",
+                                            "toolCallsByType"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": ["available", "value"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "available": {
+                                          "type": "boolean",
+                                          "const": false
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["available", "reason"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "ok",
+                                "at",
+                                "totalTokens",
+                                "rawMaxTokens",
+                                "percentage",
+                                "autoCompactThreshold",
+                                "isAutoCompactEnabled",
+                                "categories",
+                                "mcpTools",
+                                "systemPromptSections",
+                                "memoryFiles",
+                                "systemTools",
+                                "deferredBuiltinTools",
+                                "mcpInstructions",
+                                "messageBreakdown"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "ok": {
+                                  "type": "boolean",
+                                  "const": false
+                                },
+                                "at": {
+                                  "type": "string"
+                                },
+                                "error": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["ok", "at", "error"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "notice": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "secretScan": {
+                      "type": "object",
+                      "properties": {
+                        "scanned": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "hits": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "rule": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": ["rule", "count"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["scanned", "hits"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "full",
+                    "session",
+                    "systemPrompt",
+                    "memoryInPrompt",
+                    "tools",
+                    "builtinTools",
+                    "externalMcpServers",
+                    "externalMcpServersLive",
+                    "plugins",
+                    "contextUsage",
+                    "notice",
+                    "secretScan"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正。（`full` は `1` か `0` だけ）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "資格が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "秘密走査を完了できなかった（応答は返さない。本文に理由は載せない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "full",
+            "schema": {
+              "default": "1",
+              "type": "string",
+              "enum": ["0", "1"]
+            }
+          }
+        ]
       }
     },
     "/attachments": {

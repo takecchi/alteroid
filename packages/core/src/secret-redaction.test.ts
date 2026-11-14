@@ -150,7 +150,10 @@ describe('秘密走査 — 入れ子の値を丸ごと走査する', () => {
     const redactor = redactorOf();
     const input = {
       name: 'tool',
-      schema: { properties: { [GITHUB]: { description: `例: ${INTEGRATION}` } }, required: [1, true, null] },
+      schema: {
+        properties: { [GITHUB]: { description: `例: ${INTEGRATION}` } },
+        required: [1, true, null],
+      },
       list: [ANTHROPIC, 3],
     };
     const out = redactor.redactDeep(input);

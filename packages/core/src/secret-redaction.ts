@@ -34,7 +34,9 @@ const OWN_RULES: readonly PatternRule[] = [
 
 // 既存の規則（`sk-ant-`・`sk-proj-`・`sk-` + 英数40字以上）の後に当てる: 先に当てると、同じ鍵が既存の名前（`anthropic-key`・`openai-key`）でなく `sk-key` と数えられる。
 // `sk-` の後ろが十分に長いものだけ: `task-`・`risk-` のような英単語と、短い説明文（`sk-ant-` の形の説明）を壊さない
-const TRAILING_RULES: readonly PatternRule[] = [{ name: 'sk-key', pattern: /\bsk-[A-Za-z0-9_-]{32,}/g }];
+const TRAILING_RULES: readonly PatternRule[] = [
+  { name: 'sk-key', pattern: /\bsk-[A-Za-z0-9_-]{32,}/g },
+];
 
 export interface SecretHit {
   /** 規則の名前。環境変数の値の完全一致は `env:<変数名>`（変数名だけで、値は含まない） */
