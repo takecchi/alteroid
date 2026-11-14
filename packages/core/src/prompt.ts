@@ -11,6 +11,7 @@
  */
 
 import { bashShapePromptLines } from './bash-shape-guard.js';
+import { externalSourceNote } from './report-problem.js';
 import { waitGuardPromptLines } from './bash-wait-guard.js';
 import { excerpt } from './excerpt.js';
 import type { RenderedMemory } from './memory.js';
@@ -376,8 +377,9 @@ export function buildExternalEventPrompt({
 }: ExternalEventPromptInput): string {
   const via = externalViaLine(viaKeyNames);
   const attachmentSection = externalAttachmentSection(attachmentNoticeLines);
+  const sourceNote = externalSourceNote(source);
   return `[system] 外部から出来事が届いた（source: ${source}）。人間はこれを見ていない。
-${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}${attachmentSection.length === 0 ? '' : `\n${attachmentSection.join('\n')}`}
+${via === null ? '' : `${via}\n`}${EXTERNAL_EVENT_FRAMING}${sourceNote === null ? '' : `\n${sourceNote}`}${attachmentSection.length === 0 ? '' : `\n${attachmentSection.join('\n')}`}
 
 ${externalEventInstruction()}
 

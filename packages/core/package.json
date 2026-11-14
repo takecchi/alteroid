@@ -32,6 +32,10 @@
       "types": "./dist/permission-rule.d.ts",
       "import": "./dist/permission-rule.js"
     },
+    "./report-problem": {
+      "types": "./dist/report-problem.d.ts",
+      "import": "./dist/report-problem.js"
+    },
     "./answered-via": {
       "types": "./dist/answered-via.d.ts",
       "import": "./dist/answered-via.js"
