@@ -40,6 +40,13 @@ export {
   selectTokenForTrial,
   type TokenTrialPort,
 } from './token-trial.js';
+export {
+  MANUAL_TOKEN_TRY_MIN_INTERVAL_MS,
+  createManualTokenTry,
+  type ManualTokenTry,
+  type ManualTokenTryRefusal,
+  type ManualTokenTryResult,
+} from './token-manual-try.js';
 /** 「使えない」は probe の `rejected` ではない: `rejected` も認証失敗も probe からは観測できず、`undecidable` に落ちる。 */
 export {
   judgeTokenCandidate,

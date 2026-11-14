@@ -37,6 +37,7 @@ import {
   createScheduler,
   createTokenPoolService,
   createTokenPoolWriteLock,
+  createManualTokenTry,
   createTokenRotator,
   noteDroppedRecord,
   DAILY_REPORT_RETRY_DELAYS_MS,
@@ -64,6 +65,7 @@ import {
   type RunnerSource,
   type SelfFacts,
   type Stores,
+  type TokenTrialPort,
   type TokenRotationEntry,
   type TokenRotationOutcome,
   readAttachmentLimits,
@@ -1162,18 +1164,30 @@ export async function main(): Promise<void> {
     },
   });
 
+  // 自動の試しと手動の試しで同じ口を使う（偽陽性の性質も同じ）。
+  const tokenTrialPort: TokenTrialPort = {
+    trial: (token) =>
+      runTokenTrial(query, {
+        token: token.value,
+        cwd: paths.root,
+        // クローンの層と同じモデルを渡す: 枠がモデル別のことがあり、層とモデルが違うと試しが通っても層は通らない偽陽性になるため。
+        model: cloneModel,
+        withheldEnvKeys: storage.withheldEnvKeys,
+      }),
+  };
+
   tokenTrialWatch = startTokenTrialWatch({
     stores,
-    trial: {
-      trial: (token) =>
-        runTokenTrial(query, {
-          token: token.value,
-          cwd: paths.root,
-          // クローンの層と同じモデルを渡す: 枠がモデル別のことがあり、層とモデルが違うと試しが通っても層は通らない偽陽性になるため。
-          model: cloneModel,
-          withheldEnvKeys: storage.withheldEnvKeys,
-        }),
-    },
+    trial: tokenTrialPort,
+    recordTrialVerdict: (input) => tokenRotator.recordTrialVerdict(input),
+    recordTrialSuccess: (input) => tokenRotator.recordTrialSuccess(input),
+    onOutcome: (outcome) => settleTokenOutcome(outcome),
+  });
+
+  // 手動の試しは自動の見回し（`tokenTrialWatch`）の中の `lastTriedAt` と別に、最終試行時刻を持つ。
+  const manualTokenTry = createManualTokenTry({
+    listTokens: () => stores.tokens.list(),
+    trial: tokenTrialPort,
     recordTrialVerdict: (input) => tokenRotator.recordTrialVerdict(input),
     recordTrialSuccess: (input) => tokenRotator.recordTrialSuccess(input),
     onOutcome: (outcome) => settleTokenOutcome(outcome),
@@ -1304,6 +1318,7 @@ export async function main(): Promise<void> {
     pluginDistribution: pluginDistributionService,
     codexAuth: codexAuthService,
     tokens: tokenPoolService,
+    tokenTry: manualTokenTry,
     tokenLoads: () => tokenLoadBook.snapshot(),
     clearSessionLog: storage.clearSessionLog,
     attachmentCopiesDir: attachmentCopiesDir(paths.root),

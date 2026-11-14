@@ -91,6 +91,7 @@ type ExpectedAppSchema = {
   '/tokens': '$get' | '$put';
   '/tokens/unreadable/remove': '$post';
   '/tokens/policy': '$put';
+  '/tokens/:id/try': '$post';
   '/archive': '$get';
   '/archive/sessions': '$get';
   '/archive/:id': '$get' | '$delete';

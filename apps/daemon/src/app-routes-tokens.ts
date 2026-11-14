@@ -25,6 +25,10 @@ import {
   tokensUnreadableRemoveRequestSchema,
   tokensUnreadableRemoveResponseSchema,
   tokensUpdateRequestSchema,
+  TOKEN_TRY_SCOPE_NOTE,
+  tokenTryNotTryableResponseSchema,
+  tokenTryResponseSchema,
+  tokenTryTooSoonResponseSchema,
 } from './openapi.js';
 import { Hono } from 'hono';
 import type { AppDeps } from './app.js';
@@ -586,6 +590,140 @@ export function tokensRoutes(deps: AppDeps) {
             );
           }
           return c.json(tokenRotationSettingsSchema.parse(settings));
+        },
+      )
+
+      // 資格は他の `/tokens` と同じ `authenticate` だけ。連携の鍵が通れないのは、鍵の許可表（`judgeIntegrationRoute`）が既定で拒否する門による（ここへ足さない限り 403）。
+      // 結果の本文・日誌に鍵の値は載せない（理由は core が値を伏せた後の文面）。日誌は結果の後に書く: 試しは鍵の資格を広げず、冷却を解く場合も自動の試しと同じ経路で、結果が分かるまで書く中身が無いため。書けなくても止めない。
+      .post(
+        '/tokens/:id/try',
+        describeRoute({
+          tags: ['tokens'],
+          summary: 'この鍵をいま試す（人間が手で試す）',
+          description:
+            '鍵ごとに1ターンだけ本物の試し（自動の試しと同じ `runTokenTrial`）を走らせる。' +
+            '**確かめられるのは `cloneModel` の枠だけ**（モデル別の枠では、通っても層は通らない偽陽性がありうる）。' +
+            '冷却中の鍵が通れば冷却を解いて回し手の見直しにつなぐ。拒否されたら冷却はそのまま' +
+            '（拒否が期限を運んでいれば自動の試しと同じく冷却を書く）。判定できなければ何も書かない。' +
+            '冷却中でない鍵も試せるが、結果を返すだけで冷却も回し手も動かさない。' +
+            '鍵ごとに最短 5 分の間隔があり、内なら試さずに 429（`retryAfterSeconds` と `Retry-After`）。' +
+            '手動の最終試行時刻はデーモンのメモリだけで持ち、自動の試しの間隔には触れない。' +
+            '無効（disabled）・失効（invalidated）・値なしの鍵は試さずに 409。' +
+            '結果は日誌に残る（値は書かない）。連携の鍵では叩けない（403）。',
+          responses: {
+            200: jsonResponse(
+              '試した結果（`passed` / `rejected` / `undecidable`）。値は含まない。',
+              tokenTryResponseSchema,
+            ),
+            400: errorResponse('トークンの試しの器が配線されていない。'),
+            403: errorResponse(
+              `${LOGGED_IN_WITHOUT_GRANT_DESCRIPTION}連携の鍵（integration）の資格もここで 403。`,
+            ),
+            404: errorResponse('その id の鍵が無い。'),
+            409: jsonResponse(
+              '試せない鍵（`cause`: disabled / invalidated / no_value）。試していない。',
+              tokenTryNotTryableResponseSchema,
+            ),
+            429: jsonResponse(
+              '最短の間隔（5 分）の内。試していない。`retryAfterSeconds` 後にやり直す。',
+              tokenTryTooSoonResponseSchema,
+            ),
+          },
+        }),
+        async (c) => {
+          if (deps.tokenTry === undefined) {
+            return c.json({ error: 'トークンの試しの器が無い' as const }, 400);
+          }
+          const tokenId = c.req.param('id');
+          const result = await deps.tokenTry.try(tokenId);
+          if (result.kind === 'not_found') {
+            return c.json({ error: 'その id の認証トークンが無い' as const }, 404);
+          }
+          const label = (await deps.stores.tokens.list().catch(() => [])).find(
+            (row) => row.id === tokenId,
+          )?.label;
+          const subject = `「${label ?? '?'}」（id: ${tokenId}）`;
+          const journalTry = (decision: string, detail: string) =>
+            appendJournalOrDrop(
+              deps.stores,
+              {
+                type: 'decision',
+                decision,
+                grounds:
+                  `${describeActor(c.get('principal'))}（POST /tokens/:id/try）。人間が手で試した。${detail}` +
+                  'id・ラベル・結果だけを書く（トークンの値は書かない）。',
+              },
+              '認証トークンの手動の試しの日誌',
+              `id=${tokenId}`,
+            );
+          if (result.kind === 'not_tryable') {
+            await journalTry(
+              `認証トークン${subject}を手で試そうとしたが、試せなかった（${result.cause}）`,
+              '試していない。',
+            );
+            return c.json(
+              tokenTryNotTryableResponseSchema.parse({
+                error: `この鍵は試せない（${result.cause}）。試していない`,
+                result: 'not_tryable',
+                cause: result.cause,
+              }),
+              409,
+            );
+          }
+          if (result.kind === 'too_soon') {
+            await journalTry(
+              `認証トークン${subject}を手で試そうとしたが、間隔内なので試さなかった（あと${String(result.retryAfterSeconds)}秒）`,
+              '最短 5 分の間隔の内。',
+            );
+            c.header('Retry-After', String(result.retryAfterSeconds));
+            return c.json(
+              tokenTryTooSoonResponseSchema.parse({
+                error: `直前に試したばかり（あと${String(result.retryAfterSeconds)}秒で試せる）。試していない`,
+                result: 'too_soon',
+                retryAfterSeconds: result.retryAfterSeconds,
+              }),
+              429,
+            );
+          }
+          if (result.kind === 'passed') {
+            await journalTry(
+              `認証トークン${subject}を手で試した: 通った` +
+                (result.cooldownCleared ? '（冷却を解いた）' : '（冷却中ではないので何も変えていない）'),
+              'cloneModel の枠だけを確かめた。',
+            );
+            return c.json(
+              tokenTryResponseSchema.parse({
+                result: 'passed',
+                cooldownCleared: result.cooldownCleared,
+                note: TOKEN_TRY_SCOPE_NOTE,
+              }),
+            );
+          }
+          if (result.kind === 'rejected') {
+            await journalTry(
+              `認証トークン${subject}を手で試した: 拒否された（${result.reason}）`,
+              'cloneModel の枠だけを確かめた。',
+            );
+            return c.json(
+              tokenTryResponseSchema.parse({
+                result: 'rejected',
+                reason: result.reason,
+                cooldownKept: result.cooldownKept,
+                note: TOKEN_TRY_SCOPE_NOTE,
+              }),
+            );
+          }
+          await journalTry(
+            `認証トークン${subject}を手で試したが、判定できなかった（${result.reason}）`,
+            '何も書いていない。',
+          );
+          return c.json(
+            tokenTryResponseSchema.parse({
+              result: 'undecidable',
+              reason: result.reason,
+              note: TOKEN_TRY_SCOPE_NOTE,
+            }),
+          );
         },
       )
   );
