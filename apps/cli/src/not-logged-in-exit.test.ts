@@ -45,6 +45,7 @@ const {
   tokenPolicyCommand,
   tokenRemoveCommand,
   tokenRemoveUnreadableCommand,
+  tokenTryCommand,
 } = await import('./token.js');
 const {
   integrationCreateCommand,
@@ -106,6 +107,7 @@ const writes: [string, () => Promise<void>][] = [
   ['token policy（設定を変える）', () => tokenPolicyCommand('off')],
   ['token policy --cooldown-ms', () => tokenPolicyCommand(undefined, { cooldownMs: '1000' })],
   ['token remove-unreadable', () => tokenRemoveUnreadableCommand(['t1'])],
+  ['token try', () => tokenTryCommand('t1')],
   ['integration create', () => integrationCreateCommand({ name: 'x', source: 'github' })],
   ['integration revoke', () => integrationRevokeCommand('k1')],
   ['integration remove-unreadable', () => integrationRemoveUnreadableCommand(['k1'])],
