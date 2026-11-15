@@ -16,7 +16,11 @@ export { MANAGER_REPORT_BODY_LIMIT };
 type ManagerMessageKind = Extract<InboxEvent, { type: 'manager_message' }>['kind'];
 
 /** 配達行の `[managerId/kind]` の kind。型で縛る（`schema.ts` の `manager_message.kind` が増えたら typecheck が落ちる） */
-const DELIVERY_TAGS = ['report', 'question', 'permission'] as const satisfies readonly ManagerMessageKind[];
+const DELIVERY_TAGS = [
+  'report',
+  'question',
+  'permission',
+] as const satisfies readonly ManagerMessageKind[];
 
 /**
  * クローンの停止の行（`manager.ts` の停止の `#journal`）が `[managerId]` の後ろに置く語。
@@ -76,7 +80,9 @@ export const REPORT_FAMILY_KINDS: readonly ConversationKind[] = [
 
 export interface ClassifiedExchangeText {
   /** `clone_outbound` は、依頼・追加指示・返事の3つ。順序の状態が要るので呼び手が決める */
-  kind: Exclude<ConversationKind, 'clone_request' | 'clone_followup' | 'clone_answer'> | 'clone_outbound';
+  kind:
+    | Exclude<ConversationKind, 'clone_request' | 'clone_followup' | 'clone_answer'>
+    | 'clone_outbound';
   /** text の `[id]` / `[id/kind]` の id（欄ではない。呼び手は managerId 欄と突き合わせて使う）。無ければ null */
   tagId: string | null;
   /** 接頭辞と `[id…]` を除いた本文。認識できない行は text 全体 */
@@ -123,7 +129,8 @@ export function classifyExchangeText(
     }
     if (deliveryTag === 'question') return { kind: 'question', tagId, body, deliveryTag };
     if (deliveryTag === 'permission') return { kind: 'permission', tagId, body, deliveryTag };
-    if (body.includes(DENIAL_REPLY_ROUTE)) return { kind: 'denial_notice', tagId, body, deliveryTag };
+    if (body.includes(DENIAL_REPLY_ROUTE))
+      return { kind: 'denial_notice', tagId, body, deliveryTag };
     if (hasWithheldNote(body)) return { kind: 'folded_bundle', tagId, body, deliveryTag };
     return { kind: 'report', tagId, body, deliveryTag };
   }
@@ -189,7 +196,8 @@ export const codePointLength = (s: string): number => [...s].length;
 /** コードブロックの囲み。行の先頭（空白を除く）がこれで始まる行を、囲みの開閉として数える */
 export const CODE_FENCE = '```';
 /** パス風の行: 行全体が `a/b/c` の形（先頭の `./` `../` `~/` `/` は可、`:行` `:行:列` の接尾は可）。区切りの `/` を1つ以上含む */
-export const PATH_LIKE_LINE = /^\s*(?:[-*]\s+)?(?:\.{1,2}\/|~\/|\/)?(?:[\w.@+-]+\/)+[\w.@+-]*(?::\d+(?::\d+)?)?\s*$/;
+export const PATH_LIKE_LINE =
+  /^\s*(?:[-*]\s+)?(?:\.{1,2}\/|~\/|\/)?(?:[\w.@+-]+\/)+[\w.@+-]*(?::\d+(?::\d+)?)?\s*$/;
 /** スタックトレース風の行: 空白を除いて `at ` で始まり、続きがある行 */
 export const STACK_TRACE_LINE = /^\s*at\s+\S/;
 /** エラー風の行: `Error:` を含む行 */
