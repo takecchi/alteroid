@@ -736,6 +736,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
   - **発行したトークンからは `/access-tokens` の発行・一覧・失効を呼べない**（`read` / `full` どちらも 403）。呼べるのは operator と、ログインで発行したトークン（`origin: 'login'`）のアカウントだけ。発行したトークンが仲間のトークンを発行できたら、配布した範囲の境界が崩れるため。自分自身の失効は `POST /auth/logout`（提示している1本だけ）でできる
   - 発行の入力は `name`・`kind`（既定 `read`）・`expiresAt`（省略は 30 日後。**無期限は `expiresAt: null` を明示したときだけ**。過去は 400）。アカウントの資格は自分のアカウントにだけ、operator は `accountId` が必須で許可済みのアカウントにだけ発行できる。値は発行の応答で1度だけ返し、保存は sha256 だけ。一覧は値も sha256 も返さず、先頭12桁の指紋で見分ける。発行・失効は連携の鍵と同じく日誌を先に書き、書けなければ状態を変えずに 500
   - 口は `/access-tokens`（発行・一覧）と `/access-tokens/:id/revoke` で、`/auth/*` の下には置かない（`isPublicPath` が無認証にする）。`/tokens`（Claude の認証トークンのプール）・`/access/*`（アカウントの許可）とは別である。ログインで発行済みの既存トークンは `kind: 'full'`・`origin: 'login'` として動き続ける
+  - CLI は `alteroid access-token create|list|revoke`（`apps/cli/src/access-token.ts`）。`alteroid token` は認証トークンのプールの口で別物。`create` は `--name`・`--kind read|full`（既定 `read`）・`--expires <日時か期間|never>`（省略はサーバの既定 30 日、`never` のときだけ `expiresAt: null`）・`--account <id>`（実行環境の持ち主の資格では必須）・`--json`。値はこの1回だけ表示し（保存も再表示もしない）、MCP サーバ登録用の JSON（`<接続先の origin>/mcp` と `Authorization: Bearer`）を添える
 - **緩めたのは「持ち主か否か」の線だけである。** 認証（`authenticate`）は変えていない —— ログインしていない（401）・許可されていない（403）アカウントは、これらの口にも触れない。持ち主かどうかを見分ける口は残していない（下の項）
 - **持ち主の宣言の仕組みは無い。** 2026-10-05 の決定（ログインできる人＝持ち主。#2862）で通す・通さないに効かなくなったので、宣言の口（`/access/:id/owner*`）・CLI の `alteroid access owner`・`access list` の `[owner]` 表示を #2948 で畳んだ。以前に宣言した値は、ファイルの記憶のキーに残っていても読まない。pg の `auth_accounts.owner_declared_at` 列は移行で落とす
 

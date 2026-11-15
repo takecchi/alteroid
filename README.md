@@ -203,6 +203,7 @@ Web UI の立ち上げ方と置き方は [apps/web/README.md](./apps/web/README.
 | `alteroid profile ...`              | 実行環境プロファイル（`~/.zprofile` に当たるもの）        |
 | `alteroid mcp ...`                  | MCP サーバの登録（`.mcp.json` に当たるもの）              |
 | `alteroid integration ...`          | 連携の鍵（外のサービスが外部イベントを送るための鍵）      |
+| `alteroid access-token ...`         | 別の環境へ渡すアクセストークン（read / full）の発行・失効 |
 | `alteroid token ...`                | 認証トークンのプール（枠に当たったときに回す候補）        |
 | `alteroid usage`                    | 使った分（トークンと費用）を見る                          |
 | `alteroid runners`                  | 委譲先の器と、いま走っている版を見る                      |

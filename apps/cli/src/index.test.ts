@@ -493,6 +493,25 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);
   });
 
+  it('alteroid access-token は list / create / revoke だけを持ち、create は --name を要り、--kind は read が既定（scopes は無い）', () => {
+    expect(subcommandNames('access-token')).toEqual(['create', 'list', 'revoke']);
+    const group = program.commands.find((c) => c.name() === 'access-token');
+    const create = group?.commands.find((c) => c.name() === 'create');
+    expect(create?.options.map((o) => [o.long, o.mandatory])).toEqual([
+      ['--name', true],
+      ['--kind', false],
+      ['--expires', false],
+      ['--account', false],
+      ['--json', false],
+    ]);
+    expect(create?.options.find((o) => o.long === '--kind')?.defaultValue).toBe('read');
+    const list = group?.commands.find((c) => c.name() === 'list');
+    expect((list?.options ?? []).map((o) => o.long)).toEqual(['--account']);
+    const revoke = group?.commands.find((c) => c.name() === 'revoke');
+    expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--account', '--yes']);
+    expect(group?.description()).toContain('alteroid token は認証トークンのプールで別物');
+  });
+
   it('--yes の help 文は、確認を持つ全コマンドで揃っている', () => {
     const expected = '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）';
     const found: string[] = [];
@@ -510,6 +529,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(found).toContain('access remove-unreadable');
     expect(found).toContain('integration revoke');
     expect(found).toContain('integration remove-unreadable');
+    expect(found).toContain('access-token revoke');
     expect(found).toContain('conversations delete');
   });
 
