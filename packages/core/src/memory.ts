@@ -364,14 +364,7 @@ interface MemoryTocLayout {
   omitted: { slugs: string[]; cut: 'count' | 'chars' | 'count-and-chars' } | null;
 }
 
-// 描く関数と行ごとの長さを答える関数で別々に書かない: どちらか一方だけを直した瞬間に、`GET /self/prompt` の `indexChars` が実物と食い違うため
-function renderMemoryToc(
-  entries: readonly MemoryTocEntry[],
-  elsewhere: MemoryHierarchyElsewhere = {},
-): string {
-  return layoutMemoryToc(entries, elsewhere).text;
-}
-
+// 描いた文字列と行ごとの長さを別々の関数で作らない: どちらか一方だけを直した瞬間に、`GET /self/prompt` の `indexChars` が実物と食い違うため
 function layoutMemoryToc(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},

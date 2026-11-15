@@ -67,6 +67,7 @@ describe('memory.ts の入口の公開面', () => {
         "nextDescribedState",
         "parseMemoryFrontmatter",
         "renderMemoryDocuments",
+        "renderMemoryDocumentsWithBake",
         "renderMemoryListing",
         "renderMemoryOutline",
         "resolveMemoryDescriptionFreshness",
