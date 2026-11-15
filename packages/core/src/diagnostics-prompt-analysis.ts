@@ -7,12 +7,7 @@ import { summarizeContextCategories } from './context-usage.js';
 import type { PromptInput, PromptJson } from './diagnostics-prompt-input.js';
 import { MCP_SERVER_NAME } from './mcp-server-name.js';
 import { foldMcpToolsByServer } from './mcp-tools-by-server.js';
-import {
-  exactTokens,
-  heuristicChars,
-  type ExactTokens,
-  type HeuristicChars,
-} from './quantity.js';
+import { exactTokens, heuristicChars, type ExactTokens, type HeuristicChars } from './quantity.js';
 
 export interface PromptUnavailable {
   state: 'unavailable';
@@ -175,7 +170,12 @@ export interface PromptBuiltinSection {
   state: 'read';
   reason: string;
   systemTools:
-    | { state: 'read'; total: ExactTokens; rows: Array<{ name: string; tokens: ExactTokens }>; omitted: number }
+    | {
+        state: 'read';
+        total: ExactTokens;
+        rows: Array<{ name: string; tokens: ExactTokens }>;
+        omitted: number;
+      }
     | PromptUnavailable;
   deferredBuiltinTools:
     | {
@@ -207,10 +207,7 @@ export interface PromptOccupancySection {
 }
 
 export type PromptCandidateCharsKind =
-  | 'system-section'
-  | 'memory-index'
-  | 'memory-index-other'
-  | 'clone-tool';
+  'system-section' | 'memory-index' | 'memory-index-other' | 'clone-tool';
 
 export interface PromptCharsCandidate {
   kind: PromptCandidateCharsKind;
@@ -553,8 +550,8 @@ function buildSystemPrompt(
   let memoryIndex: PromptSystemPromptSection['memoryIndex'];
   if (!body.full || sp.text === undefined) {
     const reason = !body.full
-      ? '取れない（本文が省かれている（full=0）。`pull` は既定で全文を取る）'
-      : '取れない（full=1 なのに systemPrompt.text が応答に無い）';
+      ? '本文が省かれている（full=0）。`pull` は既定で全文を取る'
+      : 'full=1 なのに systemPrompt.text が応答に無い';
     sections = unavailable(reason);
     memoryIndex = unavailable(reason);
   } else {
@@ -573,7 +570,8 @@ function buildSystemPrompt(
     memoryIndex = reconcileMemoryIndex(body, split);
   }
 
-  const sdk = usage === null ? unavailable(usageUnavailableReason) : axisOf(usage.systemPromptSections);
+  const sdk =
+    usage === null ? unavailable(usageUnavailableReason) : axisOf(usage.systemPromptSections);
   const sdkSections: PromptSystemPromptSection['sdkSections'] =
     sdk.state === 'unavailable'
       ? sdk
@@ -600,12 +598,12 @@ function reconcileMemoryIndex(
   split: Array<{ heading: string | null; chars: number }>,
 ): PromptMemoryIndexReconciliation | PromptUnavailable {
   if (body.memoryInPrompt === null) {
-    return unavailable('取れない（memoryInPrompt が null）');
+    return unavailable('memoryInPrompt が null');
   }
   const section = split.find((candidate) => candidate.heading === MEMORY_SECTION_HEADING);
   if (section === undefined) {
     return unavailable(
-      `取れない（本文に「# ${MEMORY_SECTION_HEADING}」の見出しが無い。prompt.ts の構成が変わったか、本文が別物）`,
+      `本文に「# ${MEMORY_SECTION_HEADING}」の見出しが無い。prompt.ts の構成が変わったか、本文が別物`,
     );
   }
   const measured = body.memoryInPrompt.documents.flatMap((document) =>
@@ -641,7 +639,9 @@ function buildMemory(
   }
   const documents = body.memoryInPrompt.documents;
   const indexed = documents.flatMap((document) =>
-    document.indexChars === null || document.omitted ? [] : [{ document, indexChars: document.indexChars }],
+    document.indexChars === null || document.omitted
+      ? []
+      : [{ document, indexChars: document.indexChars }],
   );
   const indexCharsSum = sumChars(indexed.map((entry) => entry.indexChars));
   const rows = indexed
@@ -847,10 +847,11 @@ function buildBuiltin(
     return unavailable('builtinTools が null（セッションが未取得か、組み立てに失敗した）');
   }
   const builtin = body.builtinTools;
-  const system = builtin.systemTools === null ? unavailable(usageUnavailableReason || '取れない') : axisOf(builtin.systemTools);
+  const missing = usageUnavailableReason || 'contextUsage から引く値が応答に無い';
+  const system = builtin.systemTools === null ? unavailable(missing) : axisOf(builtin.systemTools);
   const deferred =
     builtin.deferredBuiltinTools === null
-      ? unavailable(usageUnavailableReason || '取れない')
+      ? unavailable(missing)
       : axisOf(builtin.deferredBuiltinTools);
   return {
     state: 'read',
@@ -926,8 +927,14 @@ function charsCandidates(input: {
   topN: number;
 }): PromptCandidates['chars'] {
   const { system, memory, tools, topN } = input;
-  if (system.state === 'unavailable' && memory.state === 'unavailable' && tools.state === 'unavailable') {
-    return unavailable('文字数で測れるもの（システムプロンプト・記憶の索引・道具の定義）が1つも取れない');
+  if (
+    system.state === 'unavailable' &&
+    memory.state === 'unavailable' &&
+    tools.state === 'unavailable'
+  ) {
+    return unavailable(
+      '文字数で測れるもの（システムプロンプト・記憶の索引・道具の定義）が1つも取れない',
+    );
   }
   const rows: PromptCharsCandidate[] = [];
   // システムプロンプトの文字数が分母。記憶の索引はその中に含まれる（足し算にしない）
@@ -952,8 +959,7 @@ function charsCandidates(input: {
   // 記憶の索引の文書ごとの行を足してよいのは、システムプロンプトの行が「索引の分を除いた形」に分けられているときだけ（二重に数えない）
   let documentsPartitioned = false;
   if (system.state === 'read' && system.sections.state === 'read') {
-    const splitMemory =
-      system.memoryIndex.state === 'read' && system.memoryIndex.difference >= 0;
+    const splitMemory = system.memoryIndex.state === 'read' && system.memoryIndex.difference >= 0;
     for (const section of system.sections.rows) {
       // 記憶の節は、索引の文書ごとの行と「それ以外」の行に分けて数える
       if (splitMemory && section.heading === MEMORY_SECTION_HEADING) continue;
@@ -1062,7 +1068,12 @@ function tokensCandidates(input: {
 
   if (system.state === 'read' && system.sdkSections.state === 'read') {
     for (const row of system.sdkSections.rows) {
-      add('sdk-section', `SDK が測ったシステムプロンプトの節「${row.name}」`, row.tokens, WHERE_SDK_SECTION);
+      add(
+        'sdk-section',
+        `SDK が測ったシステムプロンプトの節「${row.name}」`,
+        row.tokens,
+        WHERE_SDK_SECTION,
+      );
     }
   }
   if (memory.state === 'read' && memory.memoryFiles.state === 'read') {
@@ -1073,13 +1084,23 @@ function tokensCandidates(input: {
   if (tools.state === 'read') {
     for (const row of tools.rows) {
       if (row.tokens !== null) {
-        add('clone-tool', `クローンの道具「${row.name}」（SDK の測定）`, row.tokens, WHERE_CLONE_TOOL);
+        add(
+          'clone-tool',
+          `クローンの道具「${row.name}」（SDK の測定）`,
+          row.tokens,
+          WHERE_CLONE_TOOL,
+        );
       }
     }
   }
   if (externalMcp.state === 'read' && externalMcp.tokens.state === 'read') {
     for (const row of externalMcp.tokens.byServer) {
-      add('external-mcp', `外部 MCP「${row.name}」（${row.tools} 本）`, row.tokens, WHERE_EXTERNAL_MCP);
+      add(
+        'external-mcp',
+        `外部 MCP「${row.name}」（${row.tools} 本）`,
+        row.tokens,
+        WHERE_EXTERNAL_MCP,
+      );
     }
   }
   if (builtin.state === 'read') {
@@ -1095,7 +1116,12 @@ function tokensCandidates(input: {
           excludedNotLoaded += 1;
           continue;
         }
-        add('builtin-deferred-tool', `SDK 組み込みの遅延道具「${row.name}」（ロード済み）`, row.tokens, WHERE_BUILTIN);
+        add(
+          'builtin-deferred-tool',
+          `SDK 組み込みの遅延道具「${row.name}」（ロード済み）`,
+          row.tokens,
+          WHERE_BUILTIN,
+        );
       }
     }
   }

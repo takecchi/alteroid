@@ -224,7 +224,9 @@ describe('diagnosticsAnalyzeCommand: 会話の分析', () => {
         exchanges: { state: string; byKind: Array<{ kind: string; count: number }> };
       };
     };
-    const { conversation, ...rest } = parsed;
+    // `prompt`（プロンプトの分析）は後から足された欄。それを除いた残りが既存の欄と1文字も変わらないことは変えずに確かめる
+    const { conversation, prompt, ...rest } = parsed;
+    expect(prompt).toEqual({ state: 'none', reason: '--prompt も --dir も渡されていない' });
     expect(rest).toEqual(
       JSON.parse(
         JSON.stringify(
@@ -321,5 +323,242 @@ describe('diagnosticsAnalyzeCommand: 会話の分析', () => {
     await diagnosticsAnalyzeCommand({ dir: out, top: '1', json: true, env: {} });
     const parsed = JSON.parse(read()) as { conversation: { exchanges: { top: unknown[] } } };
     expect(parsed.conversation.exchanges.top).toHaveLength(1);
+  });
+});
+
+// ---- プロンプトの分析（--prompt / --dir の prompt.json）----
+
+const ENV_VALUE = 'dummy-env-secret-value-0123456789';
+const PROMPT_TEXT = '導入\n# 立ち位置\n本文\n# 現在の記憶\n\n索引の断片A索引の断片B\n';
+
+function promptJson(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    full: true,
+    session: {
+      ok: true,
+      builtAt: '2026-11-01T23:00:00.000Z',
+      resumedFrom: null,
+      sessionId: null,
+      model: 'opus',
+    },
+    systemPrompt: { text: PROMPT_TEXT, chars: PROMPT_TEXT.length },
+    memoryInPrompt: {
+      documents: [
+        {
+          slug: 'big-doc',
+          type: 'premise',
+          description: '要旨',
+          chars: 900,
+          indexChars: 12,
+          indexForm: 'premise-card',
+          omitted: false,
+          indexNote: null,
+        },
+        {
+          slug: `doc-${DUMMY_KEY}`,
+          type: 'fact',
+          description: null,
+          chars: 30,
+          indexChars: 3,
+          indexForm: 'toc-line',
+          omitted: false,
+          indexNote: null,
+        },
+      ],
+      omittedDocuments: 0,
+    },
+    tools: [{ name: 'memory_read', source: 'clone', descriptionChars: 40, inputSchemaChars: 20 }],
+    builtinTools: {
+      available: false,
+      reason: 'SDK は返さない',
+      systemTools: null,
+      deferredBuiltinTools: null,
+    },
+    externalMcpServers: [{ name: `srv-${ENV_VALUE}`, type: 'http' }],
+    externalMcpServersLive: null,
+    plugins: [],
+    contextUsage: null,
+    notice: ['ターン境界をまだ観測していない'],
+    secretScan: { scanned: true, hits: [] },
+    ...over,
+  });
+}
+
+async function promptDir(prompt: string | null): Promise<string> {
+  const out = await pullDir();
+  if (prompt !== null) await writeFile(join(out, 'prompt.json'), prompt);
+  return out;
+}
+
+type PromptJsonOutput = {
+  prompt: {
+    state: string;
+    reason?: string;
+    systemPrompt?: { chars: number };
+    coverage?: { ageAtPullMs: number | null };
+  };
+};
+
+describe('diagnosticsAnalyzeCommand: プロンプトの分析', () => {
+  it('既存の出力は1文字も変わらず、プロンプトの節が最後に足される。--prompt も --dir も無いときは「入力が無い」', async () => {
+    const f = await files();
+    const expected = renderDiagnosticsAnalysis(
+      analyzeDiagnostics(parseJournalJsonl(JOURNAL), { usage: JSON.parse(USAGE), topN: 10 }),
+    );
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ journal: f.journal, usage: f.usage, env: {} });
+    const text = read();
+    expect(text).toContain(`${expected}\n`);
+    expect(text.indexOf('## B. 会話')).toBeLessThan(text.indexOf('# プロンプトの大きさの分析'));
+    expect(text.endsWith('\n')).toBe(true);
+    const section = text.slice(text.indexOf('# プロンプトの大きさの分析'));
+    expect(section).toContain('入力が無い: --prompt も --dir も渡されていない');
+    expect(section).toContain('取れない（0 ではない）');
+    // 新しい節より前は、この変更の前と同じ並び（既存の2つの節と、その間の空行）
+    const before = text.slice(0, text.indexOf('# プロンプトの大きさの分析'));
+    expect(before.startsWith('# 会話の分析の coverage')).toBe(true);
+    expect(before.endsWith('\n\n')).toBe(true);
+  });
+
+  it('--prompt <file> を読み、節ごとの大きさ・索引の突き合わせ・削減候補を出す', async () => {
+    const f = await files();
+    const path = join(dir, 'prompt.json');
+    await writeFile(path, promptJson());
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ ...f, prompt: path, env: {} });
+    const text = read();
+    expect(text).toContain('# プロンプトの大きさの分析');
+    expect(text).toContain('# 現在の記憶:');
+    expect(text).toContain('索引の合計 15字');
+    expect(text).toContain('big-doc（premise）: 索引 12字');
+    expect(text).toContain('## P8. 定義を短くできる余地の大きい順');
+    expect(text).toContain('能力を減らす候補ではなく、定義の簡潔化の候補');
+    // contextUsage が無いので、SDK 実測のトークンは「取れない」（0 ではない）
+    expect(text).toContain('contextUsage: 未取得');
+    expect(text).toContain('トークンの候補: 取れない');
+    expect(fetchCalls).toBe(0);
+    expect(await readFile(path, 'utf8')).toBe(promptJson());
+  });
+
+  it('--dir は prompt.json を既定の名前で読み、manifest の pulledAt から経過を出す。個別の --prompt が優先する', async () => {
+    const out = await promptDir(promptJson());
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: out, env: {}, json: true });
+    const parsed = JSON.parse(read()) as PromptJsonOutput;
+    expect(parsed.prompt.state).toBe('read');
+    expect(parsed.prompt.systemPrompt?.chars).toBe(PROMPT_TEXT.length);
+    // builtAt 2026-11-01T23:00 → pulledAt 2026-11-02T00:00
+    expect(parsed.prompt.coverage?.ageAtPullMs).toBe(3_600_000);
+
+    const other = join(dir, 'other-prompt.json');
+    const otherText = '別の本文\n';
+    await writeFile(
+      other,
+      promptJson({ systemPrompt: { text: otherText, chars: otherText.length } }),
+    );
+    const read2 = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: out, prompt: other, env: {}, json: true });
+    const parsed2 = JSON.parse(read2()) as PromptJsonOutput;
+    expect(parsed2.prompt.systemPrompt?.chars).toBe(otherText.length);
+  });
+
+  it('prompt.json が無い・壊れている・形が違うときは、落とさず節に「入力が無い／読めない」と理由を出す', async () => {
+    const missing = await promptDir(null);
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: missing, env: {} });
+    expect(read()).toContain('入力が無い: prompt.json が --dir に無い');
+
+    const broken = await promptDir('{not json');
+    const read2 = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: broken, env: {} });
+    expect(read2()).toContain('読めない: JSON として読めない');
+
+    const wrongShape = join(dir, 'wrong.json');
+    await writeFile(wrongShape, JSON.stringify({ full: 'yes' }));
+    const read3 = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: broken, prompt: wrongShape, env: {} });
+    const text3 = read3();
+    expect(text3).toContain('読めない: GET /self/prompt の応答の形と合わない');
+    expect(text3).toContain('full（invalid_type）');
+
+    // 明示した --prompt のファイルが無くても落とさない
+    const read4 = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: missing, prompt: join(dir, 'nope.json'), env: {} });
+    const text4 = read4();
+    expect(text4).toContain('入力が無い: --prompt のファイルが無い');
+    // 既存の節は出ている
+    expect(text4).toContain('# 会話の分析の coverage');
+  });
+
+  it('--json: 既存の欄と conversation はそのまま、プロンプトの分析は prompt として足される', async () => {
+    const f = await files();
+    const path = join(dir, 'prompt.json');
+    await writeFile(path, promptJson());
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ ...f, prompt: path, json: true, env: {} });
+    const parsed = JSON.parse(read()) as Record<string, unknown> & PromptJsonOutput;
+    const { conversation, prompt, ...rest } = parsed;
+    expect(rest).toEqual(
+      JSON.parse(
+        JSON.stringify(
+          analyzeDiagnostics(parseJournalJsonl(JOURNAL), { usage: JSON.parse(USAGE), topN: 10 }),
+        ),
+      ),
+    );
+    expect(Object.keys(conversation as object).sort()).toEqual([
+      'contamination',
+      'coverage',
+      'estimate',
+      'exchanges',
+      'measured',
+    ]);
+    expect(Object.keys(prompt).sort()).toEqual([
+      'builtin',
+      'candidates',
+      'coverage',
+      'externalMcp',
+      'memory',
+      'occupancy',
+      'state',
+      'systemPrompt',
+      'tools',
+    ]);
+    // prompt.json が無ければ、prompt は state と理由だけ
+    const read2 = captureStdout();
+    await diagnosticsAnalyzeCommand({ ...f, json: true, env: {} });
+    const none = JSON.parse(read2()) as PromptJsonOutput;
+    expect(none.prompt).toEqual({
+      state: 'none',
+      reason: '--prompt も --dir も渡されていない',
+    });
+  });
+
+  it('表示の直前にもう一度伏せ字を掛ける（slug・サーバ名）。標準エラーには規則名と件数だけで、値は出ない', async () => {
+    const out = await promptDir(promptJson());
+    const readOut = captureStdout();
+    const readErr = captureStderr();
+    await diagnosticsAnalyzeCommand({ dir: out, env: { MY_SERVICE_API_KEY: ENV_VALUE } });
+    const text = readOut();
+    const err = readErr();
+    const promptSection = text.slice(text.indexOf('# プロンプトの大きさの分析'));
+    for (const secret of [DUMMY_KEY, ENV_VALUE]) {
+      expect(promptSection).not.toContain(secret);
+      expect(err).not.toContain(secret);
+    }
+    expect(promptSection).toContain('[redacted:');
+    expect(err).toContain('伏せ字: プロンプトの分析（表示の直前の再走査）');
+    expect(err).toContain('env:MY_SERVICE_API_KEY 1 件');
+    expect(err).toMatch(/ 1 件/);
+  });
+
+  it('--top は削減候補の件数に効く', async () => {
+    const out = await promptDir(promptJson());
+    const read = captureStdout();
+    await diagnosticsAnalyzeCommand({ dir: out, top: '1', json: true, env: {} });
+    const parsed = JSON.parse(read()) as {
+      prompt: { candidates: { chars: { rows: unknown[]; total: number } } };
+    };
+    expect(parsed.prompt.candidates.chars.rows).toHaveLength(1);
+    expect(parsed.prompt.candidates.chars.total).toBeGreaterThan(1);
   });
 });

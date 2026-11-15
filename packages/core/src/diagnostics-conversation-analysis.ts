@@ -409,7 +409,8 @@ export const MANAGER_SIGNAL_KINDS = [
   'manager_confirmation',
   'denial_notice',
 ] as const;
-// 本文を持たない合図（束のとき `signals[].chars` が 0 で書かれ、長さが取れない）。同じ理由で書き手の定数が無い
+// 本文を持たない合図（束のとき `signals[].chars` が 0 で書かれ、長さが取れない）。同じ理由で書き手の定数が無い。
+// `diagnostics-bodyless-signal-kinds.test.ts` が、受信箱の合図の種類を全部 `buildTurnInputEntry` に渡して `chars` の意味を測り、この一覧と突き合わせる
 export const BODYLESS_SIGNAL_KINDS = [
   'timer',
   'self_initiative',

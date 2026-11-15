@@ -61,7 +61,9 @@ export function renderPromptCoverage(c: PromptCoverage): string[] {
       );
       break;
     case 'ok':
-      out.push(`  contextUsage: 成功（SDK が測った時刻 ${c.contextUsage.at}。プロンプトの焼き時刻とは別）`);
+      out.push(
+        `  contextUsage: 成功（SDK が測った時刻 ${c.contextUsage.at}。プロンプトの焼き時刻とは別）`,
+      );
       for (const axis of c.contextUsage.axes) {
         out.push(
           axis.available
@@ -81,8 +83,12 @@ export function renderPromptCoverage(c: PromptCoverage): string[] {
   out.push(`  notice（取れなかった軸の理由など。全 ${n(c.notices.length)} 件）:`);
   for (const notice of c.notices) out.push(`    - ${notice}`);
   out.push('  出所の区別:');
-  out.push('    [文字数] システムプロンプトの本文から数えた／daemon が応答に書いた文字数（トークンではない）');
-  out.push('    [SDK 実測トークン] contextUsage（SDK の getContextUsage）が測った値だけ。文字数からの換算はしない');
+  out.push(
+    '    [文字数] システムプロンプトの本文から数えた／daemon が応答に書いた文字数（トークンではない）',
+  );
+  out.push(
+    '    [SDK 実測トークン] contextUsage（SDK の getContextUsage）が測った値だけ。文字数からの換算はしない',
+  );
   return out;
 }
 
@@ -119,7 +125,9 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
         );
       }
     }
-    out.push('  記憶の索引と節の突き合わせ（memoryInPrompt の indexChars の合計 vs「# 現在の記憶」の節）:');
+    out.push(
+      '  記憶の索引と節の突き合わせ（memoryInPrompt の indexChars の合計 vs「# 現在の記憶」の節）:',
+    );
     if (sp.memoryIndex.state === 'unavailable') {
       out.push(unavailableLine('    ', '突き合わせ', sp.memoryIndex));
     } else {
@@ -134,7 +142,9 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
         );
       }
     }
-    out.push('  [SDK 実測トークン] contextUsage.systemPromptSections（SDK が名前つきで測った節。上の文字数の表とは別物で、換算していない）:');
+    out.push(
+      '  [SDK 実測トークン] contextUsage.systemPromptSections（SDK が名前つきで測った節。上の文字数の表とは別物で、換算していない）:',
+    );
     if (sp.sdkSections.state === 'unavailable') {
       out.push(unavailableLine('    ', 'SDK の節', sp.sdkSections));
     } else {
@@ -148,7 +158,10 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
   }
 
   // P3
-  out.push('', '## P3. 記憶の索引の文書ごとの大きさ（[文字数]。indexChars の大きい順 = どの記憶がプロンプトを太らせているか）');
+  out.push(
+    '',
+    '## P3. 記憶の索引の文書ごとの大きさ（[文字数]。indexChars の大きい順 = どの記憶がプロンプトを太らせているか）',
+  );
   const mem = a.memory;
   if (mem.state === 'unavailable') {
     out.push(unavailableLine('  ', '記憶の索引', mem));
@@ -162,13 +175,17 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
         `    ${row.slug}（${row.type}）: 索引 ${chars(row.indexChars)}（${pct(row.shareOfIndex)}）/ 本文 ${chars(row.chars)} / 索引÷本文 ${pct(row.indexOverBody)} / 要旨 ${chars(row.descriptionChars)}`,
       );
     }
-    out.push(`  索引に載っていない文書（indexChars は null。0 ではない）: ${n(mem.unindexed.length)} 件`);
+    out.push(
+      `  索引に載っていない文書（indexChars は null。0 ではない）: ${n(mem.unindexed.length)} 件`,
+    );
     for (const row of mem.unindexed) {
       out.push(
         `    ${row.slug}（${row.type}）: ${row.omitted ? '索引から省かれた' : '索引の中での長さが取れなかった'} / 本文 ${chars(row.chars)} / indexNote: ${row.indexNote ?? '取れない'}`,
       );
     }
-    out.push('  [SDK 実測トークン] contextUsage.memoryFiles（CLAUDE.md などの指示ファイル。記憶の索引とは別）:');
+    out.push(
+      '  [SDK 実測トークン] contextUsage.memoryFiles（CLAUDE.md などの指示ファイル。記憶の索引とは別）:',
+    );
     if (mem.memoryFiles.state === 'unavailable') {
       out.push(unavailableLine('    ', '指示ファイル', mem.memoryFiles));
     } else {
@@ -176,7 +193,9 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
         `    合計 ${tokens(mem.memoryFiles.total)}${mem.memoryFiles.omitted > 0 ? `（上限で ${n(mem.memoryFiles.omitted)} 行切り捨て）` : ''}`,
       );
       for (const row of mem.memoryFiles.rows) {
-        out.push(`    ${row.path}${row.type === null ? '' : `（${row.type}）`}: ${tokens(row.tokens)}`);
+        out.push(
+          `    ${row.path}${row.type === null ? '' : `（${row.type}）`}: ${tokens(row.tokens)}`,
+        );
       }
     }
   }
@@ -276,7 +295,8 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
       out.push(
         `  systemTools: 合計 ${tokens(builtin.systemTools.total)}${builtin.systemTools.omitted > 0 ? `（上限で ${n(builtin.systemTools.omitted)} 行切り捨て）` : ''}`,
       );
-      for (const row of builtin.systemTools.rows) out.push(`    ${row.name}: ${tokens(row.tokens)}`);
+      for (const row of builtin.systemTools.rows)
+        out.push(`    ${row.name}: ${tokens(row.tokens)}`);
     }
     if (builtin.deferredBuiltinTools.state === 'unavailable') {
       out.push(unavailableLine('  ', 'deferredBuiltinTools', builtin.deferredBuiltinTools));
@@ -291,7 +311,10 @@ export function renderPromptAnalysis(a: PromptAnalysis, top: number): string {
   }
 
   // P7
-  out.push('', '## P7. 文脈占有のカテゴリ（[SDK 実測トークン]。kind で分ける。名前では分類しない）');
+  out.push(
+    '',
+    '## P7. 文脈占有のカテゴリ（[SDK 実測トークン]。kind で分ける。名前では分類しない）',
+  );
   const occ = a.occupancy;
   if (occ.state === 'unavailable') {
     out.push(unavailableLine('  ', '文脈占有', occ));
@@ -329,7 +352,9 @@ export function renderPromptCandidates(c: PromptCandidates, top: number): string
   if (c.chars.state === 'unavailable') {
     out.push(unavailableLine('    ', '文字数の候補', c.chars));
   } else {
-    out.push(`    ${c.chars.baselineNote}（分母 ${chars(c.chars.baseline)}。候補 ${n(c.chars.total)} 件中）`);
+    out.push(
+      `    ${c.chars.baselineNote}（分母 ${chars(c.chars.baseline)}。候補 ${n(c.chars.total)} 件中）`,
+    );
     for (const row of c.chars.rows) {
       out.push(
         `    ${chars(row.size)}（${pct(row.share)}）[${row.basis === 'text-counted' ? '本文から数えた文字数' : 'daemon の応答の文字数'}] ${row.label}`,

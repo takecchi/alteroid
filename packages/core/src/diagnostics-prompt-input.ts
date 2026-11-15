@@ -74,9 +74,7 @@ const contextUsageOkSchema = z.object({
   ),
   systemTools: axis(rows(z.object({ name: z.string(), tokens: z.number().nonnegative() }))),
   deferredBuiltinTools: axis(
-    rows(
-      z.object({ name: z.string(), tokens: z.number().nonnegative(), isLoaded: z.boolean() }),
-    ),
+    rows(z.object({ name: z.string(), tokens: z.number().nonnegative(), isLoaded: z.boolean() })),
   ),
 });
 
@@ -106,7 +104,9 @@ export const promptJsonSchema = z.object({
   builtinTools: z
     .object({
       reason: z.string(),
-      systemTools: axis(rows(z.object({ name: z.string(), tokens: z.number().nonnegative() }))).nullable(),
+      systemTools: axis(
+        rows(z.object({ name: z.string(), tokens: z.number().nonnegative() })),
+      ).nullable(),
       deferredBuiltinTools: axis(
         rows(
           z.object({ name: z.string(), tokens: z.number().nonnegative(), isLoaded: z.boolean() }),
