@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { REPORT_FOLLOW_UP_GUIDE } from './clone-batch-prompts.js';
 import { setup, waitFor, waitForDone } from './clone-test-harness.js';
+import { DENIAL_REPLY_ROUTE } from './denial-key.js';
+import { EXTERNAL_EVENT_FRAMING, externalEventInstruction } from './prompt.js';
+import { buildDenialAskSummary } from './runner-permission-denied-text.js';
 import { sectionBlock } from './section-block.js';
 import type { InboxEvent, JournalEntry } from './schema.js';
 import { describeSituation, describeSituationParts, situationPartChars } from './situation.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { buildTurnInputEntry, TURN_INPUT_SIGNALS_LIMIT } from './turn-input-observation.js';
+import {
+  buildTurnInputEntry,
+  TURN_INPUT_SIGNALS_LIMIT,
+  turnInputShortfallChars,
+} from './turn-input-observation.js';
 
 // クローンの1ターンに実際に渡した入力の組み立ての内訳（`turn_input`）。文字数・件数・識別子だけを書き、本文は書かない
 
@@ -101,6 +112,26 @@ describe('turn_input（ターンの入力の内訳）', () => {
     expect(row?.totalChars).toBe(inputsOf(s).at(-1)?.length);
     expectTotalsAddUp(row!);
     expect(JSON.stringify(row)).not.toContain('結果ああ');
+    await s.clone.stop();
+  });
+
+  it('拒否の知らせのターン: 合図・定型・枠組みの和が本文と一致し、拒否の固定文面は定型に出ない', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, stores);
+    const text = `Bash の実行が止められた。${DENIAL_REPLY_ROUTE}\n全件は日誌に残っている`;
+    s.clone.post(managerMessage('d1', 'report', text));
+    await waitFor(async () => (await rows(stores)).length === 1, 'turn_input の1行');
+
+    const [row] = await rows(stores);
+    expect(row?.signals).toEqual([
+      { kind: 'denial_notice', managerId: 'mgr-A', chars: text.length },
+    ]);
+    expect(row?.templates).not.toHaveProperty('DENIAL_REPLY_ROUTE');
+    expect(row?.templates?.REPORT_FOLLOW_UP_GUIDE).toBe(REPORT_FOLLOW_UP_GUIDE.length);
+    expect(row!.framingChars).toBeGreaterThan(0);
+    // 丸めを経ていない: 合図 + 定型 + 枠組み = 本文
+    expect(text.length + sum(row?.templates ?? {}) + row!.framingChars).toBe(row?.bodyChars);
+    expectTotalsAddUp(row!);
     await s.clone.stop();
   });
 
@@ -204,6 +235,98 @@ describe('buildTurnInputEntry', () => {
     expect(entry.signalsOmitted).toBe(5);
     expect(entry.triggers).toEqual(['manager_message']);
     expect(entry.framingChars).toBe(400 - 25 * 10);
+  });
+
+  // 拒否の固定文面は合図の本文（event.text）の一部。合図と定型の両方に数えると、枠組みが過小になり、負なら 0 に隠れる（修正前の挙動）
+  const observe = (event: InboxEvent, body: string) => ({
+    kind: 'normal' as const,
+    conversationId: null,
+    batch: [event],
+    composed: composed(body),
+    lengths: { composed: body.length, withHumanActions: body.length, final: body.length },
+    situationParts: undefined,
+  });
+
+  function expectBodyPartition(entry: ReturnType<typeof buildTurnInputEntry>): void {
+    // 合図は20件以内の試験だけで使う（省いた分は `signals` に載らない）
+    expect(entry.signalsOmitted).toBeUndefined();
+    expect(
+      entry.signals.reduce((total, s) => total + s.chars, 0) +
+        sum(entry.templates ?? {}) +
+        entry.framingChars,
+    ).toBe(entry.bodyChars);
+  }
+
+  it('拒否の知らせ: 固定文面は合図に一度だけ数え、定型には数えない。枠組みは前置きと末尾だけ', () => {
+    const text = `ツールの実行が止められた。${DENIAL_REPLY_ROUTE}\n全件は日誌に残っている`;
+    const body = `HEAD\n\n${text}\n\n${REPORT_FOLLOW_UP_GUIDE}`;
+    const observation = observe(managerMessage('d1', 'report', text), body);
+    const entry = buildTurnInputEntry(observation);
+
+    expect(entry.signals).toEqual([
+      { kind: 'denial_notice', managerId: 'mgr-A', chars: text.length },
+    ]);
+    expect(entry.templates).toEqual({ REPORT_FOLLOW_UP_GUIDE: REPORT_FOLLOW_UP_GUIDE.length });
+    // 'HEAD\n\n'（6字）+ '\n\n'（2字）
+    expect(entry.framingChars).toBe(8);
+    expect(entry.bodyChars).toBe(body.length);
+    expectBodyPartition(entry);
+    expect(turnInputShortfallChars(observation)).toBe(0);
+  });
+
+  it.each([
+    ['一時規則を足せない確認', false, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH],
+    ['一時規則を足せる Bash の確認', true, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE],
+  ])('拒否の許可確認（%s）: ASK の段落は合図に一度だけ数える', (_name, ruleable, paragraph) => {
+    const text = buildDenialAskSummary(null, '作業者', 'Bash', ruleable, '理由', '入力');
+    expect(text).toContain(paragraph);
+    const body = `HEAD\n\n${text}\n\nTAIL`;
+    const observation = observe(managerMessage('a1', 'permission', text), body);
+    const entry = buildTurnInputEntry(observation);
+
+    expect(entry.signals).toEqual([
+      { kind: 'manager_confirmation', managerId: 'mgr-A', chars: text.length },
+    ]);
+    expect(entry.templates).toBeUndefined();
+    // 'HEAD\n\n'（6字）+ '\n\nTAIL'（6字）
+    expect(entry.framingChars).toBe(12);
+    expectBodyPartition(entry);
+    expect(turnInputShortfallChars(observation)).toBe(0);
+  });
+
+  it('混合束: 拒否の知らせ・報告・外部イベントが並んでも、各区分に一度ずつだけ数える', () => {
+    const denial = `止められた。${DENIAL_REPLY_ROUTE}`;
+    const body = [
+      'HEAD',
+      `**(1)**\n${denial}\n${REPORT_FOLLOW_UP_GUIDE}`,
+      `**(2)**\n${EXTERNAL_EVENT_FRAMING}\n{"a":1}\n${externalEventInstruction()}`,
+    ].join('\n---\n');
+    const batch = [
+      managerMessage('d1', 'report', denial),
+      {
+        type: 'external',
+        id: 'x1',
+        at: new Date().toISOString(),
+        source: 'webhook',
+        payload: '{"a":1}',
+      } as InboxEvent,
+    ];
+    const observation = { ...observe(batch[0]!, body), batch };
+    const entry = buildTurnInputEntry(observation);
+
+    expect(entry.templates).toEqual({
+      REPORT_FOLLOW_UP_GUIDE: REPORT_FOLLOW_UP_GUIDE.length,
+      EXTERNAL_EVENT_FRAMING: EXTERNAL_EVENT_FRAMING.length,
+      EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction().length,
+    });
+    expectBodyPartition(entry);
+    expect(turnInputShortfallChars(observation)).toBe(0);
+  });
+
+  it('切り詰めで枠組みが負になるときは 0 に丸める（切る前の合図の長さが本文を超える。丸めは shortfall に出る）', () => {
+    const observation = observe(managerMessage('m', 'report', 'x'.repeat(9_000)), 'y'.repeat(100));
+    expect(buildTurnInputEntry(observation).framingChars).toBe(0);
+    expect(turnInputShortfallChars(observation)).toBe(8_900);
   });
 
   it('切り詰めで枠組みが負になるときは 0 に丸める', () => {

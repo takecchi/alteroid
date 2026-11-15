@@ -55,13 +55,27 @@ const TEMPLATES: Readonly<Record<string, string>> = {
   EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction(),
 };
 
-/** 本文の中の定型ごとの文字数（出現が0のものは省く）。 */
-export function countTemplateChars(body: string): Record<string, number> {
+function occurrencesOf(text: string, template: string): number {
+  return text.split(template).length - 1;
+}
+
+/**
+ * 本文の中の定型ごとの文字数（出現が0のものは省く）。数えるのは合図の本文（`signalTexts`）の外にある出現だけ。
+ * 合図の本文の中の出現を数えない理由: 拒否の知らせ・拒否の許可確認の固定文面（`DENIAL_*`）は `event.text` の一部で、
+ * 既に `signals[].chars` に数えられている。ここでも数えると同じ字が2つの区分に入り、`framingChars`（本文 − 合図 − 定型）が過小になる。
+ * 合図の側（`signals[].chars` は切る前の本文の長さ）を削る形にしない: 日誌の読み手が「合図の本文の長さ」として読んでいるため。
+ */
+export function countTemplateChars(
+  body: string,
+  signalTexts: readonly string[] = [],
+): Record<string, number> {
   const chars: Record<string, number> = {};
   for (const [name, template] of Object.entries(TEMPLATES)) {
     if (template === '') continue;
-    const occurrences = body.split(template).length - 1;
-    if (occurrences > 0) chars[name] = occurrences * template.length;
+    const insideSignals = signalTexts.reduce((sum, text) => sum + occurrencesOf(text, template), 0);
+    // 切り詰めで合図の本文の側の出現が本文から消えた回は、本文の出現が合図の出現より少ない。負にせず 0 で止める
+    const outside = Math.max(0, occurrencesOf(body, template) - insideSignals);
+    if (outside > 0) chars[name] = outside * template.length;
   }
   return chars;
 }
@@ -103,23 +117,24 @@ function signalKindOf(event: InboxEvent): string {
 }
 
 /**
- * 合図の元の本文の長さ（切る前）。イベントが本文を持たない種類（蒸留・タイマー・発意・日報）は、
- * 1件だけのターンなら本文そのもの（定型の文面）の長さ、束なら 0（取れない）にする。
+ * 合図の元の本文（切る前）。長さは `signals[].chars`、中身は定型の二重計上を避けるために使う（`countTemplateChars`）。
+ * イベントが本文を持たない種類（蒸留・タイマー・発意・日報）は、
+ * 1件だけのターンなら本文そのもの（定型の文面）、束なら `undefined`（長さ 0・取れない）にする。
  */
-function signalCharsOf(event: InboxEvent, bodyChars: number, batchSize: number): number {
+function signalTextOf(event: InboxEvent, body: string, batchSize: number): string | undefined {
   switch (event.type) {
     case 'human_message':
-      return event.text.length;
+      return event.text;
     case 'human_answer':
-      return event.answer.length;
+      return event.answer;
     case 'manager_message':
-      return event.text.length;
+      return event.text;
     case 'external':
-      return payloadText(event.payload, event.attachments).length;
+      return payloadText(event.payload, event.attachments);
     case 'distill':
     case 'timer':
     case 'self_initiative':
-      return batchSize === 1 ? bodyChars : 0;
+      return batchSize === 1 ? body : undefined;
   }
 }
 
@@ -147,26 +162,46 @@ export interface TurnInputObservation {
   situationParts: Record<string, number> | undefined;
 }
 
+/** 本文（`composed.body`）の内訳の測り。合図と定型は、同じ字を2つの区分に数えない（`countTemplateChars`）。 */
+function measureBody(observation: TurnInputObservation) {
+  const { composed, batch } = observation;
+  const body = composed.body;
+  const signalTexts = batch.map((event) => signalTextOf(event, body, batch.length));
+  const allSignals: SignalObservation[] = batch.map((event, index) => ({
+    kind: signalKindOf(event),
+    ...(event.type === 'manager_message' ? { managerId: event.managerId } : {}),
+    chars: signalTexts[index]?.length ?? 0,
+  }));
+  const templates = countTemplateChars(
+    body,
+    signalTexts.filter((text): text is string => text !== undefined),
+  );
+  const templateChars = Object.values(templates).reduce((sum, chars) => sum + chars, 0);
+  const signalChars = allSignals.reduce((sum, signal) => sum + signal.chars, 0);
+  return { bodyChars: body.length, allSignals, templates, templateChars, signalChars };
+}
+
+/**
+ * 内訳（合図 + 定型）が本文を超えた字数。0 なら `framingChars` は丸めを経ていない。
+ * 本番では切り詰め（長い報告の頭だけ・束の予算・外部イベントの上限）で、切る前の合図の長さが本文を超えるのが正常にありうる。
+ * そのため `buildTurnInputEntry` は落とさず 0 に止める（観測は turn を落とさない）。丸めが起きない入力を作る試験は、これが 0 であることで二重計上を捕まえる。
+ */
+export function turnInputShortfallChars(observation: TurnInputObservation): number {
+  const { bodyChars, signalChars, templateChars } = measureBody(observation);
+  return Math.max(0, signalChars + templateChars - bodyChars);
+}
+
 export function buildTurnInputEntry(observation: TurnInputObservation): TurnInputEntry {
   const { composed, lengths, batch } = observation;
-  const bodyChars = composed.body.length;
+  const { bodyChars, allSignals, templates, templateChars, signalChars } = measureBody(observation);
 
   const notices: Record<string, number> = {};
   for (const key of NOTICE_KEYS) {
     if (composed[key].length > 0) notices[key] = composed[key].length;
   }
 
-  const allSignals: SignalObservation[] = batch.map((event) => ({
-    kind: signalKindOf(event),
-    ...(event.type === 'manager_message' ? { managerId: event.managerId } : {}),
-    chars: signalCharsOf(event, bodyChars, batch.length),
-  }));
   const signals = allSignals.slice(0, TURN_INPUT_SIGNALS_LIMIT);
   const signalsOmitted = allSignals.length - signals.length;
-
-  const templates = countTemplateChars(composed.body);
-  const templateChars = Object.values(templates).reduce((sum, chars) => sum + chars, 0);
-  const signalChars = allSignals.reduce((sum, signal) => sum + signal.chars, 0);
 
   return {
     type: 'turn_input',
