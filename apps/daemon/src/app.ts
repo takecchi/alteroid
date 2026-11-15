@@ -369,7 +369,7 @@ export function createApp(deps: AppDeps) {
 
     .route('/', integrationRoutes(ctx, humanOnly, noteIntegrationRefusal))
 
-    .route('/', mcpRoutes(ctx))
+    .route('/', mcpRoutes(ctx, deps))
 
     .route('/', scheduleRoutes(ctx, deps))
 

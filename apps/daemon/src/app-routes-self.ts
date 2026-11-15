@@ -1,17 +1,12 @@
-import {
-  createSecretRedactor,
-  ROTATABLE_CREDENTIAL_KEYS,
-  WITHHELD_ENV_KEYS,
-  writeStderrLine,
-} from '@alteroid/core';
+import { writeStderrLine } from '@alteroid/core';
 import { Hono } from 'hono';
 import { describeRoute } from 'hono-openapi';
 import { z } from 'zod';
 import type { AppContext } from './app-context.js';
 import type { AppDeps } from './app.js';
-import { AUTH_WITHHELD_ENV_KEYS, type AuthVariables } from './auth.js';
+import type { AuthVariables } from './auth.js';
 import { selfPromptResponseSchema } from './openapi.js';
-import { buildSelfPromptBody, finalizeSelfPrompt } from './self-prompt.js';
+import { buildScannedSelfPrompt } from './self-prompt.js';
 import {
   INVALID_QUERY_DESCRIPTION,
   errorResponse,
@@ -66,17 +61,10 @@ export function selfRoutes(ctx: AppContext, deps: AppDeps) {
     (c) => {
       const { full } = c.req.valid('query');
       try {
-        const body = finalizeSelfPrompt(
-          buildSelfPromptBody(clone.promptSnapshot(), { full: full === '1' }),
-          // 既知の秘密名は既存の一覧を使う（新しい一覧を手書きしない）。名前に TOKEN・KEY などが入る変数は、走査の側が拾う
-          createSecretRedactor({
-            env: deps.env ?? process.env,
-            knownSecretEnvNames: [
-              ...WITHHELD_ENV_KEYS,
-              ...AUTH_WITHHELD_ENV_KEYS,
-              ...ROTATABLE_CREDENTIAL_KEYS,
-            ],
-          }),
+        const body = buildScannedSelfPrompt(
+          clone.promptSnapshot(),
+          { full: full === '1' },
+          deps.env ?? process.env,
         );
         return c.json(body);
       } catch (error) {

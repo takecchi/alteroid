@@ -130,8 +130,8 @@ beforeEach(() => {
   persistOutcome = 'persisted';
 });
 
-describe('POST /mcp: 道具は report_problem の1本だけ', () => {
-  it('initialize と tools/list: 道具は1本。未知の道具の tools/call と他の能力（資源・プロンプト）は拒否', async () => {
+describe('POST /mcp: 連携の鍵が見る道具は report_problem の1本だけ（読み取りの道具は account / operator だけ。app-mcp-read-tools.test.ts）', () => {
+  it('initialize と tools/list: 鍵の道具は1本。未知の道具の tools/call と他の能力（資源・プロンプト）は拒否', async () => {
     const app = buildApp();
     const { value } = await issue(app);
     const h = bearer(value);
