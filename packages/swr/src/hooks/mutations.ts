@@ -7,6 +7,8 @@ import { clipWithEllipsis } from '@alteroid/core/excerpt';
 
 import { ApiError, expectOk, unwrap, uploadAttachment, useApi } from '../api';
 import type {
+  AccessTokenInput,
+  AccessTokenIssued,
   AgentTokenView,
   AttachmentList,
   ApprovalSelection,
@@ -1243,6 +1245,35 @@ export function useRevokeIntegrationKey() {
         .POST('/integration-keys/{id}/revoke', { params: { path: { id } }, body: {} })
         .then(unwrap);
       await mutate(KEY.integrationKeys).catch(() => undefined);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+// 取り直しの失敗を発行の失敗にしない: 発行は済んでおり、投げると画面が「失敗した」と言って、人間が値を受け取れないまま作り直すことになる
+export function useIssueAccessToken() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (input: AccessTokenInput): Promise<AccessTokenIssued> => {
+      const issued = await api.api.POST('/access-tokens', { body: input }).then(unwrap);
+      await mutate(KEY.accessTokens).catch(() => undefined);
+      return issued;
+    },
+    [api, mutate],
+  );
+}
+
+export function useRevokeAccessToken() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .POST('/access-tokens/{id}/revoke', { params: { path: { id } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.accessTokens).catch(() => undefined);
       return result;
     },
     [api, mutate],

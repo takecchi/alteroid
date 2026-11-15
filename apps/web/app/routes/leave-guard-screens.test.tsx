@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { Providers, storeTestBaseUrl, TestDataRouter } from '~/test-support';
 
+import AccessTokens from './access-tokens';
 import EnvVars from './env-vars';
 import Inbox from './inbox';
 import Integrations from './integrations';
@@ -60,6 +61,12 @@ const SCREENS: { name: string; Screen: ComponentType; ready: RegExp; fill: () =>
   {
     name: '連携の発行',
     Screen: Integrations,
+    ready: /名前（見分けるための呼び名）/,
+    fill: () => write(/名前（見分けるための呼び名）/, 'CI'),
+  },
+  {
+    name: 'アクセストークンの発行',
+    Screen: AccessTokens,
     ready: /名前（見分けるための呼び名）/,
     fill: () => write(/名前（見分けるための呼び名）/, 'CI'),
   },

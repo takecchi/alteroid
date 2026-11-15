@@ -38,6 +38,7 @@ export const SETTINGS_TABS: readonly NavTab[] = [
   { to: '/usage', label: '利用状況' },
   { to: '/tokens', label: '認証トークン' },
   { to: '/access', label: 'アクセス許可' },
+  { to: '/access-tokens', label: 'アクセストークン' },
   { to: '/permissions', label: '許可（Bash）' },
   { to: '/env-vars', label: '環境変数' },
   { to: '/codex', label: 'Codex' },

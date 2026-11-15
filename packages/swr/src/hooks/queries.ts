@@ -135,6 +135,7 @@ export const KEY = {
   mcpServers: { type: 'mcpServers' } as const,
   plugins: { type: 'plugins' } as const,
   integrationKeys: { type: 'integrationKeys' } as const,
+  accessTokens: { type: 'accessTokens' } as const,
   permissionGrants: { type: 'permissionGrants' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
@@ -642,6 +643,14 @@ export function useProfile() {
 export function useIntegrationKeys() {
   const api = useApi();
   return useSWR(KEY.integrationKeys, () => api.api.GET('/integration-keys').then(unwrap));
+}
+
+// 再試行しない: 403（発行したトークンの資格）は何度やっても通らず、断られた事実が読み込み失敗に紛れるため
+export function useAccessTokens() {
+  const api = useApi();
+  return useSWR(KEY.accessTokens, () => api.api.GET('/access-tokens').then(unwrap), {
+    shouldRetryOnError: false,
+  });
 }
 
 // フォーカス・再接続で再取得しない: 値に鍵が入りうるので、画面が開いているあいだ勝手に何度も運ばせない

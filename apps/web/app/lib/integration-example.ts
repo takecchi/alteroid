@@ -13,10 +13,15 @@ export const REPORT_RATE_PER_MINUTE = 10;
 
 // 別の alteroid の「設定 — MCP サーバ」ページに貼る JSON（`.mcp.json` の `mcpServers` の中身と同じ形。packages/core の `mcpServersSchema` を通る）。
 // 他の例と違って値を埋める: 貼れる形にするのが目的で、値は発行の応答にしか無く、発行直後の画面（保存も再表示もしない）でだけ組み立てる
-export function mcpServerJson(origin: string | null, value: string): string {
+// 登録名を引数にする: アクセストークンの画面は `alteroid` を渡し、連携の鍵（`alteroid-report`）と同じクライアントに並べて入れられるようにするため。既定は報告用のまま（既存の呼び手の出力は変わらない）
+export function mcpServerJson(
+  origin: string | null,
+  value: string,
+  serverName: string = REPORT_SOURCE,
+): string {
   return JSON.stringify(
     {
-      [REPORT_SOURCE]: {
+      [serverName]: {
         type: 'http',
         url: `${origin ?? ORIGIN_PLACEHOLDER}/mcp`,
         headers: { Authorization: `Bearer ${value}` },

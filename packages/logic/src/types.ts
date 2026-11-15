@@ -151,6 +151,14 @@ export type InboxBacklog = Ok<paths['/inbox']['get']>;
 
 export type TopologySnapshotManager = TopologySnapshot['managers'][number];
 
+type AccessTokensState = Ok<paths['/access-tokens']['get']>;
+export type AccessTokenView = AccessTokensState['tokens'][number];
+export type AccessTokenKind = AccessTokenView['kind'];
+export type AccessTokenIssued = Ok<paths['/access-tokens']['post']>;
+export type AccessTokenInput = NonNullable<
+  paths['/access-tokens']['post']['requestBody']
+>['content']['application/json'];
+
 type IntegrationKeysState = Ok<paths['/integration-keys']['get']>;
 export type IntegrationKeyView = IntegrationKeysState['keys'][number];
 export type IntegrationKeyIssued = Ok<paths['/integration-keys']['post']>;
