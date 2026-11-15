@@ -57,6 +57,11 @@ import {
   integrationRevokeCommand,
 } from './integration.js';
 import {
+  accessTokenCreateCommand,
+  accessTokenListCommand,
+  accessTokenRevokeCommand,
+} from './access-token.js';
+import {
   mcpClearCommand,
   mcpEditCommand,
   mcpListCommand,
@@ -1354,6 +1359,61 @@ integrationCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (ids: string[], options: { yes?: boolean }) => {
     await integrationRemoveUnreadableCommand(ids, options);
+  });
+
+const accessTokenCommand = program
+  .command('access-token')
+  .description(
+    '別の環境へ渡すアクセストークン（read / full。API と MCP で使える）を一覧・発行・失効する（alteroid token は認証トークンのプールで別物）',
+  );
+
+accessTokenCommand
+  .command('list')
+  .description(
+    'アクセストークンを並べる（名前・種類・発行元・状態・期限・最終使用・指紋。値は出ない）',
+  )
+  .option('--account <id>', '対象のアカウント（実行環境の持ち主の資格では必須）')
+  .action(async (options: { account?: string }) => {
+    await accessTokenListCommand(options);
+  });
+
+accessTokenCommand
+  .command('create')
+  .addHelpText('after', HELP_EXAMPLES.accessTokenCreate)
+  .description('アクセストークンを発行する（値はこの1回だけ表示される）')
+  .requiredOption('--name <名前>', '見分けるための名前')
+  .option('--kind <read|full>', '種類（read: 読むだけ / full: ログインと同じ強さ）', 'read')
+  .option(
+    '--expires <日時か期間>',
+    '期限（例: 2027-01-01T00:00:00Z / 30d / 12h / never）。省略は 30 日。never は無期限',
+  )
+  .option('--account <id>', '発行先のアカウント（実行環境の持ち主の資格では必須）')
+  .option(
+    '--json',
+    '整形せず、デーモンが返した JSON（token と value）に MCP の JSON（mcp）を足して標準出力へ出す。警告は標準エラーへ（値はログに残さないこと）',
+  )
+  .action(
+    async (options: {
+      name: string;
+      kind?: string;
+      expires?: string;
+      account?: string;
+      json?: boolean;
+    }) => {
+      await accessTokenCreateCommand(options);
+    },
+  );
+
+accessTokenCommand
+  .command('revoke')
+  .description(
+    'アクセストークンを失効させる（取り消せない。既定で確認する。失効済みなら何もしない）',
+  )
+  .argument('<id>', 'トークンの id（alteroid access-token list で見る）')
+  .option('--account <id>', '対象のアカウント（実行環境の持ち主の資格では必須）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (id: string, options: { account?: string; yes?: boolean }) => {
+    await accessTokenRevokeCommand(id, options);
   });
 
 program

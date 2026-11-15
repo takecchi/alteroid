@@ -53,6 +53,8 @@ const {
   integrationRemoveUnreadableCommand,
   integrationRevokeCommand,
 } = await import('./integration.js');
+const { accessTokenCreateCommand, accessTokenListCommand, accessTokenRevokeCommand } =
+  await import('./access-token.js');
 const {
   profileClearCommand,
   profileEditCommand,
@@ -111,6 +113,8 @@ const writes: [string, () => Promise<void>][] = [
   ['integration create', () => integrationCreateCommand({ name: 'x', source: 'github' })],
   ['integration revoke', () => integrationRevokeCommand('k1')],
   ['integration remove-unreadable', () => integrationRemoveUnreadableCommand(['k1'])],
+  ['access-token create', () => accessTokenCreateCommand({ name: 'x' })],
+  ['access-token revoke', () => accessTokenRevokeCommand('t1')],
   ['profile set', () => profileSetCommand('foo', { file: '-' })],
   ['profile edit', () => profileEditCommand('foo')],
   ['profile rm', () => profileRemoveCommand('foo')],
@@ -144,6 +148,7 @@ const reads: [string, () => Promise<void>][] = [
   ['token list', () => tokenListCommand()],
   ['token policy（見るだけ）', () => tokenPolicyCommand(undefined)],
   ['integration list', () => integrationListCommand()],
+  ['access-token list', () => accessTokenListCommand()],
   ['profile list', () => profileListCommand()],
   ['profile status', () => profileStatusCommand()],
   ['codex status', () => codexStatusCommand()],

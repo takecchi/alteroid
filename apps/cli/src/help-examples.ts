@@ -138,6 +138,15 @@ export const HELP_EXAMPLES = {
     'alteroid integration create --name "CI" --source ci.main --json     # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
     'alteroid integration list                                             # 状態・最終使用を見る',
   ),
+  accessTokenCreate: examples(
+    'alteroid access-token create --name "別環境のクローン"                       # read・30 日（既定）',
+    'alteroid access-token create --name "別環境のクローン" --kind full --expires 90d',
+    'alteroid access-token create --name "CI" --expires never                   # 無期限は never と明示したときだけ',
+    'alteroid access-token create --name "CI" --account <id>                    # 実行環境の持ち主の資格で発行するときは --account が要る',
+    'alteroid access-token create --name "CI" --json                            # 値は標準出力の JSON（value）。警告は標準エラー。値をログに残さない',
+    'alteroid access-token list                                                 # 状態・最終使用を見る',
+    'alteroid access-token revoke <id>                                          # 確認してから失効（--yes で省く）',
+  ),
   tokenTry: examples(
     'alteroid token list                                    # id を確かめる',
     'alteroid token try <id>                                # いま試す。冷却中の鍵が通れば冷却を解く',
