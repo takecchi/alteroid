@@ -622,7 +622,7 @@ export async function diagnosticsPullCommand(
   const env = options.env ?? process.env;
   const now = options.now ?? Date.now();
   const url = resolvePullUrl(options.url, env);
-  // 診断の型は許可リストの全部（既定の3つ + http_timing）。許可リストの外は `narrowDiagnosticsTypes` が断る
+  // 診断の型は許可リストの全部（既定の型 + http_timing）。許可リストの外は `narrowDiagnosticsTypes` が断る
   const types = narrowDiagnosticsTypes([...JOURNAL_DIAGNOSTICS_TYPES].join(','));
   const window = resolveDiagnosticsWindow(options, now);
   const pageSize = resolvePageSize(options.pageSize);

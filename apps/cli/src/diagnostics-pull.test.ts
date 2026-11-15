@@ -4,6 +4,7 @@ import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 
 import { parseJournalJsonl } from '@alteroid/core';
+import { JOURNAL_DIAGNOSTICS_TYPES } from '@alteroid/core/journal-diagnostics-format';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -145,6 +146,19 @@ function defaultConfig(): Config {
       diagRow('d1', 1),
       diagRow('d2', 2, { note: `鍵 ${GITHUB} が混ざった` }),
       diagRow('d3', 3),
+      {
+        type: 'turn_input',
+        id: 'd4',
+        at: at(4),
+        kind: 'normal',
+        triggers: ['manager_message'],
+        totalChars: 120,
+        bodyChars: 100,
+        humanActionsChars: 0,
+        freshMemoryChars: 0,
+        notices: { situation: 20 },
+        signals: [{ kind: 'manager_message', managerId: 'm1', chars: 100 }],
+      },
     ],
     exchanges: [
       exchangeRow('e1', 1, 'manager', `依頼 ${GITHUB} です`),
@@ -304,12 +318,11 @@ describe('diagnostics pull: 全部取れる', () => {
     const journal = server.seen.find(
       (r) => r.path === '/journal' && r.query['type'] !== 'exchange',
     );
-    expect((journal?.query['type'] ?? '').split(',').sort()).toEqual([
-      'context_usage',
-      'http_timing',
-      'turn_timing',
-      'turn_usage',
-    ]);
+    expect((journal?.query['type'] ?? '').split(',').sort()).toEqual(
+      [...JOURNAL_DIAGNOSTICS_TYPES].sort(),
+    );
+    expect(journal?.query['type']).toContain('turn_input');
+    expect(journal?.query['type']).toContain('http_timing');
     expect(journal?.query['since']).toBe('2026-11-13T00:00:00.000Z');
     expect(journal?.query['until']).toBe('2026-11-14T00:00:00.000Z');
     expect(journal?.query['order']).toBe('asc');
@@ -336,7 +349,7 @@ describe('diagnostics pull: 全部取れる', () => {
       since: '2026-11-13T00:00:00.000Z',
       until: '2026-11-14T00:00:00.000Z',
     });
-    expect(manifest.files['journal.jsonl']?.rows).toBe(3);
+    expect(manifest.files['journal.jsonl']?.rows).toBe(4);
     expect(manifest.files['exchanges.jsonl']?.rows).toBe(3);
     expect(manifest.files['journal.jsonl']?.bytes).toBe(
       Buffer.byteLength(await readOut('journal.jsonl')),
@@ -358,7 +371,9 @@ describe('diagnostics pull: 既存の analyze に食わせられる', () => {
 
     const parsed = parseJournalJsonl(await readOut('journal.jsonl'));
     expect(parsed.invalidLines).toBe(0);
-    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows).toHaveLength(4);
+    // 診断の新しい型（turn_input）も保存され、既存の読み手が読める
+    expect(parsed.rows.map((r) => r.type)).toContain('turn_input');
 
     await diagnosticsAnalyzeCommand({
       journal: out('journal.jsonl'),
@@ -404,10 +419,10 @@ describe('diagnostics pull: 会話（exchange）', () => {
 
   it('行数の上限で止め、黙って切らずに truncated に記録する（失敗ではなく警告: 終了コード 0）', async () => {
     const server = await start();
-    const manifest = await pull(server, { pageSize: '2', limits: { maxRows: 3 } });
+    const manifest = await pull(server, { pageSize: '2', limits: { maxRows: 4 } });
     expect(linesOf(await readOut('exchanges.jsonl'))).toHaveLength(2);
     expect(manifest.truncated).toEqual([
-      expect.objectContaining({ part: 'exchanges', reason: 'rows', limit: 3 }),
+      expect.objectContaining({ part: 'exchanges', reason: 'rows', limit: 4 }),
     ]);
     expect(manifest.failures).toEqual([]);
     expect(process.exitCode).toBeUndefined();
