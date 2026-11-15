@@ -84,6 +84,8 @@ interface SignalObservation {
   kind: string;
   managerId?: string;
   chars: number;
+  /** 本文に中身が出なかった合図だけ `false`。出た合図は欄を持たない（既存の行と同じ形）。 */
+  rendered?: false;
 }
 
 /**
@@ -154,6 +156,11 @@ export interface TurnInputObservation {
   conversationId: string | null;
   /** このターンの束（`turn_timing` の `triggers` と同じ出どころ）。 */
   batch: readonly InboxEvent[];
+  /**
+   * 束の本文に中身が出なかった合図の id。束の本文を組む関数（`externalBatchUnrenderedIds`・`managerReportBatchRender`）が決めた値を受け取る。
+   * ここで同一判定や予算の判定を再計算しない: 本文を組む側とずれるため。無ければ全件が本文に出たものとして数える。
+   */
+  unrenderedEventIds?: ReadonlySet<string>;
   /** `composeTurnInputText` へ渡した欄（本文を含む）。 */
   composed: TurnInputText;
   /** `composeTurnInputText` の出力・`withHumanActions` の出力・`withFreshMemory` の出力（実際に渡した入力）の長さ。 */
@@ -167,17 +174,25 @@ function measureBody(observation: TurnInputObservation) {
   const { composed, batch } = observation;
   const body = composed.body;
   const signalTexts = batch.map((event) => signalTextOf(event, body, batch.length));
+  const isRendered = (event: InboxEvent): boolean =>
+    !(observation.unrenderedEventIds?.has(event.id) ?? false);
   const allSignals: SignalObservation[] = batch.map((event, index) => ({
     kind: signalKindOf(event),
     ...(event.type === 'manager_message' ? { managerId: event.managerId } : {}),
     chars: signalTexts[index]?.length ?? 0,
+    ...(isRendered(event) ? {} : { rendered: false as const }),
   }));
-  const templates = countTemplateChars(
-    body,
-    signalTexts.filter((text): text is string => text !== undefined),
-  );
+  // 本文に出なかった合図は、本文の内訳（合図の本文の中の定型・合図の字数）から外す。`signals[].chars` には切る前の長さを残す
+  const renderedTexts = batch.flatMap((event, index) => {
+    const text = signalTexts[index];
+    return text !== undefined && isRendered(event) ? [text] : [];
+  });
+  const templates = countTemplateChars(body, renderedTexts);
   const templateChars = Object.values(templates).reduce((sum, chars) => sum + chars, 0);
-  const signalChars = allSignals.reduce((sum, signal) => sum + signal.chars, 0);
+  const signalChars = allSignals.reduce(
+    (sum, signal) => sum + (signal.rendered === false ? 0 : signal.chars),
+    0,
+  );
   return { bodyChars: body.length, allSignals, templates, templateChars, signalChars };
 }
 

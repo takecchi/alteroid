@@ -417,8 +417,23 @@ export function managerReportBatchPrompt(
   attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
   bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
 ): string {
+  return managerReportBatchRender(events, origin, now, attachmentLinesOf, bodyLimit).prompt;
+}
+
+/**
+ * `managerReportBatchPrompt` の本文に加えて、予算で本文を省いた報告の id を返す（観測 `turn_input` が「本文に出なかった合図」を数え直さずに受け取るため）。
+ * 省くのは古い側から `rest` 件（`renderListingFromEnd`）。
+ */
+export function managerReportBatchRender(
+  events: ManagerReportMessage[],
+  origin: ManagerOrigin,
+  now: Date,
+  attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
+  bodyLimit: number = MANAGER_REPORT_BODY_LIMIT,
+): { prompt: string; unrenderedIds: string[] } {
   const head = events[0];
-  if (head === undefined) return '';
+  if (head === undefined) return { prompt: '', unrenderedIds: [] };
+  let omittedCount = 0;
 
   const items = events.map((event, index) => {
     const attachmentLines = attachmentLinesOf.get(event.id) ?? [];
@@ -430,7 +445,7 @@ export function managerReportBatchPrompt(
     ].join('\n');
   });
 
-  return [
+  const prompt = [
     `[system] マネージャー ${head.managerId} から届いた報告を、処理待ちのあいだに続けて **${events.length} 件** まとめて渡す（要約していない）。`,
     '**まとめて読んでから答えよ。** 後の報告が前の報告を補足・訂正していることがある。**最後まで読んでから判断すること。**',
     '',
@@ -438,16 +453,37 @@ export function managerReportBatchPrompt(
     '',
     renderListingFromEnd(items, {
       budget: MANAGER_REPORT_BATCH_BODY_BUDGET,
-      omitted: ({ rest, shown, total }) =>
-        `⚠ 本文の合計が文字数の予算（${MANAGER_REPORT_BATCH_BODY_BUDGET.toLocaleString('en-US')} 文字）に` +
-        `当たったので、古い ${rest} 件（${total} 件中、新しい ${shown} 件だけを本文つきで出した）は本文を省いた。` +
-        ` ${managerReportRetrievalHint(head)}`,
+      omitted: ({ rest, shown, total }) => {
+        omittedCount = rest;
+        return (
+          `⚠ 本文の合計が文字数の予算（${MANAGER_REPORT_BATCH_BODY_BUDGET.toLocaleString('en-US')} 文字）に` +
+          `当たったので、古い ${rest} 件（${total} 件中、新しい ${shown} 件だけを本文つきで出した）は本文を省いた。` +
+          ` ${managerReportRetrievalHint(head)}`
+        );
+      },
     }),
     '',
     describeManagerOrigin(origin),
     '',
     BATCH_REPORT_FOLLOW_UP_GUIDE,
   ].join('\n');
+  return {
+    prompt,
+    unrenderedIds: events.slice(0, omittedCount).map((event) => event.id),
+  };
+}
+
+/** 外部イベントの束で、中身（payload）を本文に出す1件。`externalBatchPrompt` と観測（`externalBatchUnrenderedIds`）が同じ答えを使う。 */
+export function externalBatchRenderedEvent(
+  events: readonly ExternalEvent[],
+): ExternalEvent | undefined {
+  return events[0];
+}
+
+/** 外部イベントの束で、中身が本文に出なかった件の id（束の中の同一内容の2件目以降）。 */
+export function externalBatchUnrenderedIds(events: readonly ExternalEvent[]): string[] {
+  const rendered = externalBatchRenderedEvent(events);
+  return events.filter((event) => event !== rendered).map((event) => event.id);
 }
 
 /**
@@ -460,7 +496,7 @@ export function externalBatchPrompt(
   events: ExternalEvent[],
   attachmentNoticeLines: readonly string[] = [],
 ): string {
-  const head = events[0];
+  const head = externalBatchRenderedEvent(events);
   if (head === undefined) return '';
 
   const body = renderPayload(head.payload, head.at, head.attachments, head.source);

@@ -4,7 +4,14 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
-import { REPORT_FOLLOW_UP_GUIDE } from './clone-batch-prompts.js';
+import {
+  externalBatchPrompt,
+  externalBatchUnrenderedIds,
+  managerReportBatchRender,
+  REPORT_FOLLOW_UP_GUIDE,
+  type ExternalEvent,
+  type ManagerReportMessage,
+} from './clone-batch-prompts.js';
 import { setup, waitFor, waitForDone } from './clone-test-harness.js';
 import { DENIAL_REPLY_ROUTE } from './denial-key.js';
 import { EXTERNAL_EVENT_FRAMING, externalEventInstruction } from './prompt.js';
@@ -167,6 +174,41 @@ describe('turn_input（ターンの入力の内訳）', () => {
     await s.clone.stop();
   });
 
+  it('同じ中身の external の束を clone に通すと、2件目以降は rendered: false で、枠組みは丸めを経ない', async () => {
+    const stores = createMemoryStores();
+    const s = setup(undefined, stores);
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => inputsOf(s).length === 1, '先客のターンが投げられる');
+    const payload = { deploy: 'ok', detail: '同じ中身' };
+    for (const id of ['x1', 'x2', 'x3']) {
+      s.clone.post({
+        type: 'external',
+        id,
+        at: new Date().toISOString(),
+        source: 'webhook',
+        payload,
+      } as InboxEvent);
+    }
+    await waitFor(
+      async () => (await stores.inbox.claimPending()).length === 0,
+      '全件が消し込まれる',
+    );
+    await waitFor(async () => (await rows(stores)).length === inputsOf(s).length, '行が揃う');
+
+    const batchRow = (await rows(stores)).find((row) => row.signals.length === 3);
+    const chars = JSON.stringify(payload, null, 2).length;
+    expect(batchRow?.signals).toEqual([
+      { kind: 'external', chars },
+      { kind: 'external', chars, rendered: false },
+      { kind: 'external', chars, rendered: false },
+    ]);
+    expect(chars + sum(batchRow?.templates ?? {}) + batchRow!.framingChars).toBe(
+      batchRow?.bodyChars,
+    );
+    expect(batchRow!.framingChars).toBeGreaterThan(0);
+    await s.clone.stop();
+  });
+
   it('束ねたターン・複数のターンでも、行ごとの合計が実際の入力と一致する', async () => {
     const stores = createMemoryStores();
     const s = setup(undefined, stores);
@@ -251,7 +293,8 @@ describe('buildTurnInputEntry', () => {
     // 合図は20件以内の試験だけで使う（省いた分は `signals` に載らない）
     expect(entry.signalsOmitted).toBeUndefined();
     expect(
-      entry.signals.reduce((total, s) => total + s.chars, 0) +
+      // 本文に出なかった合図（rendered: false）は本文の内訳に入らない
+      entry.signals.reduce((total, s) => total + (s.rendered === false ? 0 : s.chars), 0) +
         sum(entry.templates ?? {}) +
         entry.framingChars,
     ).toBe(entry.bodyChars);
@@ -319,6 +362,106 @@ describe('buildTurnInputEntry', () => {
       EXTERNAL_EVENT_FRAMING: EXTERNAL_EVENT_FRAMING.length,
       EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction().length,
     });
+    expectBodyPartition(entry);
+    expect(turnInputShortfallChars(observation)).toBe(0);
+  });
+
+  // 同じ中身の external の束は、中身を本文に1回だけ出す（`externalBatchPrompt`）。2件目以降は signals に chars を持つが本文には出ない
+  const externalEvent = (id: string, payload: string): ExternalEvent => ({
+    type: 'external',
+    id,
+    at: '2026-11-15T00:00:00.000Z',
+    source: 'webhook',
+    payload,
+  });
+
+  it.each([2, 3])(
+    '同じ中身の external の束（%i 件）: 本文に出ない件の字数は枠組みから引かない',
+    (count) => {
+      const payload = '{"deploy":"ok"}';
+      const events = Array.from({ length: count }, (_, index) =>
+        externalEvent(`x${String(index)}`, payload),
+      );
+      const body = `HEAD\n${EXTERNAL_EVENT_FRAMING}\n${payload}\n${externalEventInstruction()}\nTAIL`;
+      const observation = {
+        ...observe(events[0]!, body),
+        batch: events,
+        unrenderedEventIds: new Set(externalBatchUnrenderedIds(events)),
+      };
+      const entry = buildTurnInputEntry(observation);
+
+      expect(entry.signals).toEqual(
+        events.map((_, index) => ({
+          kind: 'external',
+          chars: payload.length,
+          ...(index === 0 ? {} : { rendered: false }),
+        })),
+      );
+      expect(entry.templates).toEqual({
+        EXTERNAL_EVENT_FRAMING: EXTERNAL_EVENT_FRAMING.length,
+        EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction().length,
+      });
+      // 'HEAD\n'（5字）+ framing 直後の '\n'（1字）+ instruction 直前の '\n'（1字）+ '\nTAIL'（5字）
+      expect(entry.framingChars).toBe(12);
+      expectBodyPartition(entry);
+      expect(turnInputShortfallChars(observation)).toBe(0);
+    },
+  );
+
+  it.each([2, 3])(
+    'externalBatchPrompt が組んだ本文でも、%i 件の束の内訳が本文と一致する',
+    (count) => {
+      const payload = '{"deploy":"ok","detail":"同じ中身"}';
+      const events = Array.from({ length: count }, (_, index) =>
+        externalEvent(`x${String(index)}`, payload),
+      );
+      const body = externalBatchPrompt(events);
+      const observation = {
+        ...observe(events[0]!, body),
+        batch: events,
+        unrenderedEventIds: new Set(externalBatchUnrenderedIds(events)),
+      };
+      const entry = buildTurnInputEntry(observation);
+
+      // 中身は本文に1回だけ出る。件数が増えても枠組みの字数は変わらない（2件・3件で同じ値）
+      expect(entry.framingChars).toBe(
+        body.length -
+          payload.length -
+          EXTERNAL_EVENT_FRAMING.length -
+          externalEventInstruction().length,
+      );
+      expectBodyPartition(entry);
+      expect(turnInputShortfallChars(observation)).toBe(0);
+    },
+  );
+
+  it('同じ担当の報告の束が予算で古い側の本文を省いたとき、省いた件は rendered: false で枠組みから引かない', () => {
+    const reports = Array.from(
+      { length: 4 },
+      (_, index) =>
+        managerMessage(`r${String(index)}`, 'report', 'x'.repeat(15_000)) as ManagerReportMessage,
+    );
+    const { prompt, unrenderedIds } = managerReportBatchRender(
+      reports,
+      { kind: 'missing', conversationId: null },
+      new Date('2026-11-15T00:00:00.000Z'),
+      new Map(),
+      20_000,
+    );
+    expect(unrenderedIds).toEqual(['r0']);
+    const observation = {
+      ...observe(reports[0]!, prompt),
+      batch: reports,
+      unrenderedEventIds: new Set(unrenderedIds),
+    };
+    const entry = buildTurnInputEntry(observation);
+
+    expect(entry.signals.map((signal) => signal.rendered)).toEqual([
+      false,
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expectBodyPartition(entry);
     expect(turnInputShortfallChars(observation)).toBe(0);
   });

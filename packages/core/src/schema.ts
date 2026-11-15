@@ -734,17 +734,23 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // `notices.situation` の中身の行ごとの長さ（和が `notices.situation` に一致する）。組めなかった回は持たない
     situationParts: z.record(z.string(), z.number().int().nonnegative()).optional(),
     // このターンの入力になった合図ごとの、元の本文（`MANAGER_REPORT_BODY_LIMIT` で切る前）の長さ。先頭 `TURN_INPUT_SIGNALS_LIMIT` 件だけ
+    // `chars` は本文に出た回数にかかわらず、その合図1件の切る前の長さ（束で同じ中身を1回しか出さなくても件数ぶん持つ）。
+    // `rendered: false` は、束の本文にその合図の中身が出なかったことを表す（同じ中身の external の束の2件目以降・予算で本文を省いた古い報告）。出た合図は欄を持たない。
+    // 欄を持たない古い行は「全件が本文に出た」と読む。`framingChars` は `rendered: false` の `chars` を引かない
     signals: z.array(
       z.object({
         kind: z.string(),
         managerId: z.string().optional(),
         chars: z.number().int().nonnegative(),
+        rendered: z.literal(false).optional(),
       }),
     ),
     signalsOmitted: z.number().int().positive().optional(),
-    // 本文の中に定型の注記が何文字入っているか（定数の識別子名 → 出現回数 × 定数の長さ。0 は省く）
+    // 本文のうち、合図の本文の外にある定型の注記の文字数（定数の識別子名 → 出現回数 × 定数の長さ。0 は省く）。
+    // 合図の本文の中にある固定文面は数えない: 拒否の知らせ・拒否の許可確認の固定文面（`DENIAL_*`）は合図の本文の一部で `signals[].chars` に入るため、ここには出ない
     templates: z.record(z.string(), z.number().int().nonnegative()).optional(),
-    // 導出値: bodyChars − Σsignals.chars（省いた分も含む）− Σtemplates（下限 0）。切り詰めがあると小さく出る
+    // 導出値: bodyChars − Σ（`rendered: false` でない signals の chars。省いた分も含む）− Σtemplates、を 0 で下から丸めた値。
+    // 本文に出なかった合図は引かない。切り詰め（長い報告の頭だけ・束の予算・外部イベントの上限）で切る前の合図が本文を超えると丸めが起き、丸めた量は `turnInputShortfallChars`（`turn-input-observation.ts`）で取れる（この行には持たない）
     framingChars: z.number().int().nonnegative(),
     // そのターンで解決して渡した添付（画像・ファイルなど）の件数
     attachments: z.number().int().nonnegative(),
