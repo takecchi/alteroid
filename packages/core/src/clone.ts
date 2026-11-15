@@ -73,8 +73,9 @@ import {
   humanTurnText,
   isManagerReport,
   managerPrompt,
-  managerReportBatchPrompt,
+  managerReportBatchRender,
   externalBatchPrompt,
+  externalBatchUnrenderedIds,
   mixedSignalBatchPrompt,
   MANAGER_REPORT_BODY_LIMIT,
   payloadText,
@@ -904,7 +905,12 @@ class Clone implements CloneHost {
    * いま処理中か」を同期で引くための控えで、待ち行列にも `#deferred` にも居ない区間を埋める。
    * `started` はターンが一度でも始まったか（始まる前の準備中と、終わった後の後始末を分ける）。
    */
-  #inFlight: { readonly events: readonly InboxEvent[]; started: boolean } | null = null;
+  #inFlight: {
+    readonly events: readonly InboxEvent[];
+    started: boolean;
+    /** 束の本文に中身が出なかった合図の id（`turn_input` の `signals[].rendered: false`）。束の本文を組む関数が返した値を、`#runExternalBatch` などが置く。 */
+    unrenderedIds?: ReadonlySet<string>;
+  } | null = null;
   /** このターンの `notices.situation` の行ごとの長さ（`turn_input` の `situationParts`）。`#prepareTurn` が置き、`#settleTurn` が下ろす。 */
   #turnSituationParts: Record<string, number> | undefined = undefined;
   /**
@@ -2186,14 +2192,21 @@ class Clone implements CloneHost {
       : undefined;
     // 束の先頭だけで引く: 束ねるのは同じ `managerId` の報告だけ（`CloneBatchMerge.mergedManagerReportBatch`）なので、起点も1つに決まるため
     const origin = await this.#managerOrigin(events[0]?.managerId);
-    const prompt = managerReportBatchPrompt(
+    const { prompt, unrenderedIds } = managerReportBatchRender(
       events,
       origin,
       new Date(),
       attached?.linesOf,
       this.#reportBodyLimit(),
     );
+    this.#noteUnrenderedSignals(unrenderedIds);
     await this.#runInternal(prompt, 'normal', attached?.images, origin.conversationId);
+  }
+
+  // 観測（`turn_input`）へ渡す: 本文に出なかった件は、束の本文を組む関数が決める。観測の側で同一判定を再計算するとずれるため
+  #noteUnrenderedSignals(ids: readonly string[]): void {
+    if (this.#inFlight === null || ids.length === 0) return;
+    this.#inFlight.unrenderedIds = new Set(ids);
   }
 
   // `#handle` の `'external'` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記が抜けて能力の削除になるため
@@ -2204,6 +2217,7 @@ class Clone implements CloneHost {
     }
 
     const attached = await this.#resolveExternalAttachments(events);
+    this.#noteUnrenderedSignals(externalBatchUnrenderedIds(events));
     await this.#runInternal(
       externalBatchPrompt(events, attached.noticeLines),
       'normal',
@@ -3902,6 +3916,9 @@ class Clone implements CloneHost {
         kind,
         conversationId,
         batch: this.#inFlight?.events ?? [],
+        ...(this.#inFlight?.unrenderedIds === undefined
+          ? {}
+          : { unrenderedEventIds: this.#inFlight.unrenderedIds }),
         composed,
         lengths: {
           composed: composedText.length,

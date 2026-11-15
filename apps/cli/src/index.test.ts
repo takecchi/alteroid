@@ -405,15 +405,18 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     return command.commands.map((c) => c.name()).sort();
   }
 
-  it('alteroid diagnostics は export と analyze を持ち、analyze は日誌・台帳・時間帯を受ける', () => {
-    expect(subcommandNames('diagnostics')).toEqual(['analyze', 'export']);
+  it('alteroid diagnostics は export・analyze・pull を持ち、analyze は日誌・台帳・会話・プロンプト・pull の出力ディレクトリ・時間帯を受ける', () => {
+    expect(subcommandNames('diagnostics')).toEqual(['analyze', 'export', 'pull']);
     const analyzeCommand = program.commands
       .find((c) => c.name() === 'diagnostics')
       ?.commands.find((c) => c.name() === 'analyze');
     expect((analyzeCommand?.options ?? []).map((o) => o.long).sort()).toEqual([
+      '--dir',
+      '--exchanges',
       '--journal',
       '--json',
       '--ledger-tz',
+      '--prompt',
       '--top',
       '--usage',
     ]);
@@ -424,6 +427,19 @@ describe('サブコマンドの登録（入口が在ること）', () => {
       '--since',
       '--type',
       '--until',
+    ]);
+    // pull は資格の値を引数で受けない（--token-file はパスだけ）。--no-* は既定で取る側の否定形
+    const pullCommand = diagnostics?.commands.find((c) => c.name() === 'pull');
+    expect((pullCommand?.options ?? []).map((o) => o.long).sort()).toEqual([
+      '--json',
+      '--no-exchanges',
+      '--no-memory',
+      '--out',
+      '--page-size',
+      '--since',
+      '--token-file',
+      '--until',
+      '--url',
     ]);
   });
 

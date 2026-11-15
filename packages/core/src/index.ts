@@ -26,6 +26,28 @@ export * from './usage.js';
 // 診断の日誌と台帳の集計（純関数。zod を持ち込まない）。`apps/web` は値で import できないバレルからだけ出す
 export * from './diagnostics-analysis.js';
 export { describeTimeZone, renderDiagnosticsAnalysis } from './diagnostics-analysis-format.js';
+// クローンとマネージャーの会話・ターンの入力の分析（`diagnostics analyze` の節）。純関数と整形を分ける
+export {
+  analyzeConversation,
+  type AnalyzeConversationInput,
+  type ConversationAnalysis,
+  type ConversationExchangesInput,
+  type ConversationManifestInput,
+} from './diagnostics-conversation-analysis.js';
+export {
+  renderConversationAnalysis,
+  renderConversationCoverage,
+} from './diagnostics-conversation-format.js';
+// `pull` が保存した prompt.json（`GET /self/prompt` の応答）の大きさの分析（`diagnostics analyze --prompt`）。文字数と SDK 実測トークンを混ぜない
+export {
+  analyzePrompt,
+  PROMPT_NO_REMOVAL_NOTE,
+  splitSystemPromptSections,
+  type AnalyzePromptInput,
+  type PromptAnalysis,
+} from './diagnostics-prompt-analysis.js';
+export { renderPromptAnalysis } from './diagnostics-prompt-format.js';
+export { parsePromptJson, type PromptInput } from './diagnostics-prompt-input.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
 export {
   accountUsageStateSchema,

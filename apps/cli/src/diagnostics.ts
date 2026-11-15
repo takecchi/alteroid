@@ -98,7 +98,7 @@ export function resolveDiagnosticsWindow(
   return { since: new Date(sinceMs).toISOString(), until: new Date(untilMs).toISOString() };
 }
 
-function resolvePageSize(raw: string | undefined): number {
+export function resolvePageSize(raw: string | undefined): number {
   if (raw === undefined) return PAGE_SIZE_DEFAULT;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > PAGE_SIZE_MAX) {

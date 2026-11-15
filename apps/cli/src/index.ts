@@ -23,6 +23,8 @@ import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
 import { describeSessionRefusalLine } from './session-refusal.js';
+import { REMOTE_URL_ENV } from './target.js';
+import { TOKEN_FILE_ENV } from './token-file.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -355,10 +357,22 @@ diagnosticsCommand
   .command('analyze')
   .addHelpText('after', HELP_EXAMPLES.diagnosticsAnalyze)
   .description(
-    '`diagnostics export` の出力（と任意で `usage --json` の出力）を読み、キャッシュ・起点・プロンプトの大きさ・数え直しなどの事実を並べる（ファイルを読むだけ。通信しない。原因は断定しない）',
+    '`diagnostics export` / `diagnostics pull` の出力（と任意で `usage --json` の出力・マネージャーとの会話）を読み、キャッシュ・起点・プロンプトの大きさ・数え直し・ターンの入力の重さ・クローンとマネージャーの会話の大きさなどの事実を並べる（ファイルを読むだけ。通信しない。原因は断定しない）',
   )
-  .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
+  .option('--journal <file>', '`diagnostics export` の出力（JSONL）。--dir があれば省ける')
   .option('--usage <file>', '`usage --json` の出力（任意。日誌が主で、台帳は従）')
+  .option(
+    '--exchanges <file>',
+    '`diagnostics pull` の exchanges.jsonl（任意。クローンとマネージャーの会話の分析を出す。無ければその節は「入力が無い」）',
+  )
+  .option(
+    '--prompt <file>',
+    '`diagnostics pull` の prompt.json（任意。クローンが毎ターン払っているプロンプトの大きさの分析を出す。無い・読めないときはその節に理由を書く）',
+  )
+  .option(
+    '--dir <dir>',
+    '`diagnostics pull` の出力ディレクトリ（任意。journal.jsonl・usage.json・exchanges.jsonl・manifest.json・prompt.json を既定の名前で読む。個別の旗が優先）',
+  )
   .option(
     '--ledger-tz <iana>',
     '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う。無ければ日別を並べない）',
@@ -369,6 +383,9 @@ diagnosticsCommand
     async (options: {
       journal?: string;
       usage?: string;
+      exchanges?: string;
+      prompt?: string;
+      dir?: string;
       ledgerTz?: string;
       top?: string;
       json?: boolean;
@@ -393,6 +410,50 @@ diagnosticsCommand
   .action(async (options: { type?: string; since?: string; until?: string; pageSize?: string }) => {
     await (await import('./diagnostics.js')).diagnosticsExportCommand(options);
   });
+
+diagnosticsCommand
+  .command('pull')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsPull)
+  .description(
+    '別の alteroid から、消費の分析に要るもの（台帳・日誌の診断行・焼いたプロンプト・記憶の本文・マネージャーとの会話）をディレクトリへ取ってくる。' +
+      '鍵らしい値は伏せて書く。出力は `diagnostics analyze --dir <出力先>` にそのまま渡せる（会話の分析も出る）',
+  )
+  .option(
+    '--url <origin>',
+    `向こうの origin（${REMOTE_URL_ENV} でも指定できる。どちらも無ければ断る）`,
+  )
+  .option(
+    '--out <dir>',
+    '出力先（既定 ./diagnostics-pull-<host>-<UTC 時刻>。空でなければ断る。上書きしない）',
+  )
+  .option('--since <iso>', '窓の始点（ISO 8601 か相対。省略すると終点の 1 日前）')
+  .option(
+    '--until <iso>',
+    '窓の終点（ISO 8601。省略すると今、--since だけなら 1 日後。窓は最大 7 日）',
+  )
+  .option('--no-memory', '記憶の本文を取らない')
+  .option('--no-exchanges', 'マネージャーとの会話（exchange）を取らない')
+  .option(
+    '--token-file <path>',
+    `向こうのアクセストークンを書いたファイルのパス（値を引数で渡さない。${TOKEN_FILE_ENV} にもパスだけ置ける。chmod 600）`,
+  )
+  .option('--page-size <n>', '1 頁に読む行数（1〜1000。既定 500）')
+  .option('--json', '取得の記録（manifest）を JSON で標準出力へ出す')
+  .action(
+    async (options: {
+      url?: string;
+      out?: string;
+      since?: string;
+      until?: string;
+      memory?: boolean;
+      exchanges?: boolean;
+      tokenFile?: string;
+      pageSize?: string;
+      json?: boolean;
+    }) => {
+      await (await import('./diagnostics-pull.js')).diagnosticsPullCommand(options);
+    },
+  );
 
 const runnersProgram = program
   .command('runners')
