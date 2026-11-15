@@ -7,7 +7,10 @@ import {
   ORIGIN_TASK_GUIDE,
   REPORT_FOLLOW_UP_GUIDE,
 } from './clone-batch-prompts.js';
-import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE } from './classifier-denial-streak.js';
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { DENIAL_REPLY_ROUTE } from './denial-key.js';
 import {
   CONVERSATION_KINDS,
@@ -172,6 +175,7 @@ export interface MeasuredSection {
     turnsWithSituation: number;
     turnsWithParts: number;
     situationChars: number;
+    situationCharsWithParts: number;
     parts: Array<{
       key: string;
       chars: number;
@@ -280,7 +284,13 @@ export interface ExchangesSection {
   /** 日誌の本文に残っている定型（本文の字面から数えた。プロンプト組み立て時に足される注記は含まない） */
   templatesInText: {
     deliveredChars: number;
-    denialRoute: { rows: number; occurrences: number; chars: number; shareOfDelivered: number | null; shareOfDenialRows: number | null };
+    denialRoute: {
+      rows: number;
+      occurrences: number;
+      chars: number;
+      shareOfDelivered: number | null;
+      shareOfDenialRows: number | null;
+    };
     denialAskAfterAnswer: { rows: number; chars: number; shareOfDelivered: number | null };
     notes: NoteShare[];
   };
@@ -372,8 +382,7 @@ export interface ConversationAnalysis {
 }
 
 export type ConversationExchangesInput =
-  | { state: 'none'; reason: string }
-  | { state: 'read'; parsed: ParsedJournal };
+  { state: 'none'; reason: string } | { state: 'read'; parsed: ParsedJournal };
 
 export type ConversationManifestInput =
   | { state: 'none'; reason: string }
@@ -401,7 +410,12 @@ export const MANAGER_SIGNAL_KINDS = [
   'denial_notice',
 ] as const;
 // 本文を持たない合図（束のとき `signals[].chars` が 0 で書かれ、長さが取れない）。同じ理由で書き手の定数が無い
-export const BODYLESS_SIGNAL_KINDS = ['timer', 'self_initiative', 'distill', 'daily_report'] as const;
+export const BODYLESS_SIGNAL_KINDS = [
+  'timer',
+  'self_initiative',
+  'distill',
+  'daily_report',
+] as const;
 // `signals[].chars` が 8000 を超えると頭だけがモデルに入るのは、報告系の合図だけ（質問・許可確認には上限が掛からない）
 const SIGNAL_KINDS_WITH_BODY_LIMIT: readonly string[] = ['manager_report', 'denial_notice'];
 
@@ -529,7 +543,8 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
         signalAcc.set(kind, acc);
         if ((MANAGER_SIGNAL_KINDS as readonly string[]).includes(kind)) {
           const managerId = safeKey(s.managerId, '(managerId なし)');
-          const byKind = managerAcc.get(managerId) ?? new Map<string, { count: number; chars: number }>();
+          const byKind =
+            managerAcc.get(managerId) ?? new Map<string, { count: number; chars: number }>();
           const cell = byKind.get(kind) ?? { count: 0, chars: 0 };
           cell.count += 1;
           cell.chars += chars ?? 0;
@@ -557,6 +572,7 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
   let turnsWithSituation = 0;
   let turnsWithParts = 0;
   let situationChars = 0;
+  let situationCharsWithParts = 0;
   for (const row of rows) {
     const s = noticeOf(row, 'situation') ?? 0;
     if (s === 0) continue;
@@ -564,6 +580,7 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
     situationChars += s;
     if (!isObj(row.raw.situationParts)) continue;
     turnsWithParts += 1;
+    situationCharsWithParts += s;
     for (const [k, v] of Object.entries(row.raw.situationParts)) {
       const n = num(v);
       if (n === undefined) continue;
@@ -631,12 +648,19 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
     unreadableRows: unreadable,
     total,
     byKind: groupDist(rows, (r) => [r.kind]),
-    byBundle: groupDist(rows, (r) => [r.triggers.length === 0 ? '(取れない)' : [...new Set(r.triggers)].sort().join('+')]),
-    bySingleTrigger: groupDist(rows, (r) => (r.triggers.length === 0 ? ['(取れない)'] : r.triggers)),
+    byBundle: groupDist(rows, (r) => [
+      r.triggers.length === 0 ? '(取れない)' : [...new Set(r.triggers)].sort().join('+'),
+    ]),
+    bySingleTrigger: groupDist(rows, (r) =>
+      r.triggers.length === 0 ? ['(取れない)'] : r.triggers,
+    ),
     occupancy: {
       totalCharsSum,
       situation,
-      notices: orderedNoticeKeys.map((key) => ({ key, ...shareRow(rows, (r) => noticeOf(r, key)) })),
+      notices: orderedNoticeKeys.map((key) => ({
+        key,
+        ...shareRow(rows, (r) => noticeOf(r, key)),
+      })),
       humanActions: shareRow(rows, (r) => num(r.raw.humanActionsChars)),
       freshMemory: shareRow(rows, (r) => num(r.raw.freshMemoryChars)),
       body: shareRow(rows, (r) => num(r.raw.bodyChars)),
@@ -651,6 +675,7 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
       turnsWithSituation,
       turnsWithParts,
       situationChars,
+      situationCharsWithParts,
       parts: [...parts.entries()]
         .map(([key, values]) => {
           const dist = conversationDistOf(values);
@@ -658,7 +683,8 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
             key,
             chars: dist.sum ?? 0,
             shareOfTotal: ratio(dist.sum ?? 0, totalCharsSum),
-            shareOfSituation: ratio(dist.sum ?? 0, situationChars),
+            // 内訳が組めたターンの situation だけを分母にする（内訳の無いターンの分を分母に入れると、内訳の合計が situation に届かなく見える）
+            shareOfSituation: ratio(dist.sum ?? 0, situationCharsWithParts),
             perTurnMedian: dist.median,
           };
         })
@@ -688,7 +714,11 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
           overLimit: acc.over,
         }))
         .sort((a, b) => a.kind.localeCompare(b.kind)),
-      byManager: { limit: topN, totalManagers: managerRows.length, rows: managerRows.slice(0, topN) },
+      byManager: {
+        limit: topN,
+        totalManagers: managerRows.length,
+        rows: managerRows.slice(0, topN),
+      },
       omitted: { rows: omittedRows, total: omittedTotal },
       missingChars,
       overLimitTotal: [...signalAcc.values()].reduce((a, s) => a + s.over, 0),
@@ -696,7 +726,10 @@ function measuredSection(rows: TurnRow[], unreadable: number, topN: number): Mea
     redelivery: {
       turns: rows.length,
       withNotice: redeliveryTurns,
-      share: redeliveryRead.rows.obtained === 0 ? null : ratio(redeliveryTurns, redeliveryRead.rows.obtained),
+      share:
+        redeliveryRead.rows.obtained === 0
+          ? null
+          : ratio(redeliveryTurns, redeliveryRead.rows.obtained),
       rows: redeliveryRead.rows,
     },
     attachments: {
@@ -773,11 +806,14 @@ function classifyExchanges(parsed: ParsedJournal): ExchangeRead {
   pending.sort((a, b) => a.atMs - b.atMs || a.index - b.index);
 
   // text の `[id]` は鍵にしない（スキーマの注意）。managerId 欄を持つ行で見えた id と一致したときだけ、欄の無い行（Pool 行・停止）の持ち主として引く
-  const knownIds = new Set(pending.flatMap((p) => (p.managerIdField === null ? [] : [p.managerIdField])));
+  const knownIds = new Set(
+    pending.flatMap((p) => (p.managerIdField === null ? [] : [p.managerIdField])),
+  );
   const seenAny = new Set<string>();
   const askPending = new Set<string>();
   const rows: Classified[] = pending.map((p) => {
-    const managerId = p.managerIdField ?? (p.tagId !== null && knownIds.has(p.tagId) ? p.tagId : null);
+    const managerId =
+      p.managerIdField ?? (p.tagId !== null && knownIds.has(p.tagId) ? p.tagId : null);
     // 順序の判定の鍵は text の id（同じ委譲の流れを追うため。表示の持ち主には managerId を使う）
     const flowId = p.tagId ?? p.managerIdField;
     let kind: ConversationKind;
@@ -838,11 +874,26 @@ function patternStats(items: TextIndicators[]): PatternStats {
     rowsWithToolResult: items.filter((i) => i.toolResultLines > 0).length,
     chars,
     lines,
-    fenceCharShare: ratio(sum((i) => i.fenceChars), chars),
-    pathLikeLineShare: ratio(sum((i) => i.pathLikeLines), lines),
-    stackLineShare: ratio(sum((i) => i.stackLines), lines),
-    errorLineShare: ratio(sum((i) => i.errorLines), lines),
-    toolResultLineShare: ratio(sum((i) => i.toolResultLines), lines),
+    fenceCharShare: ratio(
+      sum((i) => i.fenceChars),
+      chars,
+    ),
+    pathLikeLineShare: ratio(
+      sum((i) => i.pathLikeLines),
+      lines,
+    ),
+    stackLineShare: ratio(
+      sum((i) => i.stackLines),
+      lines,
+    ),
+    errorLineShare: ratio(
+      sum((i) => i.errorLines),
+      lines,
+    ),
+    toolResultLineShare: ratio(
+      sum((i) => i.toolResultLines),
+      lines,
+    ),
   };
 }
 
@@ -905,10 +956,14 @@ function exchangesSections(
       total: conversationDistOf(list.map((r) => r.chars)),
       byKind: CONVERSATION_KINDS.flatMap((kind) => {
         const of = list.filter((r) => r.kind === kind);
-        return of.length === 0 ? [] : [{ kind, count: of.length, chars: of.reduce((a, r) => a + r.chars, 0) }];
+        return of.length === 0
+          ? []
+          : [{ kind, count: of.length, chars: of.reduce((a, r) => a + r.chars, 0) }];
       }),
     }))
-    .sort((a, b) => (b.total.sum ?? 0) - (a.total.sum ?? 0) || a.managerId.localeCompare(b.managerId));
+    .sort(
+      (a, b) => (b.total.sum ?? 0) - (a.total.sum ?? 0) || a.managerId.localeCompare(b.managerId),
+    );
 
   // 上位の大きい文面（先頭だけ。表示の直前に伏せ字）
   const topRows = [...rows]
@@ -925,7 +980,10 @@ function exchangesSections(
 
   // 本文に残る定型
   const denialRows = rows.filter((r) => r.kind === 'denial_notice');
-  const denialOccurrences = delivery.reduce((a, r) => a + occurrencesOf(r.body, DENIAL_REPLY_ROUTE), 0);
+  const denialOccurrences = delivery.reduce(
+    (a, r) => a + occurrencesOf(r.body, DENIAL_REPLY_ROUTE),
+    0,
+  );
   const denialChars = denialOccurrences * DENIAL_REPLY_ROUTE.length;
   const askRows = delivery.filter(
     (r) =>
@@ -935,7 +993,8 @@ function exchangesSections(
   const askChars = delivery.reduce(
     (a, r) =>
       a +
-      occurrencesOf(r.body, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH) * DENIAL_ASK_AFTER_ANSWER_PARAGRAPH.length +
+      occurrencesOf(r.body, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH) *
+        DENIAL_ASK_AFTER_ANSWER_PARAGRAPH.length +
       occurrencesOf(r.body, DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE) *
         DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE.length,
     0,
@@ -1036,8 +1095,10 @@ function exchangesSections(
   const reportChars = new Map<string, number>();
   for (const r of rows) {
     if (r.managerId === null) continue;
-    if (r.kind === 'clone_request') requestChars.set(r.managerId, (requestChars.get(r.managerId) ?? 0) + r.chars);
-    if (REPORT_FAMILY_KINDS.includes(r.kind)) reportChars.set(r.managerId, (reportChars.get(r.managerId) ?? 0) + r.chars);
+    if (r.kind === 'clone_request')
+      requestChars.set(r.managerId, (requestChars.get(r.managerId) ?? 0) + r.chars);
+    if (REPORT_FAMILY_KINDS.includes(r.kind))
+      reportChars.set(r.managerId, (reportChars.get(r.managerId) ?? 0) + r.chars);
   }
   const both = [...requestChars.keys()].filter((id) => reportChars.has(id));
   const perDelegation = both.flatMap((id) => {
@@ -1144,7 +1205,9 @@ function estimateSection(
     if (t.kind === 'normal') measuredNormal.set(day, (measuredNormal.get(day) ?? 0) + 1);
     // 一覧の先頭 20 件より後の合図は kind が分からないので、省いた分も全部「報告だったかもしれない」として引く（二重に数えない側へ倒す）
     const signals = signalsOf(t) ?? [];
-    const listed = signals.filter((s) => ['manager_report', 'denial_notice'].includes(safeKey(s.kind))).length;
+    const listed = signals.filter((s) =>
+      ['manager_report', 'denial_notice'].includes(safeKey(s.kind)),
+    ).length;
     const omitted = num(t.raw.signalsOmitted) ?? 0;
     signalsReport.set(day, (signalsReport.get(day) ?? 0) + listed + omitted);
   }
@@ -1222,7 +1285,10 @@ function estimateSection(
       };
   return {
     state: 'read',
-    reason: timing.length === 0 ? 'turn_timing が無く、見積りに回すターンの数が取れない（配達の案内だけ見積もる）' : null,
+    reason:
+      timing.length === 0
+        ? 'turn_timing が無く、見積りに回すターンの数が取れない（配達の案内だけ見積もる）'
+        : null,
     constants,
     days: out,
     totals: {
@@ -1236,7 +1302,10 @@ function estimateSection(
 
 // ---- manifest / coverage ----
 
-function manifestSummary(input: ConversationManifestInput): ConversationManifestSummary {
+function manifestSummary(
+  input: ConversationManifestInput,
+  redact: (text: string) => string,
+): ConversationManifestSummary {
   const empty: ConversationManifestSummary = {
     state: 'none',
     reason: null,
@@ -1249,7 +1318,8 @@ function manifestSummary(input: ConversationManifestInput): ConversationManifest
   };
   if (input.state !== 'read') return { ...empty, state: input.state, reason: input.reason };
   const m = input.value;
-  if (!isObj(m)) return { ...empty, state: 'unreadable', reason: 'manifest.json がオブジェクトでない' };
+  if (!isObj(m))
+    return { ...empty, state: 'unreadable', reason: 'manifest.json がオブジェクトでない' };
   const window =
     isObj(m.window) && typeof m.window.since === 'string' && typeof m.window.until === 'string'
       ? { since: safeKey(m.window.since), until: safeKey(m.window.until) }
@@ -1259,7 +1329,10 @@ function manifestSummary(input: ConversationManifestInput): ConversationManifest
     reason: null,
     pulledAt: str(m.pulledAt) === undefined ? null : safeKey(m.pulledAt),
     window,
-    requestedExchanges: isObj(m.requested) && typeof m.requested.exchanges === 'boolean' ? m.requested.exchanges : null,
+    requestedExchanges:
+      isObj(m.requested) && typeof m.requested.exchanges === 'boolean'
+        ? m.requested.exchanges
+        : null,
     skippedNonManager: num(m.skippedNonManager) ?? null,
     truncated: Array.isArray(m.truncated)
       ? m.truncated.filter(isObj).map((t) => ({
@@ -1273,7 +1346,8 @@ function manifestSummary(input: ConversationManifestInput): ConversationManifest
       ? m.failures.filter(isObj).map((f) => ({
           part: safeKey(f.part),
           status: num(f.status) ?? null,
-          reason: safeKey(f.reason),
+          // 失敗の理由は自由文: 伏せ字を掛けてから切る（先に切ると鍵の断片が規則に当たらず残る）
+          reason: typeof f.reason === 'string' ? safeKey(redact(f.reason)) : '(取れない)',
         }))
       : [],
   };
@@ -1287,9 +1361,7 @@ function coverageOf(
   measured: MeasuredSection | null,
   redact: (text: string) => string,
 ): ConversationCoverage {
-  const manifest = manifestSummary(input.manifest);
-  // 失敗の理由は自由文なので、表示へ出す前に伏せ字を掛ける
-  manifest.failures = manifest.failures.map((f) => ({ ...f, reason: redact(f.reason) }));
+  const manifest = manifestSummary(input.manifest, redact);
   const journal = {
     rows: input.journal.rows.length,
     turnInputRows: turnRows + turnUnreadable,
@@ -1302,7 +1374,9 @@ function coverageOf(
     );
   }
   for (const f of manifest.failures) {
-    warnings.push(`pull の取得に失敗した（${f.part}${f.status === null ? '' : ` status=${f.status}`}: ${f.reason}）。この部分は取れていない`);
+    warnings.push(
+      `pull の取得に失敗した（${f.part}${f.status === null ? '' : ` status=${f.status}`}: ${f.reason}）。この部分は取れていない`,
+    );
   }
   if (manifest.requestedExchanges === false) {
     warnings.push('pull は --no-exchanges で取っている。会話（exchanges）の分析は出せない');
@@ -1317,12 +1391,17 @@ function coverageOf(
       `turn_input の合図は先頭 20 件までしか持たない。取れなかった分（先頭 20 件より後）: ${measured.signals.omitted.total} 件（${measured.signals.omitted.rows} ターン）。合図ごと・委譲ごとの集計はその分だけ少ない`,
     );
   }
-  if (turnUnreadable > 0) warnings.push(`totalChars が読めない turn_input 行 ${turnUnreadable} 行は集計に入れていない`);
+  if (turnUnreadable > 0)
+    warnings.push(`totalChars が読めない turn_input 行 ${turnUnreadable} 行は集計に入れていない`);
   if (turnRows + turnUnreadable === 0) {
-    warnings.push('turn_input の行が1つも無い。ターンの入力の内訳は実測できない（定型の注記は下の見積りだけ。実測ではない）');
+    warnings.push(
+      'turn_input の行が1つも無い。ターンの入力の内訳は実測できない（定型の注記は下の見積りだけ。実測ではない）',
+    );
   }
   if (read !== null && read.nonManager > 0) {
-    warnings.push(`exchanges.jsonl に with が manager 以外の行が ${read.nonManager} 行あった。分析から除いた`);
+    warnings.push(
+      `exchanges.jsonl に with が manager 以外の行が ${read.nonManager} 行あった。分析から除いた`,
+    );
   }
 
   const turnInputState = turnRows > 0 ? 'measured' : 'unavailable';
@@ -1341,7 +1420,10 @@ function coverageOf(
       axis: '合図ごと・委譲ごとの大きさ（signals）',
       basis: turnInputState,
       source: 'journal の turn_input.signals',
-      note: '実測。先頭 20 件まで。chars は 8000 字で切る前の長さ',
+      note:
+        turnRows > 0
+          ? '実測。先頭 20 件まで。chars は 8000 字で切る前の長さ'
+          : 'turn_input が無いので取れない（0 ではない）',
     },
     {
       axis: '会話の種類・件数・文字数・委譲ごと・上位の文面',
@@ -1393,7 +1475,8 @@ function coverageOf(
         : {
             state: 'read',
             rows: read.rows.length,
-            invalidLines: input.exchanges.state === 'read' ? input.exchanges.parsed.invalidLines : 0,
+            invalidLines:
+              input.exchanges.state === 'read' ? input.exchanges.parsed.invalidLines : 0,
             notExchangeRows: read.notExchange,
             nonManagerRows: read.nonManager,
             unreadableRows: read.unreadable,
@@ -1408,19 +1491,18 @@ function coverageOf(
 
 export function analyzeConversation(input: AnalyzeConversationInput): ConversationAnalysis {
   const turn = turnRowsOf(input.journal);
-  const measured = turn.rows.length > 0 ? measuredSection(turn.rows, turn.unreadable, input.topN) : null;
+  const measured =
+    turn.rows.length > 0 ? measuredSection(turn.rows, turn.unreadable, input.topN) : null;
   const read = input.exchanges.state === 'read' ? classifyExchanges(input.exchanges.parsed) : null;
   const sections = read === null ? null : exchangesSections(read, input.topN, input.redact);
-  const inputMissing =
-    input.exchanges.state === 'none' ? input.exchanges.reason : '入力が無い';
+  const inputMissing = input.exchanges.state === 'none' ? input.exchanges.reason : '入力が無い';
   return {
     coverage: coverageOf(input, turn.rows.length, turn.unreadable, read, measured, input.redact),
-    measured:
-      measured ?? {
-        state: 'none',
-        reason:
-          'journal に turn_input の行が無い（旧版の期間、または export の型の指定に含まれていない）。取れない軸であり、0 ではない',
-      },
+    measured: measured ?? {
+      state: 'none',
+      reason:
+        'journal に turn_input の行が無い（旧版の期間、または export の型の指定に含まれていない）。取れない軸であり、0 ではない',
+    },
     exchanges: sections?.exchanges ?? { state: 'none', reason: inputMissing },
     contamination: sections?.contamination ?? { state: 'none', reason: inputMissing },
     estimate: estimateSection(input.journal, turn.rows, read),

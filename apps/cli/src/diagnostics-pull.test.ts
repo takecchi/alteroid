@@ -388,6 +388,34 @@ describe('diagnostics pull: 既存の analyze に食わせられる', () => {
     ) as unknown;
     expect(analysis).toBeTypeOf('object');
   });
+
+  it('analyze --dir は pull の出力（偽サーバの応答）を既定の名前でまとめて読み、会話の分析と manifest の要約を出す', async () => {
+    const server = await start();
+    await pull(server);
+    const before = stdoutText().length;
+
+    // pull（この試験では環境の鍵を持たせていない）が伏せなかった環境変数の値も、analyze の再走査が表示の直前に伏せる
+    await diagnosticsAnalyzeCommand({
+      dir: join(dir, 'out'),
+      env: { MY_SERVICE_API_KEY: ENV_VALUE },
+    });
+    const text = stdoutText().slice(before);
+    // manifest の窓と、pull が保存しなかった人間との会話の行数（偽サーバは 2 行返す）
+    expect(text).toContain('窓 2026-11-13T00:00:00.000Z 〜 2026-11-14T00:00:00.000Z');
+    expect(text).toContain('人間との会話の行（保存せず）2');
+    // turn_input は実測の節に入る（偽サーバの行は欄が足りないので「取れない」に数えられ、落ちない）
+    expect(text).toContain('## A. ターンの入力（実測');
+    expect(text).toContain('ターン 1（');
+    // exchanges.jsonl の3行: 配達行の報告が1件、接頭辞の無い行はその他に数える
+    expect(text).toContain('報告（配達行 [id/report]）: 1件');
+    expect(text).toContain('その他（分類できなかった行）: 2件');
+    // pull が伏せた鍵は出力に無く、再走査の結果は標準エラーに規則名と件数だけ出る
+    for (const secret of [GITHUB, ANTHROPIC, OPENAI, ENV_VALUE]) expect(text).not.toContain(secret);
+    expect(stderrText()).not.toContain(ENV_VALUE);
+    expect(stderrText()).toContain('env:MY_SERVICE_API_KEY 1 件');
+    expect(stderrText()).toContain('伏せ字: 会話の文面（表示の直前の再走査）');
+    expect(process.exitCode).toBeUndefined();
+  });
 });
 
 describe('diagnostics pull: 会話（exchange）', () => {

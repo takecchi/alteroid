@@ -357,10 +357,18 @@ diagnosticsCommand
   .command('analyze')
   .addHelpText('after', HELP_EXAMPLES.diagnosticsAnalyze)
   .description(
-    '`diagnostics export` の出力（と任意で `usage --json` の出力）を読み、キャッシュ・起点・プロンプトの大きさ・数え直しなどの事実を並べる（ファイルを読むだけ。通信しない。原因は断定しない）',
+    '`diagnostics export` / `diagnostics pull` の出力（と任意で `usage --json` の出力・マネージャーとの会話）を読み、キャッシュ・起点・プロンプトの大きさ・数え直し・ターンの入力の重さ・クローンとマネージャーの会話の大きさなどの事実を並べる（ファイルを読むだけ。通信しない。原因は断定しない）',
   )
-  .option('--journal <file>', '`diagnostics export` の出力（JSONL）')
+  .option('--journal <file>', '`diagnostics export` の出力（JSONL）。--dir があれば省ける')
   .option('--usage <file>', '`usage --json` の出力（任意。日誌が主で、台帳は従）')
+  .option(
+    '--exchanges <file>',
+    '`diagnostics pull` の exchanges.jsonl（任意。クローンとマネージャーの会話の分析を出す。無ければその節は「入力が無い」）',
+  )
+  .option(
+    '--dir <dir>',
+    '`diagnostics pull` の出力ディレクトリ（任意。journal.jsonl・usage.json・exchanges.jsonl・manifest.json を既定の名前で読む。個別の旗が優先）',
+  )
   .option(
     '--ledger-tz <iana>',
     '台帳の date の時間帯（IANA 名。台帳が申告していないときだけ使う。無ければ日別を並べない）',
@@ -371,6 +379,8 @@ diagnosticsCommand
     async (options: {
       journal?: string;
       usage?: string;
+      exchanges?: string;
+      dir?: string;
       ledgerTz?: string;
       top?: string;
       json?: boolean;
@@ -401,7 +411,7 @@ diagnosticsCommand
   .addHelpText('after', HELP_EXAMPLES.diagnosticsPull)
   .description(
     '別の alteroid から、消費の分析に要るもの（台帳・日誌の診断行・焼いたプロンプト・記憶の本文・マネージャーとの会話）をディレクトリへ取ってくる。' +
-      '鍵らしい値は伏せて書く。出力は `diagnostics analyze --journal journal.jsonl --usage usage.json` にそのまま渡せる',
+      '鍵らしい値は伏せて書く。出力は `diagnostics analyze --dir <出力先>` にそのまま渡せる（会話の分析も出る）',
   )
   .option(
     '--url <origin>',

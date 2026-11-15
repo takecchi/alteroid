@@ -375,8 +375,10 @@ export const MANAGER_REPORT_BODY_LIMIT = 8_000;
 // どれも配っていない報告があったことをクローンへ伝える注記なので、頭を切っても残す。
 // 3つを個別に export する: `diagnostics analyze` が日誌の本文から注記の長さを測るのに、同じ字面を手で写さないため（字面の書き手は `reportDeliveryTextOf`・`WithheldReportsStore`・`synthesized-notice-windows.ts`）
 export const REPORT_FULL_TEXT_NOTE_MARK = '\n\n（途中の発言を含む全文 ';
-export const REPORT_WITHHELD_NOTE_MARK = '\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ';
-export const REPORT_SYNTHESIZED_NOTE_MARK = '\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ';
+export const REPORT_WITHHELD_NOTE_MARK =
+  '\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ';
+export const REPORT_SYNTHESIZED_NOTE_MARK =
+  '\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ';
 const REPORT_DELIVERY_TAIL_MARKS = [
   REPORT_FULL_TEXT_NOTE_MARK,
   REPORT_WITHHELD_NOTE_MARK,

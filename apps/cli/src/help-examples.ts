@@ -27,13 +27,15 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics pull --url https://alteroid.example.com --token-file ~/.alteroid-token   # 直近 1 日を取る',
     'alteroid diagnostics pull --url https://alteroid.example.com --out ./pull --since 2026-11-10T00:00:00Z',
     'alteroid diagnostics pull --url https://alteroid.example.com --no-memory --no-exchanges     # 台帳・診断行・プロンプトだけ',
-    'alteroid diagnostics analyze --journal ./pull/journal.jsonl --usage ./pull/usage.json     # 取ったものを集計',
+    'alteroid diagnostics analyze --dir ./pull                                                  # 取ったものを集計（会話の分析も出る）',
   ),
   diagnosticsAnalyze: examples(
     'alteroid diagnostics analyze --journal diag.jsonl                         # 日誌だけで集計',
     'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json      # 台帳も読む（日誌が主）',
     'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json --ledger-tz Asia/Tokyo',
     'alteroid diagnostics analyze --journal diag.jsonl --json                  # 機械可読',
+    'alteroid diagnostics analyze --dir ./pull                                 # pull の出力をまとめて読む（会話の分析も出る）',
+    'alteroid diagnostics analyze --journal diag.jsonl --exchanges ./pull/exchanges.jsonl --top 20   # 会話の上位 20 件',
   ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',

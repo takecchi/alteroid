@@ -16,7 +16,10 @@ import { CONTAMINATION_PATTERNS } from './diagnostics-conversation-classify.js';
 const n = (value: number | null, digits = 0): string =>
   value === null
     ? '取れない'
-    : value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    : value.toLocaleString('en-US', {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      });
 const pct = (value: number | null): string =>
   value === null ? '取れない' : `${(value * 100).toFixed(1)}%`;
 
@@ -27,9 +30,13 @@ const BASIS_LABEL: Record<ConversationAxis['basis'], string> = {
   unavailable: '取れない',
 };
 
-function dist(d: ConversationDist, digits = 0): string {
+// 件数を別の所で書くときの、合計・中央値・p90・最大だけ
+function distTail(d: ConversationDist, digits = 0): string {
   if (d.count === 0) return '行なし';
-  return `${d.count}件 / 合計 ${n(d.sum, digits)} / 中央値 ${n(d.median, digits)} / p90 ${n(d.p90, digits)} / 最大 ${n(d.max, digits)}`;
+  return `合計 ${n(d.sum, digits)} / 中央値 ${n(d.median, digits)} / p90 ${n(d.p90, digits)} / 最大 ${n(d.max, digits)}`;
+}
+function dist(d: ConversationDist, digits = 0): string {
+  return d.count === 0 ? '行なし' : `${d.count}件 / ${distTail(d, digits)}`;
 }
 
 function share(label: string, s: ShareRow): string {
@@ -67,7 +74,10 @@ export function renderConversationCoverage(a: ConversationAnalysis): string {
   return out.join('\n');
 }
 
-function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, top: number): string[] {
+function renderMeasured(
+  m: MeasuredSection | { state: 'none'; reason: string },
+  top: number,
+): string[] {
   const out: string[] = ['', '## A. ターンの入力（実測: journal の turn_input）'];
   if (m.state === 'none') {
     out.push(`  入力が無い: ${m.reason}`);
@@ -78,14 +88,17 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
   );
   const groups = (title: string, rows: MeasuredSection['byKind']): void => {
     out.push(`  ${title}`);
-    for (const g of rows) out.push(`    ${g.key}: ${g.turns}ターン / ${dist(g.total)}`);
+    for (const g of rows) out.push(`    ${g.key}: ${g.turns}ターン / ${distTail(g.total)}`);
   };
   groups('kind 別', m.byKind);
   groups('起点の束ごと', m.byBundle);
   groups('1起点ごと（束は構成する起点すべてに数える）', m.bySingleTrigger);
 
   const o = m.occupancy;
-  out.push('', '### A2. 内訳の占有率（totalChars に占める割合。1ターン中央値は読めたターンの中央値）');
+  out.push(
+    '',
+    '### A2. 内訳の占有率（totalChars に占める割合。1ターン中央値は読めたターンの中央値）',
+  );
   out.push(`  totalChars の合計: ${n(o.totalCharsSum)}字`);
   out.push('  ★ 毎ターン付く「いまの全体」の注記（notices.situation）:');
   out.push(share('situation', o.situation));
@@ -95,7 +108,9 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
   out.push(share('humanActionsChars', o.humanActions));
   out.push(share('freshMemoryChars', o.freshMemory));
   out.push(share('bodyChars', o.body));
-  out.push('  bodyChars の内側（重ならない区分の足し算ではない。signals は切る前の長さで、切り詰めがあると body を超えうる）:');
+  out.push(
+    '  bodyChars の内側（重ならない区分の足し算ではない。signals は切る前の長さで、切り詰めがあると body を超えうる）:',
+  );
   out.push(share('signals の元の長さ', o.bodyInside.signals));
   out.push(share('templates（本文中の定型。合図の本文の外の出現だけ）', o.bodyInside.templates));
   out.push(share('framingChars（導出値）', o.bodyInside.framing));
@@ -106,7 +121,9 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
     `### A3. 「いまの全体」の内訳（situationParts。situation のあるターン ${sp.turnsWithSituation} / 内訳が組めたターン ${sp.turnsWithParts}）`,
   );
   if (sp.turnsWithSituation > sp.turnsWithParts) {
-    out.push(`  内訳を持たないターン ${sp.turnsWithSituation - sp.turnsWithParts} は下の表に入らない（取れない）`);
+    out.push(
+      `  内訳を持たないターン ${sp.turnsWithSituation - sp.turnsWithParts} は下の表に入らない（取れない）`,
+    );
   }
   for (const p of sp.parts) {
     out.push(
@@ -124,7 +141,9 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
     const mark = t.name === 'DENIAL_REPLY_ROUTE' ? '★ ' : '';
     out.push(
       `    ${mark}${t.name}: ${t.turns}ターン / 合計 ${n(t.chars)}字（totalChars の ${pct(t.shareOfTotal)}）/ 出現 ${
-        t.occurrences === null ? '取れない（定数の長さが不明）' : `約 ${t.occurrences} 回（字数 ÷ いまの定数の長さ${t.divisible === false ? '。割り切れない = 定数の版が違う日誌' : ''}）`
+        t.occurrences === null
+          ? '取れない（定数の長さが不明）'
+          : `約 ${t.occurrences} 回（字数 ÷ いまの定数の長さ${t.divisible === false ? '。割り切れない = 定数の版が違う日誌' : ''}）`
       }`,
     );
   }
@@ -135,7 +154,9 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
     const bodyless = (BODYLESS_SIGNAL_KINDS as readonly string[]).includes(k.kind);
     out.push(
       `    ${k.kind}: ${k.count}件 / ${
-        k.chars === null ? `字数は集計しない（${bodyless ? '本文を持たない種類は束のとき 0 で書かれ、取れない' : '取れない'}）` : dist(k.chars)
+        k.chars === null
+          ? `字数は集計しない（${bodyless ? '本文を持たない種類は束のとき 0 で書かれ、取れない' : '取れない'}）`
+          : distTail(k.chars)
       }${k.overLimit > 0 ? ` / 8000 字超（頭だけがモデルに入る）${k.overLimit}件` : ''}`,
     );
   }
@@ -145,7 +166,9 @@ function renderMeasured(m: MeasuredSection | { state: 'none'; reason: string }, 
   out.push(
     `  取れなかった分（先頭 20 件より後。signalsOmitted）: ${s.omitted.total} 件（${s.omitted.rows} ターン）。その kind・chars は分からない`,
   );
-  out.push(`  委譲ごと（managerId。報告・質問・確認・拒否の知らせ。chars の合計の大きい上位 ${s.byManager.limit}、全 ${s.byManager.totalManagers} 件）`);
+  out.push(
+    `  委譲ごと（managerId。報告・質問・確認・拒否の知らせ。chars の合計の大きい上位 ${s.byManager.limit}、全 ${s.byManager.totalManagers} 件）`,
+  );
   for (const r of s.byManager.rows) {
     out.push(
       `    ${r.managerId}: ${r.count}件 / ${n(r.chars)}字（${r.byKind.map((k) => `${k.kind} ${k.count}件 ${n(k.chars)}字`).join(' / ')}）`,
@@ -192,7 +215,9 @@ function renderExchanges(
     out.push('  「その他」の内訳（捨てずに数えた）:');
     for (const o of e.otherBreakdown) out.push(`    ${o.key}: ${o.count}件 / ${n(o.chars)}字`);
   }
-  out.push(`  クローンが受け取った行（配達行の合計。Pool の全文行は含めない）: ${dist(e.delivered)}`);
+  out.push(
+    `  クローンが受け取った行（配達行の合計。Pool の全文行は含めない）: ${dist(e.delivered)}`,
+  );
 
   const b = e.byManager;
   out.push(
@@ -212,7 +237,9 @@ function renderExchanges(
     `    許可確認の拒否後の答え方（DENIAL_ASK_AFTER_ANSWER_PARAGRAPH*）: ${t.denialAskAfterAnswer.rows}行 / ${n(t.denialAskAfterAnswer.chars)}字 = 配達行の ${pct(t.denialAskAfterAnswer.shareOfDelivered)}`,
   );
   for (const note of t.notes) {
-    out.push(`    ${note.label}: ${note.rows}行 / ${n(note.chars)}字 = 配達行の ${pct(note.shareOfDelivered)}`);
+    out.push(
+      `    ${note.label}: ${note.rows}行 / ${n(note.chars)}字 = 配達行の ${pct(note.shareOfDelivered)}`,
+    );
   }
 
   out.push(
@@ -293,7 +320,12 @@ function renderEstimate(e: EstimateSection): string[] {
   } else {
     if (e.reason !== null) out.push(`  ⚠ ${e.reason}`);
     for (const d of e.days) {
-      const label = { measured: '実測のみ', mixed: '実測＋見積りが混ざる', estimated: '見積りのみ', 'no-turns': '対象なし' }[d.basis];
+      const label = {
+        measured: '実測のみ',
+        mixed: '実測＋見積りが混ざる',
+        estimated: '見積りのみ',
+        'no-turns': '対象なし',
+      }[d.basis];
       out.push(
         `  ${d.day} [${label}]: 通常ターン ${d.timingNormalTurns}（実測 ${d.measuredNormalTurns} / 見積りに回す ${d.estimatedNormalTurns}）` +
           ` / 見積り: いまの全体の固定部 ${n(d.situationFixedChars)}字（下限）` +
