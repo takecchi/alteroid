@@ -20,7 +20,7 @@ import { describeManagerState } from './digest.js';
 import { journalEntryShape, noteDroppedRecord } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
-import { describePage, excerptLine, page, renderListing } from './excerpt.js';
+import { describePage, excerptLine, page, renderListing, type LazyListingItems } from './excerpt.js';
 import {
   removeArchiveChunkJournalFirst,
   removeArchiveJournalFirst,
@@ -568,7 +568,7 @@ function describeRunnerListTail(
 
 // 予算で切る頁。省略の断りと続きの案内（cursor）もここで作る
 function renderRunnerListPage(
-  blocks: string[],
+  blocks: LazyListingItems,
   view: RunnerOverview[],
   registeredCount: number,
 ): string {
@@ -1618,7 +1618,11 @@ export function opsTools(context: ToolContext, shared: CloneToolsShared) {
           pageCheck.restarted,
         );
         const show = { fingerprints: fingerprints === true, resources: resources === true };
-        const blocks = pageCheck.view.map((runner) => describeRunnerBlock(runner, show));
+        // 器のブロックは予算に入るか確かめるときまで作らない（予算で落ちる器は文にしない）
+        const blocks: LazyListingItems = {
+          count: pageCheck.view.length,
+          build: (index) => describeRunnerBlock(pageCheck.view[index]!, show),
+        };
 
         const tail = describeRunnerListTail(
           autoFoldedNote,

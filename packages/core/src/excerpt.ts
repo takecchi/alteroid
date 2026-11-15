@@ -109,17 +109,35 @@ interface ListingFill {
   total: number;
 }
 
+/**
+ * 行を必要になるまで作らない一覧。`build(index)` はその行が予算に入るか確かめるときにだけ呼ばれる（呼ぶのは1行につき高々1回）。
+ * 予算に入らず積みを止めた所の1行は作って捨てるが、それより先の行は作らない。
+ */
+export interface LazyListingItems {
+  count: number;
+  build: (index: number) => string;
+}
+
 // 1件だけで予算を超える場合は、その1件を `excerpt` で切る: 落とすと何も出ない一覧になり、丸ごと出すと予算が意味を失うため
 export function fillListingBudget(
   items: readonly string[],
   budget: number,
   fromEnd = false,
 ): ListingFill {
+  return fillLazyListingBudget({ count: items.length, build: (index) => items[index]! }, budget, fromEnd);
+}
+
+// `fillListingBudget` の本体。行を作る手間が大きい一覧は、全行を文にせずこちらへ `build` を渡す（出す文は同じ）
+export function fillLazyListingBudget(
+  items: LazyListingItems,
+  budget: number,
+  fromEnd = false,
+): ListingFill {
   const lines: string[] = [];
   let used = 0;
   if (fromEnd) {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index]!;
+    for (let index = items.count - 1; index >= 0; index -= 1) {
+      const item = items.build(index);
       if (lines.length === 0) {
         const tail = item.length > budget ? excerpt(item, budget) : item;
         lines.unshift(tail);
@@ -131,7 +149,8 @@ export function fillListingBudget(
       used += item.length;
     }
   } else {
-    for (const item of items) {
+    for (let index = 0; index < items.count; index += 1) {
+      const item = items.build(index);
       if (lines.length === 0) {
         const head = item.length > budget ? excerpt(item, budget) : item;
         lines.push(head);
@@ -143,7 +162,7 @@ export function fillListingBudget(
       used += item.length;
     }
   }
-  return { lines, shown: lines.length, rest: items.length - lines.length, total: items.length };
+  return { lines, shown: lines.length, rest: items.count - lines.length, total: items.count };
 }
 
 /**
@@ -161,12 +180,18 @@ export function renderFilledListing(
 }
 
 export function renderListing(
-  items: readonly string[],
+  items: readonly string[] | LazyListingItems,
   { budget, omitted }: ListingBudget,
 ): string {
-  const { lines, rest, shown, total } = fillListingBudget(items, budget, false);
+  const { lines, rest, shown, total } = fillLazyListingBudget(toLazy(items), budget, false);
   if (rest > 0) lines.push(omitted({ rest, shown, total }));
   return lines.join('\n');
+}
+
+function toLazy(items: readonly string[] | LazyListingItems): LazyListingItems {
+  return Array.isArray(items)
+    ? { count: items.length, build: (index) => items[index]! }
+    : (items as LazyListingItems);
 }
 
 interface ListingEntryFields {
@@ -194,10 +219,10 @@ export function renderListingEntry(
 
 // 断り書きは先頭へ置く: 落ちているのは古い側なので、末尾に置くと読み手が「この下にまだある」と読むため
 export function renderListingFromEnd(
-  items: readonly string[],
+  items: readonly string[] | LazyListingItems,
   { budget, omitted }: ListingBudget,
 ): string {
-  const { lines, rest, shown, total } = fillListingBudget(items, budget, true);
+  const { lines, rest, shown, total } = fillLazyListingBudget(toLazy(items), budget, true);
   if (rest > 0) lines.unshift(omitted({ rest, shown, total }));
   return lines.join('\n');
 }

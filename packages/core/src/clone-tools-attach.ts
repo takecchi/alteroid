@@ -56,6 +56,7 @@ import {
   page,
   renderListing,
   renderListingFromEnd,
+  type LazyListingItems,
 } from './excerpt.js';
 import type { Task, JournalEntry, JournalEntryInput } from './schema.js';
 import { UnreadableJournalEntryError, UnreadableTaskError, type Stores } from './store.js';
@@ -1338,8 +1339,11 @@ function describeSupersededNote(
 }
 
 /** 会話の行を新しい側から予算で詰める。落とすのは古い側で、どちら側を落としたかを言う。 */
-function renderConversationMessageLines(lines: string[]): { rendered: string; shownCount: number } {
-  let shownCount = lines.length;
+function renderConversationMessageLines(lines: LazyListingItems): {
+  rendered: string;
+  shownCount: number;
+} {
+  let shownCount = lines.count;
   // 会話は新しい側から積む: 予算で切るとき落とすのは古い側にし、会話を開く動機である直近の続きを残すため
   const rendered = renderListingFromEnd(lines, {
     budget: CONVERSATION_LIST_BUDGET,
@@ -1371,7 +1375,11 @@ async function readConversationMessagesText(
   if (matched.length === 0) return describeConversationNoMessages(conversationId, view);
   const withdrawnLookup = await lookupWithdrawnForMessages(journal, conversationId, matched);
   const withdrawnReading = describeWithdrawnReading(withdrawnLookup, matched);
-  const lines = matched.map((message) => conversationMessageLine(message, withdrawnReading));
+  // 行は予算に入るか確かめるときまで作らない（新しい側から積むので、落ちる古い側は文にしない）
+  const lines: LazyListingItems = {
+    count: matched.length,
+    build: (index) => conversationMessageLine(matched[index]!, withdrawnReading),
+  };
   const supersededNote = describeSupersededNote(
     supersededCount,
     filter.includeSuperseded,
@@ -1413,10 +1421,10 @@ function conversationSearchLine(
 
 /** 検索の行を新しい順に予算で詰める。省いたのは古い側だと言う。 */
 function renderConversationSearchLines(
-  lines: string[],
+  lines: LazyListingItems,
   q: string,
 ): { rendered: string; shownCount: number } {
-  let shownCount = lines.length;
+  let shownCount = lines.count;
   const rendered = renderListing(lines, {
     budget: CONVERSATION_LIST_BUDGET,
     omitted: ({ rest, shown, total }) => {
@@ -1451,7 +1459,10 @@ async function readConversationSearchText(
   // 会話をまたぐ検索なので、会話を問わず印を引く（一覧の読みと同じ）
   const withdrawnLookup = await lookupWithdrawnForMessages(journal, undefined, matched);
   const withdrawnReading = describeWithdrawnReading(withdrawnLookup, matched);
-  const lines = matched.map((message) => conversationSearchLine(message, withdrawnReading));
+  const lines: LazyListingItems = {
+    count: matched.length,
+    build: (index) => conversationSearchLine(matched[index]!, withdrawnReading),
+  };
   const { rendered, shownCount } = renderConversationSearchLines(lines, q);
   const withdrawnNotes = describeWithdrawnReading(withdrawnLookup, matched, {
     shown: matched.slice(0, shownCount),
