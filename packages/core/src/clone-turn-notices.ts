@@ -13,7 +13,12 @@ import {
   type QuotaRecoverySummary,
 } from './quota-recovery-notice.js';
 import type { InboxEvent, JobStatus } from './schema.js';
-import { describeSituation, describeSituationUnavailable } from './situation.js';
+import { sectionBlock } from './section-block.js';
+import {
+  describeSituationParts,
+  describeSituationUnavailable,
+  situationPartChars,
+} from './situation.js';
 import type { Stores } from './store.js';
 import { toAgentTokenView } from './token-pool.js';
 
@@ -73,7 +78,11 @@ export class CloneTurnNotices {
   // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
   // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
   // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
-  async situationFor(events: InboxEvent[], listManagers: ListManagers): Promise<string> {
+  async situationFor(
+    events: InboxEvent[],
+    listManagers: ListManagers,
+    onParts?: (partChars: Record<string, number>) => void,
+  ): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
     if (event.type === 'distill') return '';
@@ -133,7 +142,7 @@ export class CloneTurnNotices {
             (): 'unreadable' => 'unreadable',
           ),
       ]);
-      return describeSituation({
+      const parts = describeSituationParts({
         managers,
         runners: fleet.runners,
         tokens: pool[0],
@@ -144,6 +153,9 @@ export class CloneTurnNotices {
         // `queuedInMemory` 口（`Clone` の `#queuedInMemoryCount()`）を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#ports.queuedInMemory(),
       });
+      // 文字列は部分の連結そのもの（`describeSituation` と同じ）。内訳は診断のためだけに外へ渡す（組めなかった回は呼ばれない）
+      onParts?.(situationPartChars(parts));
+      return sectionBlock(parts.map((part) => part.line));
     } catch (error) {
       return describeSituationUnavailable(error);
     }

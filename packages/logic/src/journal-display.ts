@@ -17,6 +17,7 @@ export const JOURNAL_TONE = {
   turn_usage: 'neutral',
   context_usage: 'neutral',
   turn_timing: 'neutral',
+  turn_input: 'neutral',
   http_timing: 'neutral',
   // `neutral` にしない: `exhausted`（全層が止まる）が普通の行と同じ色で並ぶ。
   token_rotation: 'warn',
@@ -43,6 +44,7 @@ export const JOURNAL_TYPE_LABEL = {
   turn_usage: '1回のトークン数',
   context_usage: '文脈の埋まり具合',
   turn_timing: 'ターンの時間',
+  turn_input: 'ターンの入力の内訳',
   http_timing: 'API の時間',
   token_rotation: 'トークンの切り替え',
   subagent_stall: '作業者の停滞',

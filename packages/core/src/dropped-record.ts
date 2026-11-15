@@ -719,6 +719,13 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ` phases=${Object.keys(entry.phases).length}` +
         (entry.tools === undefined ? '' : ` tools=${entry.tools.count}`)
       );
+    // 自由文を持たない: 合図の種類名と数だけ（本文も注記の文面も `turn_input` の行に無い）
+    case 'turn_input':
+      return (
+        `turn_input kind=${entry.kind} triggers=${entry.triggers.map(tag).join(',')} ` +
+        `totalChars=${entry.totalChars} bodyChars=${entry.bodyChars} signals=${entry.signals.length}` +
+        (entry.conversationId === undefined ? '' : ` conversationId=${tag(entry.conversationId)}`)
+      );
     // 経路は `GET /conversations/:id` の型で値を含まないが、他の自由文と同じく tag で包む
     case 'http_timing':
       return (

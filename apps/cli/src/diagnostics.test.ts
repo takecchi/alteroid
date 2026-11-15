@@ -69,11 +69,12 @@ async function failureOf(promise: Promise<unknown>): Promise<Error> {
 }
 
 describe('narrowDiagnosticsTypes', () => {
-  it('既定は turn_timing / turn_usage / context_usage（http_timing は入れない）', () => {
+  it('既定は turn_timing / turn_usage / context_usage / turn_input（http_timing は入れない）', () => {
     expect(narrowDiagnosticsTypes(undefined)).toEqual([
       'turn_timing',
       'turn_usage',
       'context_usage',
+      'turn_input',
     ]);
   });
 
@@ -154,7 +155,7 @@ describe('diagnosticsExportCommand', () => {
     expect(sent).toHaveLength(3);
     const q = (i: number) => Object.fromEntries(sent[i]!.searchParams);
     expect(q(0)).toEqual({
-      type: 'turn_timing,turn_usage,context_usage',
+      type: 'turn_timing,turn_usage,context_usage,turn_input',
       since: '2026-11-13T00:00:00.000Z',
       until: '2026-11-14T00:00:00.000Z',
       order: 'asc',

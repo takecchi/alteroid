@@ -392,7 +392,7 @@ function describeWithheldReportsClause(managers: readonly ManagerSummary[], at: 
   return `（うち畳んだ報告 ${String(reports)} 本${longest}）`;
 }
 
-export function describeSituation(input: {
+interface SituationInput {
   readonly managers: readonly ManagerSummary[];
   readonly runners: readonly { readonly state: RunnerLiveness }[];
   readonly tokens?: readonly TokenSituationRow[] | undefined;
@@ -408,7 +408,31 @@ export function describeSituation(input: {
     | 'unreadable'
     | undefined;
   readonly queuedInMemory?: number | undefined;
-}): string {
+}
+
+/** 節を組む1行と、その行の名前（診断が行ごとの長さを数える）。名前は文字列には現れない。 */
+export interface SituationPart {
+  readonly name: string;
+  readonly line: string;
+}
+
+/** 節の文字列は部分の連結そのものにする: 文字列と診断の内訳が別々に組まれて食い違う形を作らないため。 */
+export function describeSituation(input: SituationInput): string {
+  return sectionBlock(describeSituationParts(input).map((part) => part.line));
+}
+
+/**
+ * 節の各行の長さ（その行の後ろの改行1つを含む）と、`sectionBlock` が末尾に足す区切り（`separator`）。
+ * 値の和は `describeSituation` の文字列の長さに一致する（`sectionBlock` は行を `\n` で繋ぎ、`\n---\n` を足す）。
+ */
+export function situationPartChars(parts: readonly SituationPart[]): Record<string, number> {
+  const chars: Record<string, number> = {};
+  for (const part of parts) chars[part.name] = part.line.length + 1;
+  chars.separator = sectionBlock([]).length;
+  return chars;
+}
+
+export function describeSituationParts(input: SituationInput): SituationPart[] {
   const counts = countManagerSituation(input.managers);
   const byState = countRunnerStates(input.runners);
   const runnerBreakdown = [...byState.entries()]
@@ -453,22 +477,31 @@ export function describeSituation(input: {
   const tokenLine = showTokens
     ? describeTokenSituation({ tokens: input.tokens, active: input.active, at })
     : null;
-  return sectionBlock([
-    `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。何をするかは決めない）。`,
-    delegationLineWith(lastStartClause),
+  return [
+    {
+      name: 'head',
+      line: `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。何をするかは決めない）。`,
+    },
+    { name: 'delegation', line: delegationLineWith(lastStartClause) },
     // 断りは本数の直後に並べる: 数と、そこから何を確かめるかを離すと数だけが読まれるため。0 のときは1文字も出さない
-    ...(counts.lost === 0 ? [] : [LOST_NOTICE]),
-    ...(counts.lastTurnFailed === 0 ? [] : [LAST_FAILURE_NOTICE]),
-    ...(counts.usageStopped === 0 ? [] : [USAGE_STOPPED_NOTICE]),
-    ...(counts.runnerVanished === 0 ? [] : [RUNNER_VANISHED_NOTICE]),
-    runnerLine,
-    READINGS_NOTICE,
-    ...(inboxBacklogLine === null ? [] : [inboxBacklogLine]),
+    ...(counts.lost === 0 ? [] : [{ name: 'lostNotice', line: LOST_NOTICE }]),
+    ...(counts.lastTurnFailed === 0
+      ? []
+      : [{ name: 'lastFailureNotice', line: LAST_FAILURE_NOTICE }]),
+    ...(counts.usageStopped === 0
+      ? []
+      : [{ name: 'usageStoppedNotice', line: USAGE_STOPPED_NOTICE }]),
+    ...(counts.runnerVanished === 0
+      ? []
+      : [{ name: 'runnerVanishedNotice', line: RUNNER_VANISHED_NOTICE }]),
+    { name: 'runners', line: runnerLine },
+    { name: 'readings', line: READINGS_NOTICE },
+    ...(inboxBacklogLine === null ? [] : [{ name: 'inboxBacklog', line: inboxBacklogLine }]),
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
-    ...(inboxQueuedLine === null ? [] : [inboxQueuedLine]),
+    ...(inboxQueuedLine === null ? [] : [{ name: 'inboxQueued', line: inboxQueuedLine }]),
     // 鍵の行は最後に置く: 数えた材料の後に、判断を縛る不変条件が来る順にするため
-    ...(tokenLine === null ? [] : [tokenLine]),
-  ]);
+    ...(tokenLine === null ? [] : [{ name: 'tokens', line: tokenLine }]),
+  ];
 }
 
 // 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。2ターン目以降も畳まず毎回全文で出す（#4476）

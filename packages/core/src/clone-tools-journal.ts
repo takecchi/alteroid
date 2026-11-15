@@ -11,6 +11,7 @@ import { journalBytesChange } from './journal-bytes.js';
 import { noteDroppedRecord } from './dropped-record.js';
 import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } from './excerpt.js';
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
+import { describeTurnInputBody, describeTurnInputHead } from './turn-input-format.js';
 import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-format.js';
 import { describeGithubCi } from './progress-github.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
@@ -361,6 +362,8 @@ function renderJournalEntry(
     }
     case 'turn_timing':
       return { head: describeTurnTimingHead(entry), body: describeTurnTimingBody(entry) };
+    case 'turn_input':
+      return { head: describeTurnInputHead(entry), body: describeTurnInputBody(entry) };
     case 'http_timing':
       return { head: describeHttpTimingHead(entry), body: describeHttpTimingBody(entry) };
     case 'token_rotation': {

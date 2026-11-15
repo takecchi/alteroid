@@ -322,6 +322,7 @@ export const JOURNAL_ENTRY_TOPOLOGY_TRIGGER = {
   subagent_stall: 'always',
   context_usage: 'always',
   turn_timing: 'always',
+  turn_input: 'always',
   http_timing: 'always',
   github_observation: 'always',
   conversation_deleted: 'always',

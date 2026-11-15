@@ -10,7 +10,13 @@ import { resolveTarget } from './target.js';
 import { stderr, stdout } from './terminal-out.js';
 
 // 既定に http_timing を入れない: 他の3つより行が大きく、まず見たいのはターンの消費と時間のため
-export const DIAGNOSTICS_DEFAULT_TYPES = ['turn_timing', 'turn_usage', 'context_usage'] as const;
+// `turn_input` は入れる: ターンの入力の重さの内訳で、消費（`turn_usage`）と時間（`turn_timing`）の原因を同じ窓で突き合わせるのに要り、行はターンごとに1本・文字数と件数だけで小さい
+export const DIAGNOSTICS_DEFAULT_TYPES = [
+  'turn_timing',
+  'turn_usage',
+  'context_usage',
+  'turn_input',
+] as const;
 
 const DAY_MS = 86_400_000;
 export const DIAGNOSTICS_DEFAULT_WINDOW_MS = DAY_MS;
@@ -102,7 +108,7 @@ function resolvePageSize(raw: string | undefined): number {
 }
 
 /**
- * 日誌の診断の行（turn_timing / turn_usage / context_usage / http_timing）を、1行1JSONで標準出力へ書き出す。
+ * 日誌の診断の行（turn_timing / turn_usage / context_usage / turn_input / http_timing）を、1行1JSONで標準出力へ書き出す。
  * 既存の `GET /journal` だけを使う（経路は足さない）。頁の進行と総数は標準エラーへ出す。
  *
  * 行は伏せずに素通しする。診断の4つの型の自由文の欄を調べた結果（本文・鍵が載る経路は見つからなかった）は PR 本文にある。
