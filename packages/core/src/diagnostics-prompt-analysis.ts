@@ -716,20 +716,22 @@ function buildTools(
   const totals = body.tools.map((tool) => tool.descriptionChars + tool.inputSchemaChars);
   const totalChars = sumChars(totals);
   const matchedKeys = new Set<string>();
+  const unmatchedTools: string[] = [];
   const rows = body.tools
     .map((tool, index) => {
       const key = [tool.name, qualifiedCloneToolName(tool.name)].find((name) =>
         tokenByName.has(name),
       );
-      if (key !== undefined) matchedKeys.add(key);
+      const name = text(tool.name, 80);
+      if (key === undefined) unmatchedTools.push(name);
+      else matchedKeys.add(key);
       return {
-        name: text(tool.name, 80),
+        name,
         descriptionChars: heuristicChars(tool.descriptionChars),
         inputSchemaChars: heuristicChars(tool.inputSchemaChars),
         totalChars: heuristicChars(totals[index] ?? 0),
         shareOfTotal: ratio(totals[index] ?? 0, totalChars),
         tokens: key === undefined ? null : exactTokens(tokenByName.get(key) ?? 0),
-        matched: key !== undefined,
       };
     })
     .sort((a, b) => b.totalChars - a.totalChars || compareCodeUnits(a.name, b.name));
@@ -744,14 +746,14 @@ function buildTools(
     state: 'read',
     count: body.tools.length,
     totalChars,
-    rows: rows.map(({ matched: _matched, ...row }) => row),
+    rows,
     tokens:
       mcp.state === 'unavailable'
         ? mcp
         : {
             state: 'read',
-            matched: rows.filter((row) => row.matched).length,
-            unmatchedTools: rows.filter((row) => !row.matched).map((row) => row.name),
+            matched: body.tools.length - unmatchedTools.length,
+            unmatchedTools: unmatchedTools.sort(compareCodeUnits),
             unmatchedCloneServerRows: {
               count: unmatchedCloneRows.length,
               tokens: sumTokens(unmatchedCloneRows.map((row) => row.tokens)),
