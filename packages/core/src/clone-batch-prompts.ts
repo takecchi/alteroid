@@ -80,10 +80,112 @@ export function mixableSignalChars(event: MixableSignal): number {
   }
 }
 
+/** 束の中で、同じ文が複数の件に入るときに1回へまとめる定型。`find` は件の本文のうち、その定型が入っている区間（なければ null）。 */
+interface SharedGuide {
+  readonly text: string;
+  readonly find: (item: string) => readonly [start: number, end: number] | null;
+}
+
+/** 起点の行（`起点の会話: …` + 案内）の中の案内。行の末尾にあるものだけを拾う（本文に同じ文があっても取り違えない）。 */
+function originGuideLocator(guide: string): SharedGuide['find'] {
+  return (item) => {
+    const start = item.lastIndexOf(guide);
+    if (start <= 0) return null;
+    const end = start + guide.length;
+    if (end < item.length && item[end] !== '\n') return null;
+    const lineStart = item.lastIndexOf('\n', start - 1) + 1;
+    return item.startsWith('起点の会話: ', lineStart) ? [start, end] : null;
+  };
+}
+
+// 関数にする: 定数（`ORIGIN_NO_TASK_GUIDE` など）はこのファイルの後ろで宣言されていて、モジュール直下で読むと未初期化になる
+const mixedSharedGuides = (): readonly SharedGuide[] => [
+  { text: ORIGIN_NO_TASK_GUIDE, find: originGuideLocator(ORIGIN_NO_TASK_GUIDE) },
+  { text: ORIGIN_TASK_GUIDE, find: originGuideLocator(ORIGIN_TASK_GUIDE) },
+  {
+    text: REPORT_FOLLOW_UP_GUIDE,
+    // 単発の報告の末尾（`managerPrompt`）だけ
+    find: (item) =>
+      item.startsWith('[system] マネージャー ') && item.endsWith(`\n\n${REPORT_FOLLOW_UP_GUIDE}`)
+        ? [item.length - REPORT_FOLLOW_UP_GUIDE.length, item.length]
+        : null,
+  },
+  {
+    text: externalEventInstruction(),
+    // 外部の出来事の枠（`buildExternalEventPrompt`）の、本文の直前の指示だけ。枠の最初の1つが指示で、本文はその後ろ
+    find: (item) => {
+      if (!item.startsWith('[system] 外部から出来事が届いた')) return null;
+      const instruction = externalEventInstruction();
+      const start = item.indexOf(`\n\n${instruction}\n\n---\n\n`);
+      return start === -1 ? null : [start + 2, start + 2 + instruction.length];
+    },
+  },
+];
+
+/** 束の末尾の見出し（まとめた定型があるときだけ出す）。 */
+const MIXED_SHARED_GUIDES_HEADER =
+  '**共通の案内** 上の各件で `（→末尾の共通の案内N）` とある所は、ここの N 番と同じ文が入る（同じ文を件ごとに繰り返さないため1回にした）。その件の案内として読むこと。';
+
+const sharedGuideMarker = (number: number): string => `（→末尾の共通の案内${String(number)}）`;
+
 /**
- * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）をそのまま並べる（要約しない）。
+ * 内容が完全に同一の定型を、束の末尾の1か所へまとめる。まとめるのは、まとめたほうが短くなるときだけ（置き換えの印と見出しの分を引いても得をするとき）。
+ * 件ごとに変わる文（managerId・requestId・起点の会話・task を含む文）は触らない。
  */
-export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string {
+function hoistSharedGuides(texts: readonly string[]): {
+  readonly rewrite: (text: string) => string;
+  readonly tail: string[];
+} {
+  const hoisted: { guide: SharedGuide; number: number }[] = [];
+  const candidates = mixedSharedGuides().map((guide) => ({
+    guide,
+    count: texts.filter((text) => guide.find(text) !== null).length,
+  })).filter(({ guide, count }) => {
+    const marker = sharedGuideMarker(1).length;
+    // 得: 件ごとに (定型 − 印) を減らし、末尾に定型1回と番号の行を足す
+    return count >= 2 && count * (guide.text.length - marker) > guide.text.length + 9;
+  });
+  const gain = candidates.reduce(
+    (sum, { guide, count }) =>
+      sum + count * (guide.text.length - sharedGuideMarker(1).length) - guide.text.length - 9,
+    0,
+  );
+  // 見出しと区切りの分（見出し + 改行2 + `---` と改行）を引いて、なお得なときだけ
+  if (gain <= MIXED_SHARED_GUIDES_HEADER.length + 6) return { rewrite: (text) => text, tail: [] };
+  for (const { guide } of candidates) hoisted.push({ guide, number: hoisted.length + 1 });
+  return {
+    rewrite: (text) => {
+      let out = text;
+      for (const { guide, number } of hoisted) {
+        const found = guide.find(out);
+        if (found !== null) {
+          out = out.slice(0, found[0]) + sharedGuideMarker(number) + out.slice(found[1]);
+        }
+      }
+      return out;
+    },
+    tail: [
+      '---',
+      MIXED_SHARED_GUIDES_HEADER,
+      '',
+      ...hoisted.flatMap(({ guide, number }) => [`**${String(number)}.** ${guide.text}`, '']),
+    ],
+  };
+}
+
+/**
+ * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）を並べる（要約しない）。
+ * ただし件ごとに変わらない定型（起点の案内・報告への応じ方・外部の出来事の指示）が2件以上に入るときは、束の末尾に1回だけ置き、各件には参照の印を残す。
+ */
+export function mixedSignalBatchPrompt(rawItems: readonly MixedBatchItem[]): string {
+  const hoist = hoistSharedGuides(
+    rawItems.flatMap((item) => (typeof item === 'string' ? [item] : [...item.parts])),
+  );
+  const items = rawItems.map((item): MixedBatchItem =>
+    typeof item === 'string'
+      ? hoist.rewrite(item)
+      : { managerId: item.managerId, parts: item.parts.map(hoist.rewrite) },
+  );
   const total = items.reduce(
     (sum, item) => sum + (typeof item === 'string' ? 1 : item.parts.length),
     0,
@@ -115,6 +217,7 @@ export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string
     '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
     '',
     ...lines,
+    ...hoist.tail,
   ].join('\n');
 }
 
