@@ -23,6 +23,9 @@ describe('revokeAccessToken（メモリ実装）', () => {
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full' as const,
+    origin: 'login' as const,
+    issuedBy: null,
   };
 
   it('失効させる（revokedAt が立ち、同じアカウントの別のトークンは影響を受けない）', async () => {

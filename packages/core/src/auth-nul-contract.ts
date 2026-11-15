@@ -43,6 +43,9 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   };
   const request: LoginRequest = {
     id: 'auth-nul-request',

@@ -480,7 +480,13 @@ describe('連携の鍵（人間ではない）には付けない', () => {
     });
     expect(
       humanActionOf(
-        { kind: 'account', account: { id: 'acc-9' } as AuthAccount },
+        {
+          kind: 'account',
+          account: { id: 'acc-9' } as AuthAccount,
+          tokenId: 'tok-9',
+          tokenKind: 'full',
+          tokenOrigin: 'login',
+        },
         'practice_remove',
         'daily',
       ),

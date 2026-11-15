@@ -203,6 +203,9 @@ describe('連携の鍵の発行・一覧・失効', () => {
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full',
+      origin: 'login',
+      issuedBy: null,
     });
     const created = await app.request('/integration-keys', {
       method: 'POST',

@@ -35,6 +35,18 @@ export const authIdentitySchema = z.object({
   lastLoginAt: isoDateTime,
 });
 
+// 種類は決まった2つだけ: 連携の鍵と同じく「配布範囲の境界」であって、行為ごとのスコープではない。`scopes: [...]` のような選べる一覧を足すと PRD「権限境界」が禁じる「確認が要る行為の一覧」と同じ形になる（2026-11-15 のオーナー決定）
+export const ACCESS_TOKEN_KINDS = ['read', 'full'] as const;
+export const accessTokenKindSchema = z.enum(ACCESS_TOKEN_KINDS);
+export type AccessTokenKind = z.infer<typeof accessTokenKindSchema>;
+
+export const ACCESS_TOKEN_ORIGINS = ['login', 'issued'] as const;
+export const accessTokenOriginSchema = z.enum(ACCESS_TOKEN_ORIGINS);
+export type AccessTokenOrigin = z.infer<typeof accessTokenOriginSchema>;
+
+// 発行したトークンの期限の既定。無期限は明示したときだけ（`expiresAt: null`）
+export const ISSUED_ACCESS_TOKEN_DEFAULT_TTL_DAYS = 30;
+
 export const accessTokenRecordSchema = z.object({
   id: z.string().min(1),
   accountId: z.string().min(1),
@@ -45,6 +57,11 @@ export const accessTokenRecordSchema = z.object({
   expiresAt: isoDateTime.nullable(),
   lastUsedAt: isoDateTime.nullable(),
   revokedAt: isoDateTime.nullable(),
+  // 3つの既定は、この欄が無かった頃にログインで発行済みの行を読めるようにするためのもの（`full`・`login`・null）。新しく書く側は必ず明示する
+  kind: accessTokenKindSchema.default('full'),
+  origin: accessTokenOriginSchema.default('login'),
+  // 発行した主体（アカウント id か `'operator'`）。ログインで発行した行は null
+  issuedBy: z.string().nullable().default(null),
 });
 
 // `state` を HMAC で署名しない: この行そのものを突き合わせに使う（サーバ側に置き場があるので署名鍵を増やす必要が無い）
@@ -156,6 +173,11 @@ export function timingSafeEqualHex(a: string, b: string): boolean {
 }
 
 export const ACCESS_TOKEN_PREFIX = 'alt_';
+
+// 値も sha256 の全体も出さずにトークンを見分けるための先頭12桁（連携の鍵の `integrationKeyFingerprint` と同じ長さ）
+export function accessTokenFingerprint(sha256: string): string {
+  return sha256.slice(0, 12);
+}
 
 export function issueAccessTokenValue(): string {
   return `${ACCESS_TOKEN_PREFIX}${randomToken(32)}`;

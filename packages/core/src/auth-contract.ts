@@ -73,6 +73,9 @@ function tokenOf(id: string, sha: string, label: string, createdAt: string): Acc
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   };
 }
 
@@ -108,6 +111,9 @@ function issuedFor(consumed: LoginRequest, id: string, shaChar: string): AccessT
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   };
 }
 
@@ -192,6 +198,41 @@ export async function verifyAuthRecordsContract(makeAuth: MakeAuthStore): Promis
     );
     expectEqual(area, '別の sha256', await store.findAccessTokenBySha256('b'.repeat(64)), null);
     expectEqual(area, 'listAccessTokens', await store.listAccessTokens('account-1'), [token]);
+  }
+
+  // 発行したトークンの種類・発行元・発行した主体が、書いた値のまま読み戻せ、失効と使用の書き込みでも落ちない
+  {
+    const store = await makeAuth();
+    await store.putAccount(ACCOUNT);
+    const issued: AccessTokenRecord = {
+      ...tokenOf('token-issued', 'd', '連携用', BASE),
+      kind: 'read',
+      origin: 'issued',
+      issuedBy: 'operator',
+    };
+    await store.putAccessToken(issued);
+    expectEqual(
+      area,
+      '発行したトークンの読み戻し',
+      await store.findAccessTokenBySha256('d'.repeat(64)),
+      issued,
+    );
+    await store.markAccessTokenUsed('token-issued', '2026-01-02T00:00:00.000Z');
+    const revoked = await store.revokeAccessToken('token-issued', '2026-01-03T00:00:00.000Z');
+    expectEqual(area, '失効後の種類・発行元', revoked, {
+      status: 'revoked',
+      token: {
+        ...issued,
+        lastUsedAt: '2026-01-02T00:00:00.000Z',
+        revokedAt: '2026-01-03T00:00:00.000Z',
+      },
+    });
+    expectEqual(
+      area,
+      '一覧にも種類・発行元が載る',
+      (await store.listAccessTokens('account-1')).map((it) => [it.kind, it.origin, it.issuedBy]),
+      [['read', 'issued', 'operator']],
+    );
   }
 
   // ログイン要求を保存して読み戻せる（ブラウザ往復の突き合わせ）
@@ -441,6 +482,9 @@ export async function verifyAuthTieByteOrderContract(makeAuth: MakeAuthStore): P
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   });
   const owner = (): AuthAccount => ({ ...account('account-1'), createdAt: BASE });
 

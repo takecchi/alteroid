@@ -1,4 +1,6 @@
 import {
+  accessTokenKindSchema,
+  accessTokenOriginSchema,
   accountUsageStateSchema,
   attachmentLimitsSchema,
   attachmentMetaSchema,
@@ -10,6 +12,7 @@ import {
   APPROVAL_TRACE_STATES,
   CREDENTIAL_NAME,
   createMemoryStores,
+  hasNul,
   INBOX_EVENT_TYPE_ORDER,
   integrationSourceSchema,
   jobSchema,
@@ -256,6 +259,54 @@ export const integrationKeyCreateResponseSchema = z.object({
 });
 
 export const integrationKeyResponseSchema = z.object({ key: integrationKeyViewSchema });
+
+// 値も sha256 の全体も返さない: 見分けるための先頭12桁だけ。
+const accessTokenViewSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  name: z.string(),
+  kind: accessTokenKindSchema,
+  origin: accessTokenOriginSchema,
+  // 発行した主体（アカウント id か `operator`）。ログインで発行したトークンは null
+  issuedBy: z.string().nullable(),
+  fingerprint: z.string(),
+  createdAt: isoDateTimeSchema,
+  expiresAt: isoDateTimeSchema.nullable(),
+  lastUsedAt: isoDateTimeSchema.nullable(),
+  revokedAt: isoDateTimeSchema.nullable(),
+});
+
+export const accessTokensListResponseSchema = z.object({ tokens: z.array(accessTokenViewSchema) });
+
+// `scopes` のような選べる許可の一覧は無い: 種類は `read` と `full` の2つだけ（連携の鍵と同じく配布範囲の境界）。
+export const accessTokenCreateRequestSchema = z.object({
+  // 断る（落とさない）: NUL を落とすと別の名前になり、孤立サロゲートは pg で U+FFFD に置き換わって別の名前で残る
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .refine((value) => !hasNul(value), 'NUL を含められない')
+    .refine(
+      (value) => (value as string & { isWellFormed(): boolean }).isWellFormed(),
+      '孤立サロゲートを含められない',
+    ),
+  kind: accessTokenKindSchema.optional(),
+  // 省略は 30 日後。無期限は `null` を明示したときだけ
+  expiresAt: isoDateTimeSchema.nullable().optional(),
+  // operator の資格では必須。アカウントの資格では省略するか自分の id にする
+  accountId: z.string().min(1).optional(),
+});
+
+export const accessTokenCreateResponseSchema = z.object({
+  token: accessTokenViewSchema,
+  // トークンの値はこの応答でだけ返す: 保存は sha256 だけで、後からは取り出せない。
+  value: z.string(),
+});
+
+export const accessTokenResponseSchema = z.object({ token: accessTokenViewSchema });
+
+export const accessTokenAccountQuerySchema = z.object({ accountId: z.string().min(1).optional() });
 
 const conversationSchema = z.object({
   conversationId: z.string(),

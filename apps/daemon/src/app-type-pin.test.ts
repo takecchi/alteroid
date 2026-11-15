@@ -109,6 +109,8 @@ type ExpectedAppSchema = {
   '/access/:accountId/grant': '$post';
   '/access/:accountId/revoke': '$post';
   '/access/unreadable/remove': '$post';
+  '/access-tokens': '$get' | '$post';
+  '/access-tokens/:id/revoke': '$post';
   '/shutdown': '$post';
   '/reset': '$post';
   '/mcp': '$post';

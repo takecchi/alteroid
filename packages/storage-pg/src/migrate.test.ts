@@ -308,3 +308,57 @@ describe('migrate（auth_accounts のメール大小文字索引。#1702）', ()
     ).rejects.toThrow();
   }, 30_000);
 });
+
+// 列を足す前にログインで発行済みの行を、列の無い表から再現する。空の DB に2回通すだけでは、既定値が既存の行へ効くことは測れない。
+describe('migrate（auth_access_tokens の kind / origin / issued_by 列）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('列の無い表の既存の行は full・login・null として読め、2周目のあとも変わらない。発行したトークンの値は保たれる', async () => {
+    await migrate(db);
+    await db.execute(sql.raw('alter table auth_access_tokens drop column kind'));
+    await db.execute(sql.raw('alter table auth_access_tokens drop column origin'));
+    await db.execute(sql.raw('alter table auth_access_tokens drop column issued_by'));
+    await db.execute(
+      sql.raw(
+        `insert into auth_access_tokens (id, account_id, sha256, label, created_at) values ('legacy-1', 'acc-1', '${'a'.repeat(64)}', 'laptop', '2026-01-01T00:00:00Z')`,
+      ),
+    );
+
+    await migrate(db);
+    await migrate(db);
+
+    const store = new PgAuthStore(db);
+    const legacy = await store.findAccessTokenBySha256('a'.repeat(64));
+    expect(legacy).toMatchObject({ kind: 'full', origin: 'login', issuedBy: null });
+
+    await store.putAccessToken({
+      id: 'issued-1',
+      accountId: 'acc-1',
+      sha256: 'b'.repeat(64),
+      label: '別の環境',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+      kind: 'read',
+      origin: 'issued',
+      issuedBy: 'operator',
+    });
+    await migrate(db);
+    expect(await store.findAccessTokenBySha256('b'.repeat(64))).toMatchObject({
+      kind: 'read',
+      origin: 'issued',
+      issuedBy: 'operator',
+    });
+  }, 30_000);
+});

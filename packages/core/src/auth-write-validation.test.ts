@@ -66,6 +66,9 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（イン�
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await expect(stores.auth.putAccessToken(invalidToken)).rejects.toThrow();
   });
@@ -82,6 +85,9 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（イン�
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await stores.auth.putAccessToken(token);
     await expect(stores.auth.revokeAccessToken(token.id, '不正な日時')).rejects.toThrow();
@@ -141,6 +147,9 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（イン�
         expiresAt: null,
         lastUsedAt: null,
         revokedAt: null,
+        kind: 'full' as const,
+        origin: 'login' as const,
+        issuedBy: null,
       })),
     ).rejects.toThrow();
   });

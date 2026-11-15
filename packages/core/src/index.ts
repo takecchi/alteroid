@@ -82,7 +82,13 @@ export { keepsContainerToken, selectBalancedToken, tokenLoadScoreOf } from './to
 export { usageTransitionOf } from './usage-limits.js';
 /** PRD「権限境界」とは別の層: あちらは行為の一覧を持ってはいけないが、こちらは実行環境の境界（認証情報の配布範囲）である。 */
 export {
+  ACCESS_TOKEN_KINDS,
+  ACCESS_TOKEN_ORIGINS,
   ACCESS_TOKEN_PREFIX,
+  ISSUED_ACCESS_TOKEN_DEFAULT_TTL_DAYS,
+  accessTokenFingerprint,
+  accessTokenKindSchema,
+  accessTokenOriginSchema,
   accessTokenRecordSchema,
   authAccountSchema,
   authIdentitySchema,
@@ -94,6 +100,8 @@ export {
   loginRequestSchema,
   sha256Hex,
   timingSafeEqualHex,
+  type AccessTokenKind,
+  type AccessTokenOrigin,
   type AccessTokenRecord,
   type AuthAccount,
   type AuthIdentity,
@@ -109,7 +117,15 @@ export {
   type AuthProvider,
   type OAuthProvider,
 } from './auth-providers.js';
-export { createAuthService, type AuthService, type GrantResult } from './auth-service.js';
+export {
+  createAuthService,
+  type AuthService,
+  type AuthenticatedAccessToken,
+  type GrantResult,
+  type IssueAccessTokenInput,
+  type IssuedAccessToken,
+  type RevokeAccessTokenByIdResult,
+} from './auth-service.js';
 export type {
   AnswerApprovalVia,
   ClonePluginLoadObservation,

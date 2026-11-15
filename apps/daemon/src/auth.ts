@@ -3,6 +3,8 @@ import {
   placedEnvValue,
   sha256Hex,
   timingSafeEqualHex,
+  type AccessTokenKind,
+  type AccessTokenOrigin,
   type AuthAccount,
   type AuthProvider,
   type IntegrationLimits,
@@ -88,7 +90,14 @@ function describe(enabled: boolean, providers: AuthProvider[], mode: string): st
 
 export type Principal =
   | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
-  | { kind: 'account'; account: AuthAccount }
+  // operator の資格にはアクセストークンの行が無いので `tokenId` 等を持たない。`tokenKind` は `read` の許可表の門が、`tokenOrigin` は「発行したトークンは発行の口を呼べない」の門が見る
+  | {
+      kind: 'account';
+      account: AuthAccount;
+      tokenId: string;
+      tokenKind: AccessTokenKind;
+      tokenOrigin: AccessTokenOrigin;
+    }
   | {
       kind: 'integration';
       keyId: string;

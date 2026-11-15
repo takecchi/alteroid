@@ -60,6 +60,9 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   };
 
   const BAD_TOKEN_RAW = {
@@ -132,6 +135,27 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
       (row) => typeof row === 'object' && row !== null && (row as { id?: unknown }).id === id,
     );
   }
+
+  it('kind / origin / issuedBy が無かった頃の行は、不正な行ではなく full・login・null として読める（読み飛ばさない）', async () => {
+    const stores = createFsStores(root);
+    await stores.auth.putAccount(GOOD_ACCOUNT);
+    const raw = JSON.parse(await readFile(authPath, 'utf8')) as { accessTokens: unknown[] };
+    raw.accessTokens.push({
+      id: GOOD_TOKEN.id,
+      accountId: GOOD_TOKEN.accountId,
+      sha256: GOOD_TOKEN.sha256,
+      label: GOOD_TOKEN.label,
+      createdAt: GOOD_TOKEN.createdAt,
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    });
+    await writeFile(authPath, `${JSON.stringify(raw, null, 2)}\n`);
+
+    const reread = createFsStores(root);
+    expect(await reread.auth.findAccessTokenBySha256(GOOD_TOKEN.sha256)).toEqual(GOOD_TOKEN);
+    expect(await reread.auth.listUnreadableAccounts()).toEqual([]);
+  });
 
   it('listAccounts() / getAccount() は不正な行があっても落ちず、正しい行だけを返す', async () => {
     await writeRawAuthFile();

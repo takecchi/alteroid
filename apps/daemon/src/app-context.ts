@@ -471,8 +471,8 @@ export function createAppContext(deps: AppDeps) {
         void authService
           .authenticate(bearer)
           .then(
-            (account) => {
-              if (account === null || !isAccountGranted(account)) {
+            (authenticated) => {
+              if (authenticated === null || !isAccountGranted(authenticated.account)) {
                 lost = true;
                 wake();
               }

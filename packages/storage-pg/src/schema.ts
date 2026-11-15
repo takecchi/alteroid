@@ -282,6 +282,10 @@ export const authAccessTokens = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }),
     revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    // 既定は、この列が無かった頃にログインで発行済みの行を読むための値（`full`・`login`・null）
+    kind: text('kind').notNull().default('full'),
+    origin: text('origin').notNull().default('login'),
+    issuedBy: text('issued_by'),
   },
   (table) => [
     uniqueIndex('auth_access_tokens_sha256_idx').on(table.sha256),

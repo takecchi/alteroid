@@ -64,12 +64,12 @@ describe('createApp の経路の一覧が固定値と一致する', () => {
     expect(routesOf(['https://www.example.com'])).toEqual(PIN.withCors);
   });
 
-  it('空振りでない: 経路が 113 本（use の ALL と /openapi.json・/docs を除く）ある', () => {
+  it('空振りでない: 経路が 116 本（use の ALL と /openapi.json・/docs を除く）ある', () => {
     const collapsed = collapse(PIN.withoutCors);
     const real = collapsed.filter(
       (key) => !key.startsWith('ALL ') && key !== 'GET /openapi.json' && key !== 'GET /docs',
     );
-    expect(real).toHaveLength(113);
+    expect(real).toHaveLength(116);
     expect(collapsed).toContain('GET /openapi.json');
     expect(collapsed).toContain('GET /docs');
     // 型の側の経路（鎖）には /openapi.json・/docs が載らず、実行時だけに 2 本多い。
@@ -86,8 +86,9 @@ describe('createApp の経路の一覧が固定値と一致する', () => {
   it('use の順: 認証（ALL）は経路より前、先頭の ALL は CORS の有無で 1 段違う', () => {
     const firstRoute = (entries: readonly Entry[]) =>
       entries.findIndex(([method]) => method !== 'ALL');
-    expect(firstRoute(PIN.withoutCors)).toBe(2);
-    expect(firstRoute(PIN.withCors)).toBe(3);
+    // ALL は 時間の計測・認証・read のトークンの許可表の門（CORS ありならその前に CORS が1段）
+    expect(firstRoute(PIN.withoutCors)).toBe(3);
+    expect(firstRoute(PIN.withCors)).toBe(4);
     for (const entries of [PIN.withoutCors, PIN.withCors]) {
       const lastAll = entries.map(([method]) => method).lastIndexOf('ALL');
       expect(lastAll).toBe(firstRoute(entries) - 1);

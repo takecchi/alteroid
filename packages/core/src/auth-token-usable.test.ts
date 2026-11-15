@@ -24,6 +24,9 @@ function tokenWith(overrides: Partial<AccessTokenRecord>): AccessTokenRecord {
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
     ...overrides,
   };
 }
@@ -99,6 +102,6 @@ describe('authenticate は、壊れた expiresAt のトークンを拒む（issu
       sha256: sha256Hex(bearer),
       expiresAt: '2026-10-27T00:00:00.000Z',
     });
-    expect((await serviceWith(record).authenticate(bearer))?.id).toBe(account.id);
+    expect((await serviceWith(record).authenticate(bearer))?.account.id).toBe(account.id);
   });
 });

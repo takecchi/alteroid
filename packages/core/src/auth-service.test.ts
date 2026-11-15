@@ -112,7 +112,9 @@ describe('createAuthService', () => {
 
     const authenticated = await service.authenticate(claimed.token);
     expect(authenticated).not.toBeNull();
-    expect(isAccountGranted(authenticated!)).toBe(false);
+    expect(isAccountGranted(authenticated!.account)).toBe(false);
+    // ログインで発行したトークンは、ログインの資格と同じ強さ（`full`・`login`）として動く
+    expect(authenticated).toMatchObject({ kind: 'full', origin: 'login' });
   });
 
   it('許可を与えると使えるようになり、取り消すと同じトークンで使えなくなる', async () => {
@@ -123,10 +125,10 @@ describe('createAuthService', () => {
     expect(await service.grant(claimed.account.id, 'operator')).toMatchObject({
       status: 'granted',
     });
-    expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(true);
+    expect(isAccountGranted((await service.authenticate(claimed.token))!.account)).toBe(true);
 
     await service.revoke(claimed.account.id);
-    expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(false);
+    expect(isAccountGranted((await service.authenticate(claimed.token))!.account)).toBe(false);
   });
 
   it('複数のアカウントを許可できる（分けないのはデータの側）', async () => {
@@ -136,12 +138,12 @@ describe('createAuthService', () => {
 
     expect(await service.grant(alice.account.id, 'operator')).toMatchObject({ status: 'granted' });
     expect(await service.grant(bob.account.id, 'operator')).toMatchObject({ status: 'granted' });
-    expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(true);
-    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
+    expect(isAccountGranted((await service.authenticate(alice.token))!.account)).toBe(true);
+    expect(isAccountGranted((await service.authenticate(bob.token))!.account)).toBe(true);
 
     await service.revoke(alice.account.id);
-    expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(false);
-    expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
+    expect(isAccountGranted((await service.authenticate(alice.token))!.account)).toBe(false);
+    expect(isAccountGranted((await service.authenticate(bob.token))!.account)).toBe(true);
   });
 
   it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
@@ -786,6 +788,9 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     const second = {
       id: 'token-second',
@@ -796,6 +801,9 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await memoryAuth.putAccessToken(second);
     await memoryAuth.putAccessToken(first);
@@ -909,6 +917,9 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     const second = {
       id: 'token-second',
@@ -919,6 +930,9 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await memoryAuth.putAccessToken(first);
     await memoryAuth.putAccessToken(second);
@@ -940,6 +954,9 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     const second = {
       id: 'token-a',
@@ -950,6 +967,9 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await memoryAuth.putAccessToken(first);
     await memoryAuth.putAccessToken(second);

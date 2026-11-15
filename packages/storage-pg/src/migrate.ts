@@ -168,6 +168,10 @@ export const STATEMENTS = [
      last_used_at timestamptz,
      revoked_at timestamptz
    )`,
+  // 既定は、列を足す前にログインで発行済みの行にとって真になる値（`full`・`login`・null）。種類は `read` / `full` の2つだけなので check で固定する
+  `alter table auth_access_tokens add column if not exists kind text not null default 'full' check (kind in ('read', 'full'))`,
+  `alter table auth_access_tokens add column if not exists origin text not null default 'login' check (origin in ('login', 'issued'))`,
+  `alter table auth_access_tokens add column if not exists issued_by text`,
   `create unique index if not exists auth_access_tokens_sha256_idx on auth_access_tokens (sha256)`,
   `create index if not exists auth_access_tokens_account_idx on auth_access_tokens (account_id)`,
 

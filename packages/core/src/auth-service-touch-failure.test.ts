@@ -32,6 +32,9 @@ describe('アカウントの鍵の照合は、最後に使った時刻が書け�
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full',
+      origin: 'login',
+      issuedBy: null,
     });
     const service = createAuthService({ store, providers: createAuthProviderRegistry([]) });
 
@@ -41,7 +44,7 @@ describe('アカウントの鍵の照合は、最後に使った時刻が書け�
     });
 
     expect(account).not.toBeNull();
-    expect((account as { id: string } | null)?.id).toBe('account-1');
+    expect((account as { account: { id: string } } | null)?.account.id).toBe('account-1');
     expect(lines.filter((line) => line.includes('last used down (test)'))).toHaveLength(1);
   });
 });

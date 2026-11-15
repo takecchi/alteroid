@@ -107,6 +107,9 @@ async function grantAccount(): Promise<void> {
     expiresAt: null,
     lastUsedAt: null,
     revokedAt: null,
+    kind: 'full',
+    origin: 'login',
+    issuedBy: null,
   });
 }
 

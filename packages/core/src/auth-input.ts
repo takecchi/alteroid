@@ -23,6 +23,7 @@ export function prepareAccessTokenForWrite(token: AccessTokenRecord): AccessToke
   assertNoNul('accessToken.id', token.id);
   assertNoNul('accessToken.accountId', token.accountId);
   assertNoNul('accessToken.sha256', token.sha256);
+  if (token.issuedBy !== null) assertNoNul('accessToken.issuedBy', token.issuedBy);
   return { ...token, label: stripNul(token.label) };
 }
 

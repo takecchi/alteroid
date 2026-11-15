@@ -25,8 +25,10 @@ import {
   type AuthService,
 } from '@alteroid/core';
 import { type AttachmentLimits, writeStderrLine } from '@alteroid/core';
-import { bearerOf, isOperator, type AuthPlan, type AuthVariables } from './auth.js';
+import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
+import { judgeReadTokenRoute } from './read-token-gate.js';
+import { accessTokensRoutes } from './app-routes-access-tokens.js';
 import { type JournalBus } from './journal-bus.js';
 import { httpTimingMiddleware, type HttpTimingRecorder } from './http-timing.js';
 import { Scalar } from '@scalar/hono-api-reference';
@@ -207,16 +209,51 @@ export function createApp(deps: AppDeps) {
     if (bearer === null) {
       return c.json({ error: 'ログインが要る（alteroid login）' as const }, 401);
     }
-    const account = await authService.authenticate(bearer);
-    if (account === null) {
+    const authenticated = await authService.authenticate(bearer);
+    if (authenticated === null) {
       return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
     }
+    const { account } = authenticated;
     // `POST /auth/logout` だけは許可の無いアカウントも通す: 403 にすると許可待ちのトークンが失効させられず、後から `access grant` した瞬間に捨てたつもりのトークンが生き返る（CLI の `logout` も 403 を失敗と読む）。logout は提示したトークン自身を失効させるだけなので何も許さない。
     if (!isAccountGranted(account) && c.req.path !== '/auth/logout') {
       // 401 ではなく 403: やり直しても解決しない（人間が `access grant` を実行する）。
       return c.json({ error: 'このアカウントには alteroid を使う許可が無い' }, 403);
     }
-    c.set('principal', { kind: 'account', account });
+    c.set('principal', {
+      kind: 'account',
+      account,
+      tokenId: authenticated.tokenId,
+      tokenKind: authenticated.kind,
+      tokenOrigin: authenticated.origin,
+    });
+    await next();
+  });
+
+  // 断った試みは日誌に書かずデーモンのログへ（トークンの値は出さない。id だけ）。
+  function noteAccessTokenRefusal(c: Context, why: string, tokenId: string): void {
+    writeStderrLine(
+      `alteroid: アクセストークンの要求を断った（403、${why}）: ` +
+        `${c.req.method} ${c.req.path} tokenId=${tokenId}\n`,
+    );
+  }
+
+  // `read` のアクセストークンは許可表（`READ_TOKEN_ALLOWED_ROUTES`）に載った経路だけ通す。既定で拒否し、人間・operator・`full` のトークンの経路には何も足さない。公開パスは `authenticate` が principal を置かずに通すので、ここでも素通しになる。
+  const readTokenGate = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    const principal = c.get('principal') as Principal | undefined;
+    if (principal?.kind !== 'account' || principal.tokenKind !== 'read') {
+      await next();
+      return;
+    }
+    if (!judgeReadTokenRoute(c.req.method, c.req.path).allowed) {
+      noteAccessTokenRefusal(c, '読み取り用のトークンが通れない口', principal.tokenId);
+      return c.json(
+        {
+          error:
+            'この読み取り用のアクセストークン（read）では、この操作はできない（記憶・日誌・利用の読み取りと、MCP の読み取りの道具だけ）。書き込みや鍵・資格を扱う操作には full か、ログインの資格が要る' as const,
+        },
+        403,
+      );
+    }
     await next();
   });
 
@@ -301,6 +338,25 @@ export function createApp(deps: AppDeps) {
     await next();
   });
 
+  // アクセストークンの発行・一覧・失効の口の門: 人間（operator とログインで発行したトークンのアカウント）だけが呼べる。連携の鍵は `humanOnly` と同じ理由で断り、発行したトークン（read / full どちらも）も断る — 発行したトークンが仲間のトークンを発行・一覧・失効できたら、配布した範囲の境界が崩れる。自分自身の失効は `POST /auth/logout` でできる。
+  const loginCredentialOnly = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
+    const principal = c.get('principal');
+    if (principal.kind === 'integration') {
+      return c.json({ error: '連携の鍵では、アクセストークンの管理はできない' as const }, 403);
+    }
+    if (principal.kind === 'account' && principal.tokenOrigin === 'issued') {
+      noteAccessTokenRefusal(c, '発行したトークンは発行の口を呼べない', principal.tokenId);
+      return c.json(
+        {
+          error:
+            '発行したアクセストークンでは、アクセストークンの発行・一覧・失効はできない（人間のログインの資格か、実行環境の持ち主の資格で行う。自分自身の失効は POST /auth/logout）' as const,
+        },
+        403,
+      );
+    }
+    await next();
+  });
+
   const base = new Hono<{ Variables: AuthVariables }>();
 
   // hono の既定のハンドラの `console.error(err)` を使わない: 例外を丸ごと stderr へ出すので、リクエストの値を抱えた例外（`fetch` / DB ドライバ / `execFile`）がそのまま器の外へ出る。`reasonOf` は既存の口をそのまま使う: 同じ判断（1行目だけ・200字）を2箇所に持つとずれる。
@@ -347,6 +403,8 @@ export function createApp(deps: AppDeps) {
   const app = base
     .use('*', authenticate)
 
+    .use('*', readTokenGate)
+
     .route('/', systemRoutes(ctx, deps))
 
     .route('/', selfRoutes(ctx, deps))
@@ -368,6 +426,8 @@ export function createApp(deps: AppDeps) {
     .route('/', approvalsRoutes(ctx, deps))
 
     .route('/', integrationRoutes(ctx, humanOnly, noteIntegrationRefusal))
+
+    .route('/', accessTokensRoutes(ctx, loginCredentialOnly))
 
     .route('/', mcpRoutes(ctx, deps))
 

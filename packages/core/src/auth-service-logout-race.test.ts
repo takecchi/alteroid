@@ -103,6 +103,9 @@ describe('AuthService.authenticate と AuthService.logout の競合（issue #175
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full' as const,
+      origin: 'login' as const,
+      issuedBy: null,
     };
     await store.putAccessToken(token);
 

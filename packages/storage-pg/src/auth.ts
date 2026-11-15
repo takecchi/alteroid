@@ -263,6 +263,9 @@ export class PgAuthStore implements AuthStore {
       expiresAt: optionalDate(value.expiresAt),
       lastUsedAt: optionalDate(value.lastUsedAt),
       revokedAt: optionalDate(value.revokedAt),
+      kind: value.kind,
+      origin: value.origin,
+      issuedBy: value.issuedBy,
     };
     await this.#db
       .insert(authAccessTokens)
@@ -408,6 +411,9 @@ export class PgAuthStore implements AuthStore {
         expiresAt: optionalDate(token.expiresAt),
         lastUsedAt: optionalDate(token.lastUsedAt),
         revokedAt: optionalDate(token.revokedAt),
+        kind: token.kind,
+        origin: token.origin,
+        issuedBy: token.issuedBy,
       });
 
       return { request: parsed.data, token };
@@ -469,6 +475,10 @@ export class PgAuthStore implements AuthStore {
       expiresAt: optionalIso(row.expiresAt),
       lastUsedAt: optionalIso(row.lastUsedAt),
       revokedAt: optionalIso(row.revokedAt),
+      // check 制約が2値に固定しているので解釈できない値は来ない。来ても強い側へ倒さない（`read`・`issued` の側）
+      kind: row.kind === 'full' ? 'full' : 'read',
+      origin: row.origin === 'login' ? 'login' : 'issued',
+      issuedBy: row.issuedBy,
     };
   }
 }

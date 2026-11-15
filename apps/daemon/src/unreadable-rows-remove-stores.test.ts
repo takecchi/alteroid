@@ -329,6 +329,9 @@ describe('読めないアカウントを消した後の identity / トークン�
       expiresAt: null,
       lastUsedAt: null,
       revokedAt: null,
+      kind: 'full',
+      origin: 'login',
+      issuedBy: null,
     });
     const raw = JSON.parse(await readFile(path, 'utf8')) as { accounts: unknown[] };
     raw.accounts.push({

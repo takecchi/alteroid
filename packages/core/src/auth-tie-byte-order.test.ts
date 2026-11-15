@@ -38,6 +38,9 @@ const token = (id: string, n: number): AccessTokenRecord => ({
   expiresAt: null,
   lastUsedAt: null,
   revokedAt: null,
+  kind: 'full',
+  origin: 'login',
+  issuedBy: null,
 });
 
 describe('AuthStore の同着の2次キーはバイト順（インメモリ実装、issue #2458）', () => {

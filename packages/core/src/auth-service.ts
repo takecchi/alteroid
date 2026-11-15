@@ -9,6 +9,8 @@ import {
   randomToken,
   sha256Hex,
   timingSafeEqualHex,
+  type AccessTokenKind,
+  type AccessTokenOrigin,
   type AccessTokenRecord,
   type AuthAccount,
   type AuthStore,
@@ -56,6 +58,37 @@ type ClaimResult =
 
 export type LogoutResult = { status: 'ok' } | { status: 'not_found' };
 
+// 提示したトークンの行の要点も返す: 門番が `read` の許可表と「発行したトークンは発行の口を呼べない」を判定するのに、種類と発行元が要るため。素の行（sha256 を含む）は渡さない
+export interface AuthenticatedAccessToken {
+  account: AuthAccount;
+  tokenId: string;
+  kind: AccessTokenKind;
+  origin: AccessTokenOrigin;
+}
+
+export interface IssueAccessTokenInput {
+  accountId: string;
+  name: string;
+  kind: AccessTokenKind;
+  // 既定の補完はここでしない（呼び手が決める）: `null` は無期限で、明示のときだけ
+  expiresAt: string | null;
+  // アカウント id か `'operator'`
+  issuedBy: string;
+  // 保存の直前に呼ぶ。投げたら保存せずそのまま投げ直す（HTTP の口が日誌を先に書くための口）
+  beforeSave?: (record: AccessTokenRecord) => Promise<void>;
+}
+
+// `value` はこの結果でだけ見える: 保存は sha256 だけ
+export interface IssuedAccessToken {
+  token: AccessTokenRecord;
+  value: string;
+}
+
+export type RevokeAccessTokenByIdResult =
+  | { status: 'not_found' }
+  | { status: 'already_revoked'; token: AccessTokenRecord }
+  | { status: 'revoked'; token: AccessTokenRecord };
+
 // 再定義しない: 分けると片方だけ直して意味がずれるため
 export type GrantResult = GrantOutcome;
 
@@ -63,7 +96,12 @@ export interface AuthService {
   startLogin(input: StartLoginInput): Promise<StartLoginResult>;
   completeLogin(input: { state: string; code: string }): Promise<CompleteLoginResult>;
   claim(input: { requestId: string; claimSecret: string }): Promise<ClaimResult>;
-  authenticate(bearer: string): Promise<AuthAccount | null>;
+  authenticate(bearer: string): Promise<AuthenticatedAccessToken | null>;
+  issueAccessToken(input: IssueAccessTokenInput): Promise<IssuedAccessToken>;
+  // 作成順（`listAccessTokens` と同じ）。失効・期限切れも含む
+  listAccessTokens(accountId: string): Promise<AccessTokenRecord[]>;
+  // そのアカウントのトークンだけを対象にする（他のアカウントの id は `not_found`）。先に立っていた `revokedAt` は動かさない
+  revokeAccessTokenById(accountId: string, tokenId: string): Promise<RevokeAccessTokenByIdResult>;
   // operator の token をここで弾かない: どの資格で認証されたか（`Principal`）を知っているのは HTTP 層だけで、`AuthService` はその型を知らないため
   logout(bearer: string): Promise<LogoutResult>;
   grant(accountId: string, by: string): Promise<GrantResult>;
@@ -310,6 +348,10 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
             : new Date(at.getTime() + tokenTtlDays * 86_400_000).toISOString(),
         lastUsedAt: null,
         revokedAt: null,
+        // ログインで発行したトークンはこれまでどおりログインの資格と同じ強さ
+        kind: 'full' as const,
+        origin: 'login' as const,
+        issuedBy: null,
       }));
       if (claimed === null) return { status: 'error', reason: 'invalid_request' };
 
@@ -327,7 +369,39 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
       if (account === null) return null;
 
       await touch(store, record, at);
-      return account;
+      return { account, tokenId: record.id, kind: record.kind, origin: record.origin };
+    },
+
+    async issueAccessToken(input) {
+      const at = now();
+      const value = issueAccessTokenValue();
+      const record: AccessTokenRecord = {
+        id: newId(),
+        accountId: input.accountId,
+        sha256: sha256Hex(value),
+        label: input.name,
+        createdAt: at.toISOString(),
+        expiresAt: input.expiresAt,
+        lastUsedAt: null,
+        revokedAt: null,
+        kind: input.kind,
+        origin: 'issued',
+        issuedBy: input.issuedBy,
+      };
+      // 保存は `putAccessToken` の1操作（新しい id の挿入）: 読んでから書く形は無い
+      await input.beforeSave?.(record);
+      await store.putAccessToken(record);
+      // 読み直す: ストアが正規化した形（NUL を落とした名前など）で返すため
+      return { token: (await store.findAccessTokenBySha256(record.sha256)) ?? record, value };
+    },
+
+    listAccessTokens: (accountId) => store.listAccessTokens(accountId),
+
+    async revokeAccessTokenById(accountId, tokenId) {
+      // 持ち主の確認は読むだけ: トークンの `accountId` は書き換わらない（新しい行を足すだけで、既存行の持ち主は動かさない）ので、確認から失効までの間に結果が変わらない。失効そのものはストアの1操作に任せる（先に立った `revokedAt` を動かさない）
+      const owned = (await store.listAccessTokens(accountId)).some((it) => it.id === tokenId);
+      if (!owned) return { status: 'not_found' };
+      return store.revokeAccessToken(tokenId, now().toISOString());
     },
 
     async logout(bearer) {
