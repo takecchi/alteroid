@@ -7,7 +7,8 @@ export const SINGLE_CHUNK_MAX_BYTES = 262_144;
 // 実測: v7 の main は 1,290,673 B（98%）、v8 は 1,305,678 B（100%。残り約 5 KB）。増えた約 15 KB のほとんどは v8 の本体で
 // （最大のチャンクだけで +8.3 KB）、v8 で既定になった splitRouteModules の分は 559 B だけ（切っても手当てにならない）。
 // 上げ幅は、上げる前に main が持っていた余白（約 20 KB）を保つ幅にした。
-export const TOTAL_MAX_BYTES = 1_327_104;
+// 2026-11-16、アクセストークンの発行画面（オーナーの依頼）で +約13 KB。画面は削らず +8 KiB（1_327_104 → 1_335_296）。
+export const TOTAL_MAX_BYTES = 1_335_296;
 
 export function judgeBundleSize(files) {
   const sorted = [...files].sort((a, b) => b.bytes - a.bytes);

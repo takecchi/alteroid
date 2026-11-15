@@ -43,8 +43,9 @@ import type {
 // 種類を read / full の2つに固定する: 選べる許可の一覧（scopes）にすると、確認が要る行為の一覧と同じ形になるため（デーモンも2つしか受けない）
 
 const NAME_MAX_LENGTH = 200;
-// 登録名は連携の鍵の `alteroid-report` と別にする: 同じクライアントに両方を並べて入れられるように
-const MCP_SERVER_NAME = 'alteroid';
+// 登録名は連携の鍵の `alteroid-report` と別にする: 同じクライアントに両方を並べて入れられるように。
+// `alteroid` にしない: 別の alteroid の「設定 — MCP サーバ」では alteroid 自身の名前として予約されていて、貼れない
+const MCP_SERVER_NAME = 'alteroid-remote';
 
 const KIND_VIEW: Record<AccessTokenKind, { label: string; description: string }> = {
   read: {
@@ -444,10 +445,6 @@ function IssuedValue({ issued, onClose }: { issued: AccessTokenIssued; onClose: 
           <p className="text-[11px] break-words text-warn">
             この JSON を別の alteroid の「設定 — MCP
             サーバ」に貼ると、トークンがその環境のレジストリに平文で入り、そこのクローン・マネージャー・作業者から見える。
-          </p>
-          <p className="text-[11px] break-words text-muted-foreground">
-            alteroid は alteroid 自身の MCP サーバの名前として予約されているので、「設定 — MCP
-            サーバ」へ貼るときは登録名（先頭のキー）を別の名前に変える。
           </p>
         </div>
       </div>

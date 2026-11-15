@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mcpServersSchema } from '@alteroid/core';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -267,7 +268,7 @@ describe('/access-tokens 画面 — 発行フォーム', () => {
 });
 
 describe('/access-tokens 画面 — 発行直後の値', () => {
-  it('値と MCP サーバの JSON（キー alteroid）を1度だけ見せ、閉じると消える。保存しない', async () => {
+  it('値と MCP サーバの JSON（キー alteroid-remote）を1度だけ見せ、閉じると消える。保存しない', async () => {
     stubTokens();
     renderScreen();
     await screen.findByText('読み取り用');
@@ -279,16 +280,17 @@ describe('/access-tokens 画面 — 発行直後の値', () => {
     // 値が出るのは「アクセストークンの値」と MCP サーバの JSON の2か所だけ
     expect(document.body.textContent?.split(SECRET_VALUE)).toHaveLength(3);
     expect(screen.getByText(/この値は二度と表示されない/)).toBeTruthy();
-    const text = screen.getByText(/"alteroid"/, { selector: 'pre, code' }).textContent ?? '';
+    const text = screen.getByText(/"alteroid-remote"/, { selector: 'pre, code' }).textContent ?? '';
     const parsed: unknown = JSON.parse(text);
     expect(parsed).toEqual({
-      alteroid: {
+      'alteroid-remote': {
         type: 'http',
         url: 'http://daemon.test/mcp',
         headers: { Authorization: `Bearer ${SECRET_VALUE}` },
       },
     });
-    expect(screen.getByText(/予約されているので/)).toBeTruthy();
+    expect(mcpServersSchema.safeParse(parsed).success).toBe(true);
+    expect(screen.queryByText(/予約されているので/)).toBeNull();
     expect(text).not.toContain('alteroid-report');
     expect(screen.getByText(/alteroid-report とは別の名前/, { exact: false })).toBeTruthy();
     expect(
