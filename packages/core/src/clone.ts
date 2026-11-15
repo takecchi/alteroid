@@ -261,7 +261,8 @@ import {
   redactImagesInTranscriptYielding,
 } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
-import { composeTurnInputText, turnInputEntry } from './turn-input.js';
+import { composeTurnInputText, turnInputEntry, type TurnInputText } from './turn-input.js';
+import { buildTurnInputEntry, type TurnInputObservation } from './turn-input-observation.js';
 import { CloneTaskIntake } from './clone-task-intake.js';
 import { CloneTurnInput } from './clone-turn-input.js';
 import { CloneUsageLedger } from './clone-usage-ledger.js';
@@ -904,6 +905,8 @@ class Clone implements CloneHost {
    * `started` はターンが一度でも始まったか（始まる前の準備中と、終わった後の後始末を分ける）。
    */
   #inFlight: { readonly events: readonly InboxEvent[]; started: boolean } | null = null;
+  /** このターンの `notices.situation` の行ごとの長さ（`turn_input` の `situationParts`）。`#prepareTurn` が置き、`#settleTurn` が下ろす。 */
+  #turnSituationParts: Record<string, number> | undefined = undefined;
   /**
    * 新しい合図が届いたので枠の解除を試す、という印。`post()` は印を立てるだけで、解除は `#pump` の先頭でだけ行う:
    * `post()` は `#pump` の `await` の隙間に同期で割り込むので、そこで状態遷移まで済ませると、隙間に居た合図が1件取り残される。
@@ -2031,10 +2034,16 @@ class Clone implements CloneHost {
     // 担当の一覧はこの準備の間 1 回だけ引いて、3 本の断り書きで共有する（ターンごとに作り直す。`Clone` の状態に覚えない）
     const listManagers = this.#turnNotices.listOnce();
     // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
+    // 内訳は組めた回だけ受ける（`turn_input` の `situationParts`）。組めなかった回は前の回の値を残さない
+    this.#turnSituationParts = undefined;
     this.#notices.set(
       'situation',
       await timer
-        .time('prepare.situation', () => this.#turnNotices.situationFor(batch, listManagers))
+        .time('prepare.situation', () =>
+          this.#turnNotices.situationFor(batch, listManagers, (partChars) => {
+            this.#turnSituationParts = partChars;
+          }),
+        )
         .catch((error: unknown) => {
           noteDroppedRecord('いまの全体の組み立て', inboxEventShape(event), error);
           return describeSituationUnavailable(error);
@@ -2064,6 +2073,7 @@ class Clone implements CloneHost {
    */
   async #settleTurn(batch: InboxEvent[], timer: TurnTimer): Promise<void> {
     this.#notices.clearTurn();
+    this.#turnSituationParts = undefined;
     // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
     const defer = this.#usageBlocked !== null;
     const failedOutsideUsage = !defer && this.#pumpTurnFailed;
@@ -2091,6 +2101,18 @@ class Clone implements CloneHost {
     if (!timer.turnStartedAny) return;
     if (failed) timer.failed();
     await this.#journal({ type: 'turn_timing', ...timer.finish() });
+  }
+
+  /**
+   * ターン1本に実際に渡した入力の組み立ての内訳を1行だけ日誌へ書く（`turn_input`）。ターンごとに1行（`turn_timing` は受信箱の1回分で1行）。
+   * 投げない: 書けなかった分は `#journal` が跡に残し、内訳を組むところで投げても握る（観測のために応答を止めない）
+   */
+  async #noteTurnInput(observation: TurnInputObservation): Promise<void> {
+    try {
+      await this.#journal(buildTurnInputEntry(observation));
+    } catch (error) {
+      noteDroppedRecord('ターンの入力の内訳', `kind=${observation.kind}`, error);
+    }
   }
 
   // 1件でも複数件でも同じ道を通す: 分けて書くと、片方にだけ `#recorded` の待ちが入る・会話 id の取り方が違うといった食い違いが静かに入るため
@@ -3859,22 +3881,35 @@ class Clone implements CloneHost {
         this.#droppedRestore = null;
         await droppedRestore;
       }
-      const input = await this.#turnInput.withFreshMemory(
-        await this.#turnInput.withHumanActions(
-          composeTurnInputText({
-            distillGap: await this.#turnInput.distillGapNotice(kind),
-            contextWindowFold: this.#turnInput.contextWindowFoldNotice(kind),
-            droppedSignals: this.#droppedSignalsNotice(kind),
-            ...notices,
-            body: text,
-          }),
-        ),
-      );
+      // 内訳の観測（`turn_input`）のために、各段の出力を変数へ受けるだけ: 呼び出しの順・引数の評価の順・`await` の段は、入れ子のまま組んでいたときと同じ
+      const composed: TurnInputText = {
+        distillGap: await this.#turnInput.distillGapNotice(kind),
+        contextWindowFold: this.#turnInput.contextWindowFoldNotice(kind),
+        droppedSignals: this.#droppedSignalsNotice(kind),
+        ...notices,
+        body: text,
+      };
+      const composedText = composeTurnInputText(composed);
+      const withHumanActions = await this.#turnInput.withHumanActions(composedText);
+      const input = await this.#turnInput.withFreshMemory(withHumanActions);
       timer?.add('composeInput', Date.now() - composeStartedAt);
       timer?.modelStarted();
       this.#pushInput(input, images);
       // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
+      // 送った後に書く: 入力を投げるまでの時間と順序を観測で動かさないため。書けなくてもターンは止めない
+      await this.#noteTurnInput({
+        kind,
+        conversationId,
+        batch: this.#inFlight?.events ?? [],
+        composed,
+        lengths: {
+          composed: composedText.length,
+          withHumanActions: withHumanActions.length,
+          final: input.length,
+        },
+        situationParts: this.#turnSituationParts,
+      });
     } catch (error) {
       await this.#reportFailure(conversationId, { error });
       this.#finishTurn();

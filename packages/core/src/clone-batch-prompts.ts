@@ -230,7 +230,7 @@ export const REPORT_FOLLOW_UP_GUIDE =
   '学びや判断の基準になったことがあれば記憶へ移すこと。';
 
 /** 束ねた報告への応じ方の案内。 */
-const BATCH_REPORT_FOLLOW_UP_GUIDE =
+export const BATCH_REPORT_FOLLOW_UP_GUIDE =
   '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
   '学びや判断の基準になったことがあれば記憶へ移すこと。';
 
@@ -322,7 +322,7 @@ export const ORIGIN_NO_TASK_GUIDE =
   '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
 
 /** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
-const ORIGIN_TASK_GUIDE =
+export const ORIGIN_TASK_GUIDE =
   '（人間へ知らせるなら、結び付いた task へ `task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする）';
 
 /** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */

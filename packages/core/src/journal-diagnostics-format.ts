@@ -12,6 +12,7 @@ export const JOURNAL_DIAGNOSTICS_TYPES = [
   'turn_usage',
   'context_usage',
   'turn_timing',
+  'turn_input',
   'http_timing',
 ] as const;
 
@@ -45,6 +46,18 @@ export type JournalDiagnosticsEntryLike =
       firstTextMs?: number;
       phases: Record<string, number>;
       tokens?: { input: number; cacheRead: number; cacheCreation: number; output: number };
+    }
+  | {
+      type: 'turn_input';
+      kind: string;
+      triggers: string[];
+      totalChars: number;
+      bodyChars: number;
+      humanActionsChars: number;
+      freshMemoryChars: number;
+      notices: Record<string, number>;
+      signals: Array<{ kind: string; managerId?: string; chars: number }>;
+      signalsOmitted?: number;
     }
   | {
       type: 'http_timing';
@@ -118,6 +131,22 @@ export function summarizeJournalDiagnosticsEntry(entry: JournalDiagnosticsEntryL
         (entry.firstTextMs === undefined ? '' : `・最初の文字まで ${seconds(entry.firstTextMs)}`) +
         (slowest === undefined ? '' : `・最も長い段 ${slowest[0]} ${seconds(slowest[1])}`) +
         input
+      );
+    }
+    case 'turn_input': {
+      // 注記は大きい順に上位だけ書く（全部は行そのものにある）。本文・注記の文面は行に無いので、ここにも出ない
+      const notices = Object.entries(entry.notices)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name, chars]) => `${name} ${String(chars)}`);
+      const signalCount = entry.signals.length + (entry.signalsOmitted ?? 0);
+      return (
+        `[${entry.kind} ${entry.triggers.join('+') || '?'}] 入力 ${entry.totalChars.toLocaleString('en-US')} 字` +
+        `（本文 ${entry.bodyChars.toLocaleString('en-US')}・合図 ${String(signalCount)} 件` +
+        (entry.humanActionsChars === 0 ? '' : `・人間の操作 ${String(entry.humanActionsChars)}`) +
+        (entry.freshMemoryChars === 0 ? '' : `・記憶 ${String(entry.freshMemoryChars)}`) +
+        (notices.length === 0 ? '' : `・断り書き ${notices.join(' / ')}`) +
+        '）'
       );
     }
     case 'http_timing': {

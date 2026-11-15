@@ -21,6 +21,8 @@ const OLD_TONE_IN_ORDER = [
   ['context_usage', 'neutral'],
   // ターンの時間（#5086）は移した後に足した種別。診断の仲間として context_usage の後に置く
   ['turn_timing', 'neutral'],
+  // ターンの入力の内訳も移した後に足した種別。ターンの時間の後に置く
+  ['turn_input', 'neutral'],
   // API の時間（#5089）も移した後に足した種別。ターンの時間の後に置く
   ['http_timing', 'neutral'],
   ['token_rotation', 'warn'],
@@ -63,7 +65,7 @@ describe('種別の日本語名（issue #2806）', () => {
 
   it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
     expect(SEARCH_SCOPE_NOTE_JA).toBe(
-      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・API の時間・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      '道具の入力・1回のトークン数・文脈の埋まり具合・ターンの時間・ターンの入力の内訳・API の時間・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
     expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });

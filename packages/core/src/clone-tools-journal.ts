@@ -9,8 +9,17 @@ import {
 } from './journal-time.js';
 import { journalBytesChange } from './journal-bytes.js';
 import { noteDroppedRecord } from './dropped-record.js';
-import { describePage, excerpt, excerptLine, excerptRow, page, renderListing } from './excerpt.js';
+import {
+  describePage,
+  excerpt,
+  excerptLine,
+  excerptRow,
+  page,
+  renderListing,
+  type LazyListingItems,
+} from './excerpt.js';
 import { describeTurnTimingBody, describeTurnTimingHead } from './turn-timing-format.js';
+import { describeTurnInputBody, describeTurnInputHead } from './turn-input-format.js';
 import { describeHttpTimingBody, describeHttpTimingHead } from './http-timing-format.js';
 import { describeGithubCi } from './progress-github.js';
 import { describeMessageBreakdown } from './message-breakdown.js';
@@ -361,6 +370,8 @@ function renderJournalEntry(
     }
     case 'turn_timing':
       return { head: describeTurnTimingHead(entry), body: describeTurnTimingBody(entry) };
+    case 'turn_input':
+      return { head: describeTurnInputHead(entry), body: describeTurnInputBody(entry) };
     case 'http_timing':
       return { head: describeHttpTimingHead(entry), body: describeHttpTimingBody(entry) };
     case 'token_rotation': {
@@ -804,22 +815,27 @@ function describeJournalListing(
 }
 
 // 1件ごとの行: `<at> <head> id=<id>` と、本文があれば抜粋の行
+// 行は予算に入るか確かめるときまで作らない（予算で落ちる行は文にしない。出す文は変わらない）
 function describeJournalListingItems(
   entries: readonly JournalEntry[],
   conversationLabels: ReadonlyMap<string, string>,
-): string[] {
-  return entries.map((entry) => {
-    const { head, body } = renderJournalEntry(
-      entry,
-      JOURNAL_LISTING_ATTACHMENTS,
-      conversationLabels,
-      clipListingHeadField,
-    );
-    return (
-      `${entry.at} ${head} id=${entry.id}` +
-      (body === '' ? '' : `\n  ${journalListingBody(entry, body)}`)
-    );
-  });
+): LazyListingItems {
+  return {
+    count: entries.length,
+    build: (index) => {
+      const entry = entries[index]!;
+      const { head, body } = renderJournalEntry(
+        entry,
+        JOURNAL_LISTING_ATTACHMENTS,
+        conversationLabels,
+        clipListingHeadField,
+      );
+      return (
+        `${entry.at} ${head} id=${entry.id}` +
+        (body === '' ? '' : `\n  ${journalListingBody(entry, body)}`)
+      );
+    },
+  };
 }
 
 // `tool_use` の混み具合は習慣（types で絞るのを忘れない）に預けず、この呼びで数えた件数だけを言う: `tool_use` が decision / exchange を押し出す速さが上がったため
@@ -842,10 +858,10 @@ function describeToolUseNotice(
 
 // 予算（JOURNAL_BUDGET 字）で省略する。省略したときの断り書きと、表示した件数を返す
 function renderBudgetedListing(
-  items: string[],
+  items: LazyListingItems,
   order: 'asc' | 'desc' | undefined,
 ): { listing: string; shownCount: number } {
-  let shownCount = items.length;
+  let shownCount = items.count;
   const listing = renderListing(items, {
     budget: JOURNAL_BUDGET,
     omitted: ({ rest, shown, total }) => {

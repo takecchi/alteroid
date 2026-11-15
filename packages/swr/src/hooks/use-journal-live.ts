@@ -168,6 +168,9 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // ターンの時間（#5086）は読み直す画面の材料を変えない
     case 'turn_timing':
       break;
+    // ターンの入力の内訳も同じ（文字数と件数だけの診断）
+    case 'turn_input':
+      break;
     // API の時間（#5089）も同じ
     case 'http_timing':
       break;

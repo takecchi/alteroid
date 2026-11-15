@@ -714,6 +714,41 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
+  // クローンの1ターンに実際に渡した入力の組み立ての内訳（文字数・件数・識別子だけ。本文と注記の文面は持たない）。1ターン1行。`turn_timing` の隣に置く診断で、組み方は `turn-input-observation.ts`。
+  // 欄を `.optional()` にして既定値で埋めない: 取れなかった内訳を「0 字だった」と読ませないため。`notices`・`templates` は 0 のものを省く
+  z.object({
+    type: z.literal('turn_input'),
+    id: z.string(),
+    at: isoDateTime,
+    kind: z.enum(['normal', 'distill']),
+    conversationId: z.string().optional(),
+    triggers: z.array(z.string()),
+    // `#pushInput` へ渡した文字列そのものの長さ。`totalChars = Σnotices + humanActionsChars + freshMemoryChars + bodyChars`
+    totalChars: z.number().int().nonnegative(),
+    // 合図の本文（`#runTurn` の `text`）の長さ
+    bodyChars: z.number().int().nonnegative(),
+    humanActionsChars: z.number().int().nonnegative(),
+    freshMemoryChars: z.number().int().nonnegative(),
+    // `composeTurnInputText` の欄のうち本文以外（distillGap・contextWindowFold・droppedSignals・redelivery・validity・mergedBatchTruncation・commitment・situation）。`commitment` は待ち行列の断り
+    notices: z.record(z.string(), z.number().int().nonnegative()),
+    // `notices.situation` の中身の行ごとの長さ（和が `notices.situation` に一致する）。組めなかった回は持たない
+    situationParts: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    // このターンの入力になった合図ごとの、元の本文（`MANAGER_REPORT_BODY_LIMIT` で切る前）の長さ。先頭 `TURN_INPUT_SIGNALS_LIMIT` 件だけ
+    signals: z.array(
+      z.object({
+        kind: z.string(),
+        managerId: z.string().optional(),
+        chars: z.number().int().nonnegative(),
+      }),
+    ),
+    signalsOmitted: z.number().int().positive().optional(),
+    // 本文の中に定型の注記が何文字入っているか（定数の識別子名 → 出現回数 × 定数の長さ。0 は省く）
+    templates: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    // 導出値: bodyChars − Σsignals.chars（省いた分も含む）− Σtemplates（下限 0）。切り詰めがあると小さく出る
+    framingChars: z.number().int().nonnegative(),
+    // そのターンで解決して渡した添付（画像・ファイルなど）の件数
+    attachments: z.number().int().nonnegative(),
+  }),
   // HTTP API の要求の時間を、窓（既定 10 分）ごとに経路で束ねた行（#5089）。要求の無い窓は書かない。集め方は `http-timing.ts`
   z.object({
     type: z.literal('http_timing'),
@@ -862,6 +897,7 @@ const journalEntryTypeNames = {
   subagent_stall: true,
   context_usage: true,
   turn_timing: true,
+  turn_input: true,
   http_timing: true,
   github_observation: true,
   conversation_deleted: true,
