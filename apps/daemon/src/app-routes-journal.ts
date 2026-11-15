@@ -1,18 +1,8 @@
-import type { JournalEntryType } from '@alteroid/core';
 import {
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
-  JournalAnchorNotFoundError,
-  findUnrecordedManagers,
-  describeUnreadableJournalTimeBoundary,
   isDailyReport,
-  JOURNAL_ENTRY_TYPES,
   journalEntrySchema,
-  journalWindowCrossesHorizon,
-  ledgerTimeZone,
   localDayRange,
-  normalizeJournalTimeBoundary,
-  summarizeUsage,
-  usageDate,
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
@@ -40,6 +30,7 @@ import {
   queryParams,
   readJournalEntry,
 } from './app-shared.js';
+import { readJournalPage, readUsage } from './read-queries.js';
 
 // 可視の複合キー（`beforeDate` / `beforeAt`）でページングし、不透明な `cursor` を使わない: 応答に新しい欄を足さずに済む。封筒（`total` / `nextCursor`）を持たない: 続きが在るかは `limit` 件ちょうど返ったかで判る。`order` は足さない（常に日付の新しい順）。
 const reportsQuery = z.object({
@@ -80,7 +71,7 @@ const usageQuery = z.object({
 });
 
 export function journalRoutes(ctx: AppContext, deps: AppDeps) {
-  const { clone, stores, clock, resolveTimeZone } = ctx;
+  const { stores } = ctx;
   return (
     new Hono<{ Variables: AuthVariables }>()
       .get(
@@ -131,85 +122,10 @@ export function journalRoutes(ctx: AppContext, deps: AppDeps) {
         }),
         queryParams(journalQuery),
         async (c) => {
-          const { limit, since, until, type, q, order, afterId, afterAt, horizon } =
-            c.req.valid('query');
-          const requestedTypes = type?.split(',').filter((value) => value.length > 0);
-          const unknownTypes = (requestedTypes ?? []).filter(
-            (value) => !(JOURNAL_ENTRY_TYPES as readonly string[]).includes(value),
-          );
-          if (unknownTypes.length > 0) {
-            return c.json(
-              {
-                error:
-                  `type に知らない値が入っている: ${unknownTypes.join(', ')}` +
-                  `（使えるのは ${JOURNAL_ENTRY_TYPES.join(' / ')}。カンマ区切りで複数）`,
-              },
-              400,
-            );
-          }
-          const types = requestedTypes as JournalEntryType[] | undefined;
-
-          // 片方だけでは境界が決まらない。この2つの if で TypeScript が `afterId`/`afterAt` を以降 `string` に絞る。
-          if (afterId === undefined && afterAt !== undefined) {
-            return c.json({ error: 'afterId と afterAt は両方一緒に渡す' as const }, 400);
-          }
-          if (afterId !== undefined && afterAt === undefined) {
-            return c.json({ error: 'afterId と afterAt は両方一緒に渡す' as const }, 400);
-          }
-          if (afterId !== undefined && afterAt !== undefined && Number.isNaN(Date.parse(afterAt))) {
-            return c.json({ error: 'afterAt は ISO 8601 で指定する' as const }, 400);
-          }
-
-          // `toISOString()` へ正規化してからストアへ渡す: pg は時刻で比べるが fs・インメモリは文字列比較なので、秒の省略やオフセットで3実装の答えが割れる。
-          if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
-            return c.json({ error: describeUnreadableJournalTimeBoundary('since', since) }, 400);
-          }
-          if (until !== undefined && normalizeJournalTimeBoundary(until) === null) {
-            return c.json({ error: describeUnreadableJournalTimeBoundary('until', until) }, 400);
-          }
-          const normalizedSince =
-            since === undefined ? undefined : normalizeJournalTimeBoundary(since)!;
-          const normalizedUntil =
-            until === undefined ? undefined : normalizeJournalTimeBoundary(until)!;
-
-          try {
-            const { entries, next } = await stores.journal.listPage({
-              limit,
-              order,
-              ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
-              ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
-              ...(types === undefined || types.length === 0 ? {} : { types }),
-              ...(q === undefined ? {} : { q }),
-              ...(afterId === undefined || afterAt === undefined
-                ? {}
-                : { after: { id: afterId, at: afterAt } }),
-            });
-
-            // 0件かどうかでは決めない: 窓がまるごと地平より後ろなら、0件でも「本当に無かった」と言い切れる。
-            const oldestAt =
-              normalizedSince !== undefined || normalizedUntil !== undefined || horizon === 'true'
-                ? await stores.journal.oldestAt()
-                : undefined;
-            // `journal_read` と同じ関数（`journalWindowCrossesHorizon`）を呼ぶ: 2箇所に書き写さない。
-            const crossesHorizon =
-              oldestAt === undefined
-                ? undefined
-                : journalWindowCrossesHorizon(oldestAt, normalizedSince);
-
-            return c.json({
-              entries,
-              // `entries` が `limit` 未満・空でも、`null` でない限り先に行が在る: ストアは読めない行を `limit` の後で捨てる。
-              next,
-              ...(oldestAt === undefined ? {} : { oldestAt }),
-              ...(crossesHorizon === undefined ? {} : { crossesHorizon }),
-            });
-          } catch (error) {
-            // 指す行が見当たらないのは判定できないという第3の状態: 黙って先頭から返さず 400 にする。
-            if (error instanceof JournalAnchorNotFoundError) {
-              return c.json({ error: error.message }, 400);
-            }
-            throw error;
-          }
+          // 検査も窓の組み立ても `readJournalPage` が持つ（MCP の `journal_read` と同じ1本）。
+          const result = await readJournalPage(stores, c.req.valid('query'));
+          if (!result.ok) return c.json({ error: result.error }, 400);
+          return c.json(result.body);
         },
       )
 
@@ -276,35 +192,8 @@ export function journalRoutes(ctx: AppContext, deps: AppDeps) {
         }),
         queryParams(usageQuery),
         async (c) => {
-          const { from, to, managerId, layer, site, tokenId } = c.req.valid('query');
-          const aggregate = await stores.usage.aggregate({
-            ...(from === undefined ? {} : { from }),
-            ...(to === undefined ? {} : { to }),
-            ...(managerId === undefined ? {} : { managerId }),
-            ...(layer === undefined ? {} : { layer }),
-            ...(site === undefined ? {} : { site }),
-            ...(tokenId === undefined ? {} : { tokenId }),
-          });
-          // 全期間・絞り込み無しの2つを突き合わせる: クエリで狭めた `aggregate.rows` から作ると、照会範囲の外で記録された委譲が「記録が無い」に化ける。
-          const allManagers = await clone.managers.list();
-          const recordedManagerIds = await stores.usage.recordedManagerIds();
-          const unrecordedManagers = findUnrecordedManagers(
-            allManagers,
-            recordedManagerIds,
-            aggregate.since,
-          );
-          return c.json({
-            ...aggregate,
-            // 内訳は core の1つの実装で作る（口ごとに足し直すと食い違う）。
-            breakdown: summarizeUsage(aggregate.rows, aggregate.turnRows),
-            // 配線されていなければ「まだ分からない」を返す: 0 や null にすると「枠を使っていない」と読める。
-            account: deps.accountUsage?.() ?? { state: 'unknown' as const },
-            unrecordedManagers,
-            // 台帳の `date` を書くのと同じ関数・同じ TZ で評価する: ブラウザの TZ で「今日」を決めると台帳の日とずれる。
-            today: usageDate(clock()),
-            // `today` と同じ時計・同じ TZ の名前。取れなければ null（既定値を埋めない）
-            ledgerTimeZone: ledgerTimeZone(clock(), resolveTimeZone),
-          });
+          // 集計は `readUsage` が持つ（MCP の `usage_read` と同じ1本）。
+          return c.json(await readUsage(ctx, deps, c.req.valid('query')));
         },
       )
 

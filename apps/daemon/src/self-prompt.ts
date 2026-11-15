@@ -7,6 +7,7 @@ import type {
 import type { z } from 'zod';
 
 import type { selfPromptResponseSchema } from './openapi.js';
+import { createDaemonSecretRedactor } from './secret-scan.js';
 
 // `GET /self/prompt` の応答を、クローンのスナップショット（`CloneHost#promptSnapshot`）から組む。
 // - 組む関数（`buildSelfPromptBody`）と走査して閉じる関数（`finalizeSelfPrompt`）を分ける。走査は応答を返す前の最後の1か所（`finalizeSelfPrompt`）に集約し、値の通り道を1本にする。
@@ -216,4 +217,19 @@ export function finalizeSelfPrompt(body: UnscannedBody, redactor: SecretRedactor
     notice: [...scanned.notice, describeSecretScan(hits)],
     secretScan: { scanned: true, hits: hits.map((hit) => ({ rule: hit.rule, count: hit.count })) },
   };
+}
+
+/**
+ * スナップショットから `GET /self/prompt` の応答を組み、デーモンの共通の走査で閉じる。HTTP の口と MCP の道具が同じ1本を通る。
+ * 走査か組み立てが落ちたら投げる（呼び手は応答を返さない）。
+ */
+export function buildScannedSelfPrompt(
+  snapshot: ClonePromptSnapshot,
+  options: { full: boolean },
+  env: NodeJS.ProcessEnv,
+): SelfPromptBody {
+  return finalizeSelfPrompt(
+    buildSelfPromptBody(snapshot, options),
+    createDaemonSecretRedactor(env),
+  );
 }

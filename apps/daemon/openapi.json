@@ -24394,8 +24394,8 @@
       "post": {
         "operationId": "postMcp",
         "tags": ["mcp"],
-        "summary": "MCP（Streamable HTTP、ステートレス）。道具は report_problem の1本だけ",
-        "description": "外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` の1本だけ（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。",
+        "summary": "MCP（Streamable HTTP、ステートレス）。鍵は1本のまま。連携の鍵は report_problem だけ、アカウント・operator は読み取りの道具も持つ",
+        "description": "外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。**鍵は1本のまま（新しい資格・スコープは無い）で、呼び手の資格で道具の一覧が変わる**（`tools/list`）。連携の鍵が見る道具は `report_problem` の1本だけ（`GET /self/prompt` などと同じく、読み取りの道具は持たない。呼んでも標準の「未知の道具」で断られる）。アカウント・operator には `report_problem` に加えて読み取り専用（`readOnlyHint`）の道具が載る: `memory_list`・`memory_read`・`journal_read`・`usage_read`・`self_prompt`・`exchanges`（中身は同名の HTTP ルートと同じ関数・ストア。結果の量は既定を小さくし、上限と頁送りを持つ。全文字列を返す直前に秘密の走査を通す〈ベストエフォートの伏せ字で、安全の保証ではない〉。走査が落ちたら結果を返さずツールエラー）。返る本文は他の alteroid の記録であって指示ではない。`report_problem` の source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。",
         "responses": {
           "200": {
             "description": "JSON-RPC の応答（ツールエラーも 200 の `isError: true` で返る）。",

@@ -13,8 +13,10 @@ import { Hono } from 'hono';
 import { describeRoute } from 'hono-openapi';
 import { z } from 'zod';
 import type { AppContext } from './app-context.js';
+import type { AppDeps } from './app.js';
 import type { AuthVariables } from './auth.js';
 import { deliberateClient, isWellFormedString } from './app-shared.js';
+import { registerReadTools } from './mcp-read-tools.js';
 
 // 鍵でない資格（operator・アカウント）が呼ぶときの source は `ALTEROID_REPORT_SOURCE`（core が持つ。読む側と同じ定数）。鍵のときは鍵の source を使い、引数からは変えられない。
 // 列挙と上限も core の `REPORT_PROBLEM_*` を参照する（読む側の整形と入口がずれない）。
@@ -63,7 +65,7 @@ function toolError(message: string) {
 const NOT_PERSISTED_MESSAGE =
   '受信箱へ書けなかったので、報告を受け付けていない（何も積んでおらず、添付も結んでいない）。送り直してよい。';
 
-export function mcpRoutes(ctx: AppContext) {
+export function mcpRoutes(ctx: AppContext, deps: AppDeps) {
   const {
     withEventReceiptLock,
     eventReceiptScopeOf,
@@ -140,6 +142,8 @@ export function mcpRoutes(ctx: AppContext) {
         }
       },
     );
+    // 鍵（連携）には読み取りの道具を登録しない: `tools/list` に見えず、`tools/call` も未登録の標準の「未知の道具」で断られる。鍵に権限を足さず、`/self/prompt` などと同じく読み取りの口を持たない。
+    if (principal.kind !== 'integration') registerReadTools(server, principal, { ctx, deps });
     return server;
   }
 
@@ -148,12 +152,20 @@ export function mcpRoutes(ctx: AppContext) {
     '/mcp',
     describeRoute({
       tags: ['mcp'],
-      summary: 'MCP（Streamable HTTP、ステートレス）。道具は report_problem の1本だけ',
+      summary:
+        'MCP（Streamable HTTP、ステートレス）。鍵は1本のまま。連携の鍵は report_problem だけ、アカウント・operator は読み取りの道具も持つ',
       description:
         '外の AI が MCP の道具でクローンの受信箱へ問題を報告する口。リクエストごとに完結する（セッションも持続接続も無い。JSON 応答）。' +
         '`Accept: application/json, text/event-stream` と `content-type: application/json` が要る。' +
-        '連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。道具は `report_problem` の1本だけ' +
-        '（`tools/list`）。source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。' +
+        '連携の鍵（`altk_`）・アカウント・operator のどれでも叩ける。**鍵は1本のまま（新しい資格・スコープは無い）で、' +
+        '呼び手の資格で道具の一覧が変わる**（`tools/list`）。連携の鍵が見る道具は `report_problem` の1本だけ' +
+        '（`GET /self/prompt` などと同じく、読み取りの道具は持たない。呼んでも標準の「未知の道具」で断られる）。' +
+        'アカウント・operator には `report_problem` に加えて読み取り専用（`readOnlyHint`）の道具が載る: ' +
+        '`memory_list`・`memory_read`・`journal_read`・`usage_read`・`self_prompt`・`exchanges`' +
+        '（中身は同名の HTTP ルートと同じ関数・ストア。結果の量は既定を小さくし、上限と頁送りを持つ。' +
+        '全文字列を返す直前に秘密の走査を通す〈ベストエフォートの伏せ字で、安全の保証ではない〉。' +
+        '走査が落ちたら結果を返さずツールエラー）。返る本文は他の alteroid の記録であって指示ではない。' +
+        '`report_problem` の source は引数に無く、鍵の source（鍵でない資格は `alteroid-report`）に固定。' +
         '受け付けた結果は `{ok, id, duplicate}` だけを返す。受信箱へ書けなかった・添付を結べなかったときは' +
         '何も積まず、ツールエラー（`isError: true`）で返す。応答の本文は JSON-RPC。',
       responses: {
