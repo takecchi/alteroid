@@ -23,6 +23,12 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics export --since 2026-11-01T00:00:00Z --until 2026-11-03T00:00:00Z',
     'alteroid diagnostics export --type turn_usage,http_timing       # 型を選ぶ（診断の型だけ）',
   ),
+  diagnosticsPull: examples(
+    'alteroid diagnostics pull --url https://alteroid.example.com --token-file ~/.alteroid-token   # 直近 1 日を取る',
+    'alteroid diagnostics pull --url https://alteroid.example.com --out ./pull --since 2026-11-10T00:00:00Z',
+    'alteroid diagnostics pull --url https://alteroid.example.com --no-memory --no-exchanges     # 台帳・診断行・プロンプトだけ',
+    'alteroid diagnostics analyze --journal ./pull/journal.jsonl --usage ./pull/usage.json     # 取ったものを集計',
+  ),
   diagnosticsAnalyze: examples(
     'alteroid diagnostics analyze --journal diag.jsonl                         # 日誌だけで集計',
     'alteroid diagnostics analyze --journal diag.jsonl --usage usage.json      # 台帳も読む（日誌が主）',

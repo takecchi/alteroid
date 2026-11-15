@@ -1,5 +1,6 @@
 import { CredentialsUnreadableError, readCredential } from './credentials.js';
 import * as daemon from './daemon.js';
+import { readTokenFile, TOKEN_FILE_ENV, TokenFileError } from './token-file.js';
 
 export const REMOTE_URL_ENV = 'ALTEROID_URL';
 
@@ -30,7 +31,7 @@ const RUNNER_NO_AUTOSTART_MESSAGE =
 // runner の器の中では暗黙に起こさない: 空のデーモンを本番と誤認し、器に残り続け、子の HOME に資格ファイルが作られるため
 export async function resolveTarget(env: NodeJS.ProcessEnv = process.env): Promise<Target> {
   const remote = remoteUrl(env);
-  if (remote !== null) return remoteTarget(remote);
+  if (remote !== null) return remoteTarget(remote, { env });
 
   if (isRunnerContainer(env)) {
     const current = await daemon.status();
@@ -53,7 +54,31 @@ function localTarget(baseUrl: string, token: string): Target {
   };
 }
 
-async function remoteTarget(baseUrl: string): Promise<Target> {
+export interface RemoteTargetOptions {
+  // 資格を書いたファイルのパス（値ではない）。無ければ `ALTEROID_TOKEN_FILE`、それも無ければ credentials.json
+  tokenFile?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+// 接続先を引数で受ける口。`ALTEROID_URL` を差し替えずに別の alteroid へ繋ぐため（`diagnostics pull`）
+export async function remoteTarget(
+  baseUrl: string,
+  options: RemoteTargetOptions = {},
+): Promise<Target> {
+  const env = options.env ?? process.env;
+  const tokenFile = options.tokenFile ?? (env[TOKEN_FILE_ENV] ?? '').trim();
+  if (tokenFile !== '') {
+    // 読めなくても credentials.json へ落ちない: 指定したのに使えないことを、別の資格で隠さないため
+    try {
+      const token = await readTokenFile(tokenFile);
+      return { baseUrl, headers: { authorization: `Bearer ${token}` }, remote: true, note: null };
+    } catch (error) {
+      if (error instanceof TokenFileError) {
+        return { baseUrl, headers: {}, remote: true, note: error.message };
+      }
+      throw error;
+    }
+  }
   let credential: Awaited<ReturnType<typeof readCredential>>;
   try {
     credential = await readCredential(baseUrl);

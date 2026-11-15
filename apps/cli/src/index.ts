@@ -23,6 +23,8 @@ import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
 import { describeSessionRefusalLine } from './session-refusal.js';
+import { REMOTE_URL_ENV } from './target.js';
+import { TOKEN_FILE_ENV } from './token-file.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -393,6 +395,50 @@ diagnosticsCommand
   .action(async (options: { type?: string; since?: string; until?: string; pageSize?: string }) => {
     await (await import('./diagnostics.js')).diagnosticsExportCommand(options);
   });
+
+diagnosticsCommand
+  .command('pull')
+  .addHelpText('after', HELP_EXAMPLES.diagnosticsPull)
+  .description(
+    '別の alteroid から、消費の分析に要るもの（台帳・日誌の診断行・焼いたプロンプト・記憶の本文・マネージャーとの会話）をディレクトリへ取ってくる。' +
+      '鍵らしい値は伏せて書く。出力は `diagnostics analyze --journal journal.jsonl --usage usage.json` にそのまま渡せる',
+  )
+  .option(
+    '--url <origin>',
+    `向こうの origin（${REMOTE_URL_ENV} でも指定できる。どちらも無ければ断る）`,
+  )
+  .option(
+    '--out <dir>',
+    '出力先（既定 ./diagnostics-pull-<host>-<UTC 時刻>。空でなければ断る。上書きしない）',
+  )
+  .option('--since <iso>', '窓の始点（ISO 8601 か相対。省略すると終点の 1 日前）')
+  .option(
+    '--until <iso>',
+    '窓の終点（ISO 8601。省略すると今、--since だけなら 1 日後。窓は最大 7 日）',
+  )
+  .option('--no-memory', '記憶の本文を取らない')
+  .option('--no-exchanges', 'マネージャーとの会話（exchange）を取らない')
+  .option(
+    '--token-file <path>',
+    `向こうのアクセストークンを書いたファイルのパス（値を引数で渡さない。${TOKEN_FILE_ENV} にもパスだけ置ける。chmod 600）`,
+  )
+  .option('--page-size <n>', '1 頁に読む行数（1〜1000。既定 500）')
+  .option('--json', '取得の記録（manifest）を JSON で標準出力へ出す')
+  .action(
+    async (options: {
+      url?: string;
+      out?: string;
+      since?: string;
+      until?: string;
+      memory?: boolean;
+      exchanges?: boolean;
+      tokenFile?: string;
+      pageSize?: string;
+      json?: boolean;
+    }) => {
+      await (await import('./diagnostics-pull.js')).diagnosticsPullCommand(options);
+    },
+  );
 
 const runnersProgram = program
   .command('runners')
