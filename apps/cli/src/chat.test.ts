@@ -3490,7 +3490,7 @@ describe('chat の /journal', () => {
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
     expect(text).toContain(
-      'tool_use の input・turn_usage・context_usage・turn_timing・http_timing・github_observation',
+      'tool_use の input・turn_usage・context_usage・turn_timing・turn_input・http_timing・github_observation',
     );
     expect(text).not.toContain('日誌はまだ空');
   });

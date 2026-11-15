@@ -381,11 +381,11 @@ diagnosticsCommand
   .command('export')
   .addHelpText('after', HELP_EXAMPLES.diagnosticsExport)
   .description(
-    '日誌の診断行（turn_timing / turn_usage / context_usage / http_timing）を1行1JSONで標準出力へ書き出す（頁の進行と総数は標準エラー。時刻は UTC）',
+    '日誌の診断行（turn_timing / turn_usage / context_usage / turn_input / http_timing）を1行1JSONで標準出力へ書き出す（頁の進行と総数は標準エラー。時刻は UTC）',
   )
   .option(
     '--type <types>',
-    '診断の型だけ（カンマ区切り。既定 turn_timing,turn_usage,context_usage）',
+    '診断の型だけ（カンマ区切り。既定 turn_timing,turn_usage,context_usage,turn_input）',
   )
   .option('--since <iso>', '窓の始点（ISO 8601。省略すると終点の 1 日前）')
   .option('--until <iso>', '窓の終点（ISO 8601。省略すると今、--since だけなら 1 日後）')

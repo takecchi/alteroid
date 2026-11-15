@@ -99,6 +99,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'turn_usage':
     case 'context_usage':
     case 'turn_timing':
+    case 'turn_input':
     case 'http_timing':
       return summarizeJournalDiagnosticsEntry(entry);
     case 'token_rotation':

@@ -7,13 +7,31 @@ import {
 } from './journal-diagnostics-format.js';
 
 describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
-  it('JOURNAL_DIAGNOSTICS_TYPES はこの4種だけを名乗る', () => {
+  it('JOURNAL_DIAGNOSTICS_TYPES はこの5種だけを名乗る', () => {
     expect(JOURNAL_DIAGNOSTICS_TYPES).toEqual([
       'turn_usage',
       'context_usage',
       'turn_timing',
+      'turn_input',
       'http_timing',
     ]);
+  });
+
+  it('turn_input は文字数と件数だけで1行にする（本文・注記の文面は行に無い）', () => {
+    const summary = summarizeJournalDiagnosticsEntry({
+      type: 'turn_input',
+      kind: 'normal',
+      triggers: ['human_message'],
+      totalChars: 1500,
+      bodyChars: 200,
+      humanActionsChars: 0,
+      freshMemoryChars: 40,
+      notices: { situation: 900, commitment: 300, redelivery: 10 },
+      signals: [{ kind: 'human', chars: 150 }],
+    });
+    expect(summary).toBe(
+      '[normal human_message] 入力 1,500 字（本文 200・合図 1 件・記憶 40・断り書き situation 900 / commitment 300 / redelivery 10）',
+    );
   });
 
   describe('http_timing（#5089）', () => {

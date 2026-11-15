@@ -26,6 +26,8 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
   context_usage: [],
   // 自由文を持たない（段の名前・道具の名前・数だけ）
   turn_timing: [],
+  // 自由文を持たない（合図の種類名・注記の欄名・文字数・件数だけ。本文も注記の文面も持たない）
+  turn_input: [],
   // 自由文を持たない（経路の型・SQL の頭・数だけ）
   http_timing: [],
   // `failed.reason` はネストした欄なので対象外。
