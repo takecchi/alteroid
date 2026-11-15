@@ -56,7 +56,7 @@ const count = (text: string, needle: string): number => text.split(needle).lengt
 
 describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎件全文で出す', () => {
   it.each([['未設定', {}]] as const)(
-    '⭐ 既定では（%s）、起点が同じ3件でも枠と案内と経過を毎件全文で出す',
+    '⭐ 既定では（%s）、起点が同じ3件でも枠と経過を毎件全文で出し、同一の案内は末尾に1回だけ出す',
     async (_name, env) => {
       const { merged, stop } = await mergedInput(
         [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],
@@ -65,8 +65,12 @@ describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎�
       );
 
       expect(count(merged, 'から届いた。')).toBe(3);
-      expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(3);
-      expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(3);
+      // 重複の除去だけが変わった所: 同一の案内は束の末尾に1回（各件には印が残る）。件ごとの文は毎件全文のまま
+      expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(1);
+      expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(1);
+      expect(count(merged, '（→末尾の共通の案内1）')).toBe(3);
+      expect(count(merged, '（→末尾の共通の案内2）')).toBe(3);
+      expect(count(merged, '起点の会話: conv-1')).toBe(3);
       expect(count(merged, '受け取ってから')).toBe(3);
       expect(count(merged, '受け取り 20')).toBe(0);
       await stop();
