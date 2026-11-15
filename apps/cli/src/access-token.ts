@@ -43,7 +43,8 @@ function checkAccount(account: string | undefined, nothingDone: string): void {
 // 出す側が値を足す: 値を持つのはここの1か所の組み立てだけ（人向けも --json もこれを使う）
 export function mcpServerConfig(baseUrl: string, value: string) {
   return {
-    alteroid: {
+    // キー名を alteroid にしない: 別の alteroid の「設定 — MCP サーバ」では alteroid が予約名で、貼ると断られるため
+    'alteroid-remote': {
       type: 'http',
       url: `${new URL(baseUrl).origin}/mcp`,
       headers: { Authorization: `Bearer ${value}` },
@@ -170,7 +171,7 @@ function renderCreated(
     '',
     KIND_GUIDE[token.kind],
     '',
-    'MCP サーバの登録に使う JSON（.mcp.json などの mcpServers に入れる）:',
+    'MCP サーバの登録に使う JSON（.mcp.json などの mcpServers に入れる。名前を alteroid-remote にしてあるのは、別の alteroid の「設定 — MCP サーバ」では alteroid が予約名で断られるため）:',
     ...JSON.stringify(mcp, null, 2)
       .split('\n')
       .map((line) => `  ${line}`),

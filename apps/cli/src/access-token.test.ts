@@ -164,8 +164,9 @@ describe('access-token create', () => {
     expect(text).toContain('読むだけ。通るのは記憶・日誌・利用・/self/prompt の読み取りと /mcp');
     expect(text).not.toContain('ログインのトークンと同じ強さ');
     const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    expect(text).toContain('名前を alteroid-remote にしてあるのは');
     expect(JSON.parse(jsonText)).toEqual({
-      alteroid: {
+      'alteroid-remote': {
         type: 'http',
         url: 'https://alteroid.example.com:8443/mcp',
         headers: { Authorization: `Bearer ${SECRET_VALUE}` },
@@ -203,12 +204,13 @@ describe('access-token create', () => {
     const parsed = JSON.parse(out()) as {
       token: { id: string };
       value: string;
-      mcp: { alteroid: { url: string; headers: { Authorization: string } } };
+      mcp: { 'alteroid-remote': { url: string; headers: { Authorization: string } } };
     };
     expect(parsed.value).toBe(SECRET_VALUE);
     expect(parsed.token.id).toBe('t-1');
-    expect(parsed.mcp.alteroid.url).toBe('https://alteroid.example.com:8443/mcp');
-    expect(parsed.mcp.alteroid.headers.Authorization).toBe(`Bearer ${SECRET_VALUE}`);
+    expect(Object.keys(parsed.mcp)).toEqual(['alteroid-remote']);
+    expect(parsed.mcp['alteroid-remote'].url).toBe('https://alteroid.example.com:8443/mcp');
+    expect(parsed.mcp['alteroid-remote'].headers.Authorization).toBe(`Bearer ${SECRET_VALUE}`);
     expect(err()).toContain('二度と表示されません');
     expect(err()).toContain('ログに残さない');
     expect(err()).not.toContain(SECRET_VALUE);
@@ -286,10 +288,10 @@ describe('access-token create', () => {
 
 describe('mcpServerConfig', () => {
   it('url は接続先の origin（パス・末尾スラッシュを除く）に /mcp', () => {
-    expect(mcpServerConfig('http://127.0.0.1:4517/', 'v').alteroid.url).toBe(
+    expect(mcpServerConfig('http://127.0.0.1:4517/', 'v')['alteroid-remote'].url).toBe(
       'http://127.0.0.1:4517/mcp',
     );
-    expect(mcpServerConfig('https://a.example/x/y', 'v').alteroid.url).toBe(
+    expect(mcpServerConfig('https://a.example/x/y', 'v')['alteroid-remote'].url).toBe(
       'https://a.example/mcp',
     );
   });
