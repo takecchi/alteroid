@@ -405,7 +405,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     return command.commands.map((c) => c.name()).sort();
   }
 
-  it('alteroid diagnostics は export・analyze・pull を持ち、analyze は日誌・台帳・会話・pull の出力ディレクトリ・時間帯を受ける', () => {
+  it('alteroid diagnostics は export・analyze・pull を持ち、analyze は日誌・台帳・会話・プロンプト・pull の出力ディレクトリ・時間帯を受ける', () => {
     expect(subcommandNames('diagnostics')).toEqual(['analyze', 'export', 'pull']);
     const analyzeCommand = program.commands
       .find((c) => c.name() === 'diagnostics')
@@ -416,6 +416,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
       '--journal',
       '--json',
       '--ledger-tz',
+      '--prompt',
       '--top',
       '--usage',
     ]);

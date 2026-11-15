@@ -366,8 +366,12 @@ diagnosticsCommand
     '`diagnostics pull` の exchanges.jsonl（任意。クローンとマネージャーの会話の分析を出す。無ければその節は「入力が無い」）',
   )
   .option(
+    '--prompt <file>',
+    '`diagnostics pull` の prompt.json（任意。クローンが毎ターン払っているプロンプトの大きさの分析を出す。無い・読めないときはその節に理由を書く）',
+  )
+  .option(
     '--dir <dir>',
-    '`diagnostics pull` の出力ディレクトリ（任意。journal.jsonl・usage.json・exchanges.jsonl・manifest.json を既定の名前で読む。個別の旗が優先）',
+    '`diagnostics pull` の出力ディレクトリ（任意。journal.jsonl・usage.json・exchanges.jsonl・manifest.json・prompt.json を既定の名前で読む。個別の旗が優先）',
   )
   .option(
     '--ledger-tz <iana>',
@@ -380,6 +384,7 @@ diagnosticsCommand
       journal?: string;
       usage?: string;
       exchanges?: string;
+      prompt?: string;
       dir?: string;
       ledgerTz?: string;
       top?: string;

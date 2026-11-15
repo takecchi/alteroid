@@ -36,6 +36,7 @@ export const HELP_EXAMPLES = {
     'alteroid diagnostics analyze --journal diag.jsonl --json                  # 機械可読',
     'alteroid diagnostics analyze --dir ./pull                                 # pull の出力をまとめて読む（会話の分析も出る）',
     'alteroid diagnostics analyze --journal diag.jsonl --exchanges ./pull/exchanges.jsonl --top 20   # 会話の上位 20 件',
+    'alteroid diagnostics analyze --journal diag.jsonl --prompt ./pull/prompt.json   # クローンが毎ターン払っているプロンプトの大きさ（--dir なら prompt.json も読む）',
   ),
   inboxRemove: examples(
     'alteroid inbox show                                          # まず内訳を見る',

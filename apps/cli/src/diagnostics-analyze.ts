@@ -4,16 +4,20 @@ import { join } from 'node:path';
 import {
   analyzeConversation,
   analyzeDiagnostics,
+  analyzePrompt,
   createSecretRedactor,
   parseJournalJsonl,
+  parsePromptJson,
   renderConversationAnalysis,
   renderConversationCoverage,
   renderDiagnosticsAnalysis,
+  renderPromptAnalysis,
   resolveLedgerTimeZone,
   ROTATABLE_CREDENTIAL_KEYS,
   WITHHELD_ENV_KEYS,
   type ConversationExchangesInput,
   type ConversationManifestInput,
+  type PromptInput,
 } from '@alteroid/core';
 
 import { stderr, stdout } from './terminal-out.js';
@@ -22,6 +26,7 @@ export interface DiagnosticsAnalyzeOptions {
   journal?: string;
   usage?: string;
   exchanges?: string;
+  prompt?: string;
   dir?: string;
   ledgerTz?: string;
   top?: string;
@@ -35,6 +40,7 @@ const DIR_JOURNAL = 'journal.jsonl';
 const DIR_USAGE = 'usage.json';
 const DIR_EXCHANGES = 'exchanges.jsonl';
 const DIR_MANIFEST = 'manifest.json';
+const DIR_PROMPT = 'prompt.json';
 
 function resolveTop(raw: string | undefined): number {
   if (raw === undefined) return 10;
@@ -119,6 +125,35 @@ async function readManifestInput(
   }
 }
 
+// 読めない・形が違うときも落とさず、節に理由を書く（`--prompt` を明示して渡したファイルが無い場合も同じ）
+async function readPromptInput(options: DiagnosticsAnalyzeOptions): Promise<PromptInput> {
+  const path =
+    options.prompt ?? (options.dir === undefined ? undefined : join(options.dir, DIR_PROMPT));
+  if (path === undefined) {
+    return { state: 'none', reason: '--prompt も --dir も渡されていない' };
+  }
+  const label = options.prompt === undefined ? DIR_PROMPT : '--prompt';
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return {
+        state: 'none',
+        reason:
+          options.prompt === undefined
+            ? `${DIR_PROMPT} が --dir に無い（pull の取得の失敗か、古い版の pull。manifest.json の failures を見る）`
+            : `${label} のファイルが無い（${path}）`,
+      };
+    }
+    return {
+      state: 'unreadable',
+      reason: `${label} を読めなかった（${path}: ${error instanceof Error ? error.message : String(error)}）`,
+    };
+  }
+  return parsePromptJson(text);
+}
+
 /**
  * `diagnostics export` / `diagnostics pull` の出力（JSONL）と、任意で `usage --json` の出力・会話（exchanges）を読んで、トークンの使い方の事実を並べる。
  * 入力ファイルは読むだけで書き換えない。通信しない。集計の本体は `@alteroid/core` の純関数。
@@ -181,12 +216,35 @@ export async function diagnosticsAnalyzeCommand(options: DiagnosticsAnalyzeOptio
     );
   }
 
+  // プロンプトの分析の伏せ字は会話とは別の走査器で掛ける（標準エラーの件数を節ごとに分けるため）
+  const promptRedactor = createSecretRedactor({
+    env: options.env ?? process.env,
+    knownSecretEnvNames: [...WITHHELD_ENV_KEYS, ...ROTATABLE_CREDENTIAL_KEYS],
+  });
+  const promptInput = await readPromptInput(options);
+  const prompt = analyzePrompt({
+    input: promptInput,
+    pulledAt: conversation.coverage.manifest.pulledAt,
+    topN,
+    redact: (text) => promptRedactor.redact(text),
+  });
+  if (promptInput.state === 'read') {
+    const hits = promptRedactor.hits();
+    stderr.write(
+      `伏せ字: プロンプトの分析（表示の直前の再走査）— ${
+        hits.length === 0
+          ? '当たり 0 件'
+          : hits.map((hit) => `${hit.rule} ${String(hit.count)} 件`).join('、')
+      }\n`,
+    );
+  }
+
   if (options.json === true) {
-    // `writeRaw`: 端末向けの掃除は JSON の中身を変えるため。既存の欄は変えず、会話の分析は `conversation` として足す
-    stdout.writeRaw(`${JSON.stringify({ ...analysis, conversation })}\n`);
+    // `writeRaw`: 端末向けの掃除は JSON の中身を変えるため。既存の欄は変えず、会話の分析は `conversation`、プロンプトの分析は `prompt` として足す
+    stdout.writeRaw(`${JSON.stringify({ ...analysis, conversation, prompt })}\n`);
     return;
   }
   stdout.write(
-    `${renderConversationCoverage(conversation)}\n\n${renderDiagnosticsAnalysis(analysis)}\n${renderConversationAnalysis(conversation, topN)}\n`,
+    `${renderConversationCoverage(conversation)}\n\n${renderDiagnosticsAnalysis(analysis)}\n${renderConversationAnalysis(conversation, topN)}\n\n${renderPromptAnalysis(prompt, topN)}\n`,
   );
 }

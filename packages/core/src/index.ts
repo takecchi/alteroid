@@ -38,6 +38,16 @@ export {
   renderConversationAnalysis,
   renderConversationCoverage,
 } from './diagnostics-conversation-format.js';
+// `pull` が保存した prompt.json（`GET /self/prompt` の応答）の大きさの分析（`diagnostics analyze --prompt`）。文字数と SDK 実測トークンを混ぜない
+export {
+  analyzePrompt,
+  PROMPT_NO_REMOVAL_NOTE,
+  splitSystemPromptSections,
+  type AnalyzePromptInput,
+  type PromptAnalysis,
+} from './diagnostics-prompt-analysis.js';
+export { renderPromptAnalysis } from './diagnostics-prompt-format.js';
+export { parsePromptJson, type PromptInput } from './diagnostics-prompt-input.js';
 /** 台帳（自分で数えた推定値）とは足さない: こちらは claude.ai 側が言っている値。取れなかったものを 0 にしない。 */
 export {
   accountUsageStateSchema,
