@@ -151,10 +151,13 @@ async function prepareOutDir(path: string): Promise<void> {
     entries = await readdir(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOTDIR') throw new Error(`出力先 ${path} はディレクトリではありません`);
+    if (code === 'ENOTDIR') {
+      throw new Error(`出力先 ${path} はディレクトリではありません`, { cause: error });
+    }
     if (code !== 'ENOENT') {
       throw new Error(
         `出力先 ${path} を確かめられません（${typeof code === 'string' ? code : '原因不明'}）`,
+        { cause: error },
       );
     }
   }

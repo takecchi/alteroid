@@ -44,5 +44,5 @@ description: ログイン・アクセス許可（alteroid login / access grant�
   - **CLI**: 成功または 401（既に無効）なら手元の資格を消す。**サーバへ届かない・5xx・その他の失敗では手元の資格を消さない**（消すと、失効させる手段が `access revoke` しか残らない）。`--local-only` を付ければ、警告付きで手元だけを消せる（トークンは期限か `access revoke` まで有効なまま）
   - **operator の資格（状態ファイルの token）では呼べない。** operator はアクセストークンを1本も持たない別種の資格なので、`POST /auth/logout` は 4xx で断る（`alteroid access revoke` へ誘導する）
   - **Web**: 成功／401 なら鍵を捨てる。失敗したら鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」を別に出す（`useAuth()` の `logout()` / `discardCredential()`）。ただし `Ungranted`（許可待ち）画面の「別のアカウントでログイン」は `discardCredential()` を使う——未許可のアカウントは `authenticate` 門番自体が 403 を返すので `logout()` では鍵を捨てられない
-- 動作確認: `alteroid login` / `alteroid logout` / `alteroid whoami` / `alteroid access list|grant|revoke`。別のデーモンへ繋ぐなら `ALTEROID_URL=https://…`（手元のデーモンには**ログイン不要**で、状態ファイルを読めることで通る）
+- 動作確認: `alteroid login` / `alteroid logout` / `alteroid whoami` / `alteroid access list|grant|revoke`。別のデーモンへ繋ぐなら `ALTEROID_URL=https://…`（手元のデーモンには**ログイン不要**で、状態ファイルを読めることで通る）。`login` せずアクセストークンを渡すなら、トークンを書いたファイル（`chmod 600`・1行）のパスを `--token-file`（`diagnostics pull`）か `ALTEROID_TOKEN_FILE`（パスだけ。値を環境変数・引数に置かない）で渡す。優先は `--token-file` > `ALTEROID_TOKEN_FILE` > credentials.json
 - コンテナでは `docker compose exec app alteroid access grant <id>`。Redirect URI は `<ALTEROID_PUBLIC_URL>/auth/google/callback` の1本だけ登録すればよい
