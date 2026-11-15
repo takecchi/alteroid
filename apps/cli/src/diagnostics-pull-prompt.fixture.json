@@ -1,0 +1,130 @@
+{
+  "full": true,
+  "session": {
+    "ok": true,
+    "builtAt": "2026-11-13T22:00:00.000Z",
+    "resumedFrom": null,
+    "sessionId": "sess-1",
+    "model": "opus"
+  },
+  "systemPrompt": {
+    "text": "導入 __DUMMY_OPENAI_KEY__\n# 立ち位置\n本文\n# 現在の記憶\n\n索引A索引B\n",
+    "chars": 80
+  },
+  "memoryInPrompt": {
+    "documents": [
+      {
+        "slug": "notes",
+        "type": "fact",
+        "description": null,
+        "chars": 40,
+        "indexChars": 5,
+        "indexForm": "toc-line",
+        "omitted": false,
+        "indexNote": null
+      },
+      {
+        "slug": "old",
+        "type": "note",
+        "description": null,
+        "chars": 4000,
+        "indexChars": null,
+        "indexForm": null,
+        "omitted": true,
+        "indexNote": "索引の予算を超えた"
+      }
+    ],
+    "omittedDocuments": 0
+  },
+  "tools": [
+    {
+      "name": "memory_read",
+      "source": "clone",
+      "description": "記憶の文書を読む",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "slug": { "type": "string", "description": "文書の slug" } }
+      },
+      "descriptionChars": 8,
+      "inputSchemaChars": 90
+    }
+  ],
+  "builtinTools": {
+    "available": false,
+    "reason": "組み込みの道具の定義は取れない（SDK の型に口が無い）",
+    "systemTools": {
+      "available": true,
+      "value": {
+        "rows": [
+          { "name": "Bash", "tokens": 120 },
+          { "name": "Read", "tokens": 80 }
+        ],
+        "omitted": 0
+      }
+    },
+    "deferredBuiltinTools": {
+      "available": true,
+      "value": { "rows": [{ "name": "WebFetch", "tokens": 30, "isLoaded": false }], "omitted": 0 }
+    }
+  },
+  "externalMcpServers": [{ "name": "github", "type": "stdio" }],
+  "externalMcpServersLive": { "at": "2026-11-13T22:30:00.000Z", "failed": [], "retained": [] },
+  "plugins": [{ "name": "alpha" }],
+  "contextUsage": {
+    "ok": true,
+    "at": "2026-11-13T22:05:00.000Z",
+    "totalTokens": 1000,
+    "rawMaxTokens": 200000,
+    "percentage": 0.5,
+    "autoCompactThreshold": null,
+    "isAutoCompactEnabled": true,
+    "categories": {
+      "available": true,
+      "value": {
+        "rows": [{ "name": "System prompt", "tokens": 300, "kind": "used" }],
+        "omitted": 0
+      }
+    },
+    "mcpTools": {
+      "available": true,
+      "value": {
+        "rows": [
+          { "name": "memory_read", "serverName": "alteroid", "tokens": 50, "isLoaded": true }
+        ],
+        "omitted": 0
+      }
+    },
+    "systemPromptSections": {
+      "available": true,
+      "value": { "rows": [{ "name": "Core", "tokens": 250 }], "omitted": 0 }
+    },
+    "memoryFiles": {
+      "available": true,
+      "value": {
+        "rows": [{ "path": "/data/memory/notes.md", "type": "Project", "tokens": 10 }],
+        "omitted": 0
+      }
+    },
+    "systemTools": {
+      "available": true,
+      "value": {
+        "rows": [
+          { "name": "Bash", "tokens": 120 },
+          { "name": "Read", "tokens": 80 }
+        ],
+        "omitted": 0
+      }
+    },
+    "deferredBuiltinTools": {
+      "available": true,
+      "value": { "rows": [{ "name": "WebFetch", "tokens": 30, "isLoaded": false }], "omitted": 0 }
+    },
+    "mcpInstructions": { "available": false, "reason": "この欄が無かった" },
+    "messageBreakdown": { "available": false, "reason": "この欄が無かった" }
+  },
+  "notice": [
+    "contextUsage の mcpInstructions・messageBreakdown は取れていない（理由は各欄の reason）",
+    "秘密走査: 走査した（当たり0件）"
+  ],
+  "secretScan": { "scanned": true, "hits": [] }
+}
