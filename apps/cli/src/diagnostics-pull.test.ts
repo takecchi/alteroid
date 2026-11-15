@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -104,22 +105,25 @@ function exchangeRow(id: string, hour: number, partner: string, text: string): R
   };
 }
 
+// 本物の `GET /self/prompt` の形（#6819 の selfPromptResponseSchema に合う全部の欄）の固定の写し。
+// cli は daemon の内部を import できないので JSON のファイルに置く。この写しが本物の形であることは、
+// daemon の `self-prompt-input-pin.test.ts` が同じファイルを読んで selfPromptResponseSchema で parse して保証する。
+// 鍵は置き場所を変えて入れる（ダミーの鍵をファイルに書かない）。
+const PROMPT_FIXTURE_PATH = new URL('./diagnostics-pull-prompt.fixture.json', import.meta.url);
+const KEY_PLACEHOLDER = '__DUMMY_OPENAI_KEY__';
+
+function promptBody(): Record<string, unknown> {
+  const text = readFileSync(PROMPT_FIXTURE_PATH, 'utf8').replaceAll(KEY_PLACEHOLDER, OPENAI);
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
 function defaultConfig(): Config {
   return {
     usage: {
       status: 200,
       body: { rows: [], turnRows: [], since: null, notice: 'n', ledgerTimeZone: 'Asia/Tokyo' },
     },
-    prompt: {
-      status: 200,
-      body: {
-        full: true,
-        session: null,
-        systemPrompt: { text: `前置き ${OPENAI} 後ろ`, chars: 20 },
-        notice: 'ok',
-        secretScan: { hits: [] },
-      },
-    },
+    prompt: { status: 200, body: promptBody() },
     memoryList: {
       status: 200,
       body: {
@@ -419,84 +423,79 @@ describe('diagnostics pull: 既存の analyze に食わせられる', () => {
 });
 
 describe('diagnostics pull: analyze --dir がプロンプトの分析に読める', () => {
-  const PROMPT_TEXT = '導入\n# 立ち位置\n本文\n# 現在の記憶\n\n索引A索引B\n';
-  // `GET /self/prompt` の応答の形（#6819 の selfPromptResponseSchema）。偽サーバが返し、pull が保存したものを analyze が読む
-  const validPrompt = {
-    full: true,
-    session: {
-      ok: true,
-      builtAt: '2026-11-13T22:00:00.000Z',
-      resumedFrom: null,
-      sessionId: 'sess-1',
-      model: 'opus',
-    },
-    systemPrompt: { text: PROMPT_TEXT, chars: PROMPT_TEXT.length },
-    memoryInPrompt: {
-      documents: [
-        {
-          slug: 'notes',
-          type: 'fact',
-          description: null,
-          chars: 40,
-          indexChars: 5,
-          indexForm: 'toc-line',
-          omitted: false,
-          indexNote: null,
-        },
-        {
-          slug: 'old',
-          type: 'note',
-          description: null,
-          chars: 4000,
-          indexChars: null,
-          indexForm: null,
-          omitted: true,
-          indexNote: '索引の予算を超えた',
-        },
-      ],
-      omittedDocuments: 0,
-    },
-    tools: [{ name: 'memory_read', source: 'clone', descriptionChars: 30, inputSchemaChars: 10 }],
-    builtinTools: {
-      available: false,
-      reason: 'SDK は返さない',
-      systemTools: null,
-      deferredBuiltinTools: null,
-    },
-    externalMcpServers: [],
-    externalMcpServersLive: null,
-    plugins: [],
-    contextUsage: null,
-    notice: ['ターン境界をまだ観測していない'],
-    secretScan: { scanned: true, hits: [] },
-  };
-
-  it('pull の出力（prompt.json）を --dir だけで読み、manifest の pulledAt から経過も出す', async () => {
-    const server = await start((config) => {
-      config.prompt = { status: 200, body: validPrompt };
-    });
+  // 偽サーバの既定の応答が本物の `GET /self/prompt` の形（`promptBody`）なので、pull が保存したものを analyze が読める。
+  async function pullThenAnalyze(
+    configure?: (config: Config) => void,
+    json = false,
+  ): Promise<string> {
+    const server = await start(configure);
     await pull(server);
     const before = stdoutText().length;
+    await diagnosticsAnalyzeCommand({ dir: join(dir, 'out'), env: {}, json });
+    return stdoutText().slice(before);
+  }
 
-    await diagnosticsAnalyzeCommand({ dir: join(dir, 'out'), env: {} });
-    const text = stdoutText().slice(before);
-    expect(text).toContain('# プロンプトの大きさの分析');
+  it('pull の出力（prompt.json）を --dir だけで読み、P1〜P8 が「読めない」ではなく読めた値を出す', async () => {
+    const all = await pullThenAnalyze();
+    expect(all).toContain('# プロンプトの大きさの分析');
+    // 会話の節にも「読めない行 0」の語があるので、プロンプトの節だけを見る
+    const text = all.slice(all.indexOf('# プロンプトの大きさの分析'));
+    expect(text).not.toContain('読めない:');
+    expect(text).not.toContain('入力が無い');
     expect(text).toContain('session: 成功 / builtAt 2026-11-13T22:00:00.000Z / model opus');
     // pulledAt は NOW = 2026-11-14T00:00:00Z
     expect(text).toContain('プロンプトが焼かれてからの経過: 2.0 時間');
+    // P2 システムプロンプトの節（見出しで割った大きさ）
+    expect(text).toContain('## P2.');
+    expect(text).toContain('立ち位置');
+    expect(text).toContain('現在の記憶');
+    // P3 記憶の索引の文書
     expect(text).toContain('索引の合計 5字');
     expect(text).toContain('notes（fact）: 索引 5字');
     expect(text).toContain('old（note）: 索引から省かれた');
     expect(text).toContain('indexNote: 索引の予算を超えた');
+    // P4 道具の定義
+    expect(text).toContain('memory_read');
+    // P6 SDK 組み込みの道具（contextUsage から引いた名前と大きさ）
+    expect(text).toContain('Bash');
+    expect(text).toContain('WebFetch');
+    for (const heading of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']) {
+      expect(text, heading).toContain(`## ${heading}.`);
+    }
+    expect(process.exitCode).toBeUndefined();
   });
 
-  it('既定の偽サーバの応答（形が合わない prompt.json）でも落とさず、節に「読めない」と理由を出す', async () => {
-    const server = await start();
-    await pull(server);
-    const before = stdoutText().length;
-    await diagnosticsAnalyzeCommand({ dir: join(dir, 'out'), env: {} });
-    const text = stdoutText().slice(before);
+  it('--json の prompt は成功の状態（read）で、節ごとの値を持つ', async () => {
+    const text = await pullThenAnalyze(undefined, true);
+    const parsed = JSON.parse(text) as {
+      prompt: {
+        state: string;
+        systemPrompt: { state: string; chars: number };
+        memory: { state: string };
+        tools: { state: string };
+        externalMcp: { state: string };
+        builtin: { state: string };
+        occupancy: { state: string };
+        coverage: { ageAtPullMs: number | null };
+      };
+    };
+    expect(parsed.prompt.state).toBe('read');
+    for (const section of ['systemPrompt', 'memory', 'tools', 'externalMcp', 'builtin', 'occupancy'] as const) {
+      expect(parsed.prompt[section].state, section).toBe('read');
+    }
+    expect(parsed.prompt.systemPrompt.chars).toBe(80);
+    expect(parsed.prompt.coverage.ageAtPullMs).toBe(2 * 3_600_000);
+  });
+
+  it('prompt の応答が本物の形でない（secretScan.scanned が無い）ときは、落とさず節に「読めない」と理由を出す', async () => {
+    // 本物の形を外した応答を pull が保存しても、analyze は落ちずに理由を言う（読めない場合の単体の挙動は diagnostics-analyze.test.ts も持つ）
+    const text = await pullThenAnalyze((config) => {
+      const body = promptBody();
+      body['secretScan'] = { hits: [] };
+      config.prompt = { status: 200, body };
+    });
     expect(text).toContain('読めない: GET /self/prompt の応答の形と合わない');
+    expect(text).toContain('secretScan.scanned（');
     expect(text).toContain('## B. 会話');
     expect(process.exitCode).toBeUndefined();
   });
