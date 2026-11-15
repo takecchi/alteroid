@@ -28,7 +28,7 @@ export const TURN_INPUT_SIGNALS_LIMIT = 20;
  * `composeTurnInputText` の欄のうち、本文以外（注記）。キーは欄名のまま（`commitment` は待ち行列の断り。欄名の由来は `TurnInputText.commitment`）。
  * 並びは `composeTurnInputText` の連結の並び。
  */
-const NOTICE_KEYS = [
+export const NOTICE_KEYS = [
   'distillGap',
   'contextWindowFold',
   'droppedSignals',
@@ -43,7 +43,7 @@ const NOTICE_KEYS = [
  * 本文（`#runTurn` の `text`）へ組み込まれる定型の注記。キーは定数の識別子名。
  * ビルダーの文字列は変えず、組み上がった本文の中の出現を数える（出現回数 × 定数の長さ）。
  */
-const TEMPLATES: Readonly<Record<string, string>> = {
+export const TEMPLATES: Readonly<Record<string, string>> = {
   REPORT_FOLLOW_UP_GUIDE,
   BATCH_REPORT_FOLLOW_UP_GUIDE,
   ORIGIN_NO_TASK_GUIDE,

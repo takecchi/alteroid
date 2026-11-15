@@ -373,10 +373,14 @@ export const MANAGER_REPORT_BODY_LIMIT = 8_000;
 // `reportDeliveryTextOf`（manager-notices.ts）が本文の末尾に足す「途中の発言を含む全文…」の段落。頭を切るとこの段落も消えるので、切るときは本文と分けて残す
 // `fullText` が無い報告には付かないが、`#emit`（manager.ts）が足す「畳んだ報告を配っていない」「重複の知らせを配っていない」の注記も、本文の後ろに付く。
 // どれも配っていない報告があったことをクローンへ伝える注記なので、頭を切っても残す。
+// 3つを個別に export する: `diagnostics analyze` が日誌の本文から注記の長さを測るのに、同じ字面を手で写さないため（字面の書き手は `reportDeliveryTextOf`・`WithheldReportsStore`・`synthesized-notice-windows.ts`）
+export const REPORT_FULL_TEXT_NOTE_MARK = '\n\n（途中の発言を含む全文 ';
+export const REPORT_WITHHELD_NOTE_MARK = '\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ';
+export const REPORT_SYNTHESIZED_NOTE_MARK = '\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ';
 const REPORT_DELIVERY_TAIL_MARKS = [
-  '\n\n（途中の発言を含む全文 ',
-  '\n\n（この間に、背景処理の完了待ちで畳んだターンの報告を ',
-  '\n\n（この間に、直前と同じ本文の「機構が合成した知らせ」を ',
+  REPORT_FULL_TEXT_NOTE_MARK,
+  REPORT_WITHHELD_NOTE_MARK,
+  REPORT_SYNTHESIZED_NOTE_MARK,
 ] as const;
 
 /** 切ったのに全文の取り方を言わないと、読めるものを減らしたことになる（listing-and-detail の性質2）。 */

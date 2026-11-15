@@ -21,7 +21,7 @@ import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
 // 起床を増やさない: 新しい受信箱イベントも post もポーラーも足さず、既に走ると決まったターンの本文だけに足すため
 
 // 後から grep で全部拾えるように固定する
-const SITUATION_HEAD = '[system] いまの全体';
+export const SITUATION_HEAD = '[system] いまの全体';
 
 // 数えた時刻を名乗る: 節は会話履歴に溜まり、数が変わらなければ古い節と新しい節が1バイトも違わず、どれが最新か判定できないため。
 // 秒までしか出さず日付を出さない: 毎ターンの文字数を増やさないことを優先したため。
@@ -505,7 +505,7 @@ export function describeSituationParts(input: SituationInput): SituationPart[] {
 }
 
 // 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。2ターン目以降も畳まず毎回全文で出す（#4476）
-const READINGS_NOTICE =
+export const READINGS_NOTICE =
   // 「手が空いている」の否定は本数が 0 でも出す: 出ていないことが「数えていない」と読める余地が残り、横断する軸には算術で 0 と確定する手が無いため
   '**区分の読み方** — 「手が空いている」は空き枠でも、終わった／枠が空いたでもない' +
   '（失敗や利用上限で止まった委譲も `done` のまま座る。セッションが生きているためで、仕様である。' +
