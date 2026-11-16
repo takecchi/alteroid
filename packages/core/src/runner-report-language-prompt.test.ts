@@ -106,7 +106,13 @@ const appendOf = (options: Options): string =>
 const workerPromptOf = (options: Options): string =>
   String(((options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown }).prompt);
 
-const BASE_APPEND = buildManagerSystemPrompt({ managerId: 'mgr-1', workerName: WORKER_AGENT_NAME });
+// 形の歯は既定 off なので、runner 経由のプロンプトには「分類器に止められやすい形」の節が入る
+const SHAPE_OFF = { shape: false, wait: false, shapeOff: true } as const;
+const BASE_APPEND = buildManagerSystemPrompt({
+  managerId: 'mgr-1',
+  workerName: WORKER_AGENT_NAME,
+  bashGuards: SHAPE_OFF,
+});
 
 describe('言語の指示を担当・作業者のプロンプトと SDK の settings に入れる（ALTEROID_REPORT_LANGUAGE。#4977）', () => {
   it('段落は指定の文言そのものである', () => {
@@ -120,7 +126,7 @@ describe('言語の指示を担当・作業者のプロンプトと SDK の sett
     const { options } = await open({ [REPORT_LANGUAGE_ENV]: 'ja' });
     expect(appendOf(options)).toBe(`${BASE_APPEND}\n\n${REPORT_LANGUAGE_PROMPT_PARAGRAPH}`);
     expect(workerPromptOf(options)).toBe(
-      `${buildWorkerPrompt()}\n\n${REPORT_LANGUAGE_PROMPT_PARAGRAPH}`,
+      `${buildWorkerPrompt(SHAPE_OFF)}\n\n${REPORT_LANGUAGE_PROMPT_PARAGRAPH}`,
     );
     expect(options.settings).toEqual({
       attribution: { commit: '', pr: '' },
@@ -133,7 +139,7 @@ describe('言語の指示を担当・作業者のプロンプトと SDK の sett
     for (const env of [{}, { [REPORT_LANGUAGE_ENV]: 'off' }]) {
       const { options } = await open(env);
       expect(appendOf(options)).toBe(BASE_APPEND);
-      expect(workerPromptOf(options)).toBe(buildWorkerPrompt());
+      expect(workerPromptOf(options)).toBe(buildWorkerPrompt(SHAPE_OFF));
       expect(options.settings).toEqual({
         attribution: { commit: '', pr: '' },
         autoMemoryEnabled: false,
@@ -161,7 +167,7 @@ describe('言語の指示を担当・作業者のプロンプトと SDK の sett
   it('綴り違いでは足さず、セッションは開き、note に1回だけ残す', async () => {
     const { options, events } = await open({ [REPORT_LANGUAGE_ENV]: 'yes' });
     expect(appendOf(options)).toBe(BASE_APPEND);
-    expect(workerPromptOf(options)).toBe(buildWorkerPrompt());
+    expect(workerPromptOf(options)).toBe(buildWorkerPrompt(SHAPE_OFF));
     expect(options.settings).not.toHaveProperty('language');
     const misconfig = events.filter(
       (event) =>
