@@ -166,6 +166,69 @@ function pageList<T>(items: readonly T[], offset: number, limit: number) {
   };
 }
 
+// exchanges の添付の畳み方。1行は先頭 20 件まで、頁全体は文字数の予算で締める（件数だけで決めると、100 行 × 20 件で上限を超える）。
+// 予算が尽きた後の行は件数（`attachmentCount` 等）と `attachmentsOmitted` だけを返し、中身は journal_read の `id` で読む。
+const EXCHANGE_ATTACHMENTS_PER_ROW = 20;
+const EXCHANGE_ATTACHMENTS_PAGE_CHARS = 15_000;
+const ATTACHMENT_NAME_CHARS = 120;
+const ATTACHMENT_ID_CHARS = 120;
+const ATTACHMENT_MEDIA_TYPE_CHARS = 100;
+const ATTACHMENT_SHA256_CHARS = 128;
+const ATTACHMENT_REASON_CHARS = 200;
+
+function shapeAttachments(
+  entry: {
+    attachments?: readonly {
+      id: string;
+      name: string;
+      mediaType: string;
+      size: number;
+      sha256: string;
+    }[];
+    rejectedAttachments?: readonly { name: string; reason: string }[];
+  },
+  redactor: SecretRedactor,
+  budget: { remaining: number },
+) {
+  // 走査してから切る（切った断片では鍵の規則に当たらなくなるため）。
+  const clip = (value: string, max: number) => sliceText(redactor.redact(value), 0, max).text;
+  const accepted = entry.attachments ?? [];
+  const rejected = entry.rejectedAttachments ?? [];
+  let shown = 0;
+  const take = <T>(items: readonly T[], shape: (item: T) => Record<string, unknown>) => {
+    const out: Record<string, unknown>[] = [];
+    for (const item of items) {
+      if (shown >= EXCHANGE_ATTACHMENTS_PER_ROW) break;
+      const shaped = shape(item);
+      const cost = JSON.stringify(shaped).length;
+      if (cost > budget.remaining) break;
+      budget.remaining -= cost;
+      shown += 1;
+      out.push(shaped);
+    }
+    return out;
+  };
+  const attachments = take(accepted, (a) => ({
+    id: clip(a.id, ATTACHMENT_ID_CHARS),
+    name: clip(a.name, ATTACHMENT_NAME_CHARS),
+    mediaType: clip(a.mediaType, ATTACHMENT_MEDIA_TYPE_CHARS),
+    size: a.size,
+    sha256: clip(a.sha256, ATTACHMENT_SHA256_CHARS),
+  }));
+  const rejectedAttachments = take(rejected, (r) => ({
+    name: clip(r.name, ATTACHMENT_NAME_CHARS),
+    reason: clip(r.reason, ATTACHMENT_REASON_CHARS),
+  }));
+  const omitted = accepted.length + rejected.length - shown;
+  return {
+    ...(entry.attachments === undefined ? {} : { attachmentCount: accepted.length, attachments }),
+    ...(entry.rejectedAttachments === undefined
+      ? {}
+      : { rejectedAttachmentCount: rejected.length, rejectedAttachments }),
+    ...(omitted > 0 ? { attachmentsOmitted: omitted } : {}),
+  };
+}
+
 type Produced = { ok: true; data: Record<string, unknown> } | { ok: false; message: string };
 
 function toolError(message: string) {
@@ -567,7 +630,12 @@ export function registerReadTools(
       '`managerId` で1つの委譲の往復だけに絞れる（取った頁の中での絞り込み。頁が `limit` 未満・空でも、`next` が `null` でない限り先に行が在るので、`next` を `afterId` / `afterAt` に渡して続ける）。' +
       '`since` / `until` / `q` / `order` / `afterId` + `afterAt` / `limit` は journal_read と同じ' +
       `（limit は既定 ${String(LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}）。本文は textChars 字（既定 ${String(MCP_FIELD_DEFAULT_CHARS)}）で切り、` +
-      '全長を `textChars` 、切ったかを `textTruncated` に返す。全文は journal_read の `id` で頁送りして読む。生ログ（transcript）は出さない。',
+      '全長を `textChars` 、切ったかを `textTruncated` に返す。全文は journal_read の `id` で頁送りして読む。生ログ（transcript）は出さない。' +
+      '添付は行ごとに `attachmentCount` と `attachments`（`id` / `name` / `mediaType` / `size` / `sha256`。メタデータだけ）、' +
+      '受け取れなかったファイルは `rejectedAttachmentCount` と `rejectedAttachments`（`name` / `reason`）を返す（在る行だけ）。' +
+      `文字列は走査してから短く切る。1行は先頭 ${String(EXCHANGE_ATTACHMENTS_PER_ROW)} 件まで、頁全体も文字数の予算で締め、` +
+      '載せきれなかった分の合計を `attachmentsOmitted` に返す（件数は常に全数）。' +
+      '添付の中身（bytes）を返す道具は無い: 返るのは名前・id・種類・大きさ・ハッシュだけで、中身は読めない。',
     exchangesInput,
     async (args, redactor) => {
       const result = await readJournalPage(stores, {
@@ -583,6 +651,7 @@ export function registerReadTools(
         afterAt: args.afterAt,
       });
       if (!result.ok) return { ok: false, message: result.error };
+      const attachmentBudget = { remaining: EXCHANGE_ATTACHMENTS_PAGE_CHARS };
       const rows = result.body.entries.flatMap((entry) => {
         if (entry.type !== 'exchange') return [];
         if (args.managerId !== undefined && entry.managerId !== args.managerId) return [];
@@ -604,9 +673,7 @@ export function registerReadTools(
             textChars: page.total,
             textTruncated: page.truncated,
             ...(entry.supersedes === undefined ? {} : { supersedes: entry.supersedes }),
-            ...(entry.attachments === undefined
-              ? {}
-              : { attachmentCount: entry.attachments.length }),
+            ...shapeAttachments(entry, redactor, attachmentBudget),
           },
         ];
       });
