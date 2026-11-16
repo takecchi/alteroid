@@ -422,6 +422,111 @@ describe('読み取りの道具: 日誌・やり取り', () => {
     ]);
   });
 
+  it('exchanges は添付 3 件と却下 2 件の中身のメタデータ（id・name・mediaType・size・sha256 / name・reason）を行に返す', async () => {
+    const app = buildApp();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      managerId: 'mgr-att',
+      text: '報告',
+      attachments: [1, 2, 3].map((n) => ({
+        id: `att-${String(n)}`,
+        name: `file-${String(n)}.png`,
+        mediaType: 'image/png',
+        size: n * 100,
+        sha256: `${String(n)}`.repeat(64),
+      })),
+      rejectedAttachments: [
+        { name: 'big.bin', reason: '大きすぎる' },
+        { name: 'x.exe', reason: '種類が許可されていない' },
+      ],
+    });
+    const result = await callTool(app, OPERATOR, 'exchanges', {});
+    const row = (sc(result).exchanges as Record<string, unknown>[])[0]!;
+    expect(row.attachmentCount).toBe(3);
+    expect(row.rejectedAttachmentCount).toBe(2);
+    expect(row.attachments).toEqual([1, 2, 3].map((n) => ({
+      id: `att-${String(n)}`,
+      name: `file-${String(n)}.png`,
+      mediaType: 'image/png',
+      size: n * 100,
+      sha256: `${String(n)}`.repeat(64),
+    })));
+    expect(row.rejectedAttachments).toEqual([
+      { name: 'big.bin', reason: '大きすぎる' },
+      { name: 'x.exe', reason: '種類が許可されていない' },
+    ]);
+    expect(row.attachmentsOmitted).toBeUndefined();
+  });
+
+  it('exchanges は添付が 600 件の行を先頭 20 件＋ attachmentsOmitted で畳み、頁が上限に収まる', async () => {
+    const app = buildApp();
+    for (let row = 0; row < 3; row += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        managerId: 'mgr-many',
+        text: '報告',
+        attachments: Array.from({ length: 500 }, (_, n) => ({
+          id: `att-${String(n)}`,
+          name: 'n'.repeat(1_000),
+          mediaType: 'm'.repeat(1_000),
+          size: n,
+          sha256: 'f'.repeat(64),
+        })),
+        rejectedAttachments: Array.from({ length: 100 }, (_, n) => ({
+          name: `r-${String(n)}`,
+          reason: 'r'.repeat(1_000),
+        })),
+      });
+    }
+    const result = await callTool(app, OPERATOR, 'exchanges', { limit: 100 });
+    expect(result.json.result?.isError).not.toBe(true);
+    const rows = sc(result).exchanges as {
+      attachmentCount: number;
+      rejectedAttachmentCount: number;
+      attachments: { name: string }[];
+      rejectedAttachments: unknown[];
+      attachmentsOmitted: number;
+    }[];
+    for (const row of rows) {
+      expect(row.attachmentCount).toBe(500);
+      expect(row.rejectedAttachmentCount).toBe(100);
+      expect(row.attachments.length + row.rejectedAttachments.length).toBeLessThanOrEqual(20);
+      expect(row.attachmentsOmitted).toBe(
+        600 - row.attachments.length - row.rejectedAttachments.length,
+      );
+      for (const a of row.attachments) expect(a.name.length).toBeLessThanOrEqual(120);
+    }
+    expect(result.text.length).toBeLessThan(60_000);
+  });
+
+  it('exchanges の添付と却下の名前・理由に秘密らしい値が在れば、伏せてから返す', async () => {
+    const app = buildApp();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      managerId: 'mgr-sec',
+      text: '報告',
+      attachments: [
+        {
+          id: 'att-1',
+          name: `${GITHUB}.txt`,
+          mediaType: 'text/plain',
+          size: 1,
+          sha256: 'a'.repeat(64),
+        },
+      ],
+      rejectedAttachments: [{ name: GITHUB, reason: `拒否 ${GITHUB}` }],
+    });
+    const result = await callTool(app, OPERATOR, 'exchanges', {});
+    expect(result.text).not.toContain('ghp_');
+    expect(result.text).toContain('[redacted:');
+  });
+
   it('exchanges に生ログ（transcript）の口は無い', async () => {
     const app = buildApp();
     const list = await rpc(app, OPERATOR, 'tools/list');
