@@ -2133,6 +2133,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     pluginLoad() {
       throw new Error('spec 生成専用のスタブ');
     },
+    claudeCodeVersion() {
+      throw new Error('spec 生成専用のスタブ');
+    },
     promptSnapshot() {
       throw new Error('spec 生成専用のスタブ');
     },
