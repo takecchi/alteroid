@@ -24,13 +24,7 @@ export const MEMORY_INDEX_REINJECTED_PHRASE = '記憶の索引を載せ直した
 export const MEMORY_INDEX_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}${MEMORY_INDEX_REINJECTED_PHRASE}`;
 
 export type ExchangeKind =
-  | 'reply'
-  | 'decision'
-  | 'thinning'
-  | 'failure'
-  | 'recovery'
-  | 'gauge'
-  | 'record';
+  'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge' | 'record';
 
 export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
   readonly kind: ExchangeKind;
