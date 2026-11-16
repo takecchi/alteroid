@@ -17,7 +17,7 @@ export const MEMORY_INDEX_REINJECTED_PHRASE = '記憶の索引を載せ直した
 /** 要約後に記憶の索引を載せ直した回に clone が残す観測の1行の頭。行動ではないので承認の追跡は数えない。 */
 export const MEMORY_INDEX_REINJECTED_JOURNAL_HEAD = `${EXCHANGE_KIND_GAUGE_PREFIX}${MEMORY_INDEX_REINJECTED_PHRASE}`;
 
-type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
+export type ExchangeKind = 'reply' | 'decision' | 'thinning' | 'failure' | 'recovery' | 'gauge';
 
 export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
   readonly kind: ExchangeKind;
@@ -30,3 +30,35 @@ export const EXCHANGE_KIND_PREFIXES: ReadonlyArray<{
   { kind: 'recovery', prefix: EXCHANGE_KIND_RECOVERY_PREFIX },
   { kind: 'gauge', prefix: EXCHANGE_KIND_GAUGE_PREFIX },
 ];
+
+/** 本文の頭の接頭辞から記録の種類を導く。どの接頭辞でもなければ null（種類を言わない）。 */
+export function exchangeKindOf(text: string): ExchangeKind | null {
+  return EXCHANGE_KIND_PREFIXES.find(({ prefix }) => text.startsWith(prefix))?.kind ?? null;
+}
+
+export type ExchangeSender = 'system' | 'clone' | 'manager';
+
+const SYSTEM_TEXT_HEAD = '[system] ';
+// managerId の欄が無い行でも `[<id>] [system] ` の形は見分ける（id は `]` を含まない）。
+const BRACKETED_SYSTEM_HEAD = /^\[[^\]]*\] \[system\] /;
+
+/**
+ * 日誌の `with: manager` の行の書き手。`role` は向き（outbound = 担い手へ向かう）で、書き手ではない。
+ * outbound は `#recordDelivery` が `[応答] [managerId] <送った文面>` で書く。クローンの `manager_send` と、
+ * システムが同じ経路で送る `[system] …`（rescue_restore の応答など）を、本文の頭でしか分けられない。
+ * 判定できない outbound は clone に倒す（システムだと言い切る根拠が無い）。
+ */
+export function exchangeSenderOf(row: {
+  readonly role: 'outbound' | 'inbound';
+  readonly managerId?: string | undefined;
+  readonly text: string;
+}): ExchangeSender {
+  if (row.role === 'inbound') return 'manager';
+  const body = row.text.startsWith(EXCHANGE_KIND_REPLY_PREFIX)
+    ? row.text.slice(EXCHANGE_KIND_REPLY_PREFIX.length)
+    : row.text;
+  if (row.managerId !== undefined) {
+    return body.startsWith(`[${row.managerId}] ${SYSTEM_TEXT_HEAD}`) ? 'system' : 'clone';
+  }
+  return BRACKETED_SYSTEM_HEAD.test(body) ? 'system' : 'clone';
+}
