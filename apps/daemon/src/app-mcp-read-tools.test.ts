@@ -582,33 +582,21 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
     expect(sc(plain).breakdown.byDate).toHaveLength(3);
   });
 
-  it('memory_list は件数が多くても既定で断られず、頁送りの next を返す（#6836 で頁送りになった）', async () => {
+  it('断りの文は、その道具に実在する引数だけを挙げる（memory_list に limit・fieldChars・length は無い）', async () => {
     const app = buildApp();
-    for (let i = 0; i < 700; i += 1) {
-      await stores.persona.write(`doc-${String(i)}`, 'x'.repeat(10));
-    }
-    const result = await callTool(app, OPERATOR, 'memory_list');
-    expect(result.json.result?.isError).not.toBe(true);
-    expect(sc(result).next).toBe(50);
-  });
-
-  it('断りの文は、その道具に実在する引数だけを挙げる（exchanges に fieldChars・length は無い）', async () => {
-    const app = buildApp();
+    // memory_list は頁送りになったので、既定の頁では溢れない。上限の頁（limit 100）に長い slug・題を詰めて溢れさせる
     for (let i = 0; i < 100; i += 1) {
-      await stores.journal.append({
-        type: 'exchange',
-        with: 'manager',
-        role: 'outbound',
-        managerId: 'mgr-1',
-        text: 'あ'.repeat(4_000),
-      });
+      await stores.persona.write(
+        `doc-${String(i).padStart(3, '0')}-${'s'.repeat(110)}`,
+        `# ${'題'.repeat(300)}\n`,
+      );
     }
-    const result = await callTool(app, OPERATOR, 'exchanges', { limit: 100, textChars: 4_000 });
+    const result = await callTool(app, OPERATOR, 'memory_list', { limit: 100 });
     const text = result.json.result?.content?.[0]?.text ?? '';
     expect(text).toContain('大きすぎる');
-    expect(text).toContain('textChars');
-    expect(text).not.toContain('fieldChars');
-    expect(text).not.toContain('length');
+    expect(text).toContain('prefix');
+    expect(text).toContain('（fieldChars・length は無い）');
+    expect(text).toContain('memory_read');
   });
 
   it('self_prompt は既定で大きさだけ（本文なし）。full: true は systemPrompt.text を頁送りし、道具は tool で1本ずつ', async () => {

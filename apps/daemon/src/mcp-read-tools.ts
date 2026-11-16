@@ -256,7 +256,7 @@ export function registerReadTools(
         },
       };
     },
-    'limit を小さくするか、prefix で絞って呼び直すこと（続きは offset に next を渡す）',
+    'limit を小さくするか、prefix で絞って呼び直すこと（fieldChars・length は無い）。slug が分かっているなら memory_read で1文書ずつ読むこと',
   );
 
   define(
