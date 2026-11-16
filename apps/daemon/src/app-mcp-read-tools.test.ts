@@ -36,6 +36,7 @@ const READ_TOOLS = [
 ];
 
 let stores: Stores;
+let sessionExtra: Record<string, unknown> = {};
 
 function cloneHost(): CloneHost {
   return fakeCloneHost({
@@ -43,6 +44,7 @@ function cloneHost(): CloneHost {
       snapshotOf(
         sessionOf({
           systemPrompt: { text: `前置き。${GITHUB}。${'あ'.repeat(5000)}`, chars: 5010 },
+          ...sessionExtra,
         }),
       ),
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
@@ -164,6 +166,7 @@ const sc = (result: Rpc) => result.json.result?.structuredContent ?? {};
 
 beforeEach(async () => {
   stores = createMemoryStores();
+  sessionExtra = {};
   await grantAccount();
 });
 
@@ -607,7 +610,8 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
       truncated: true,
       nextOffset: 100,
     });
-    expect(sc(page1).tools[0].description).toBeUndefined();
+    expect(sc(page1).tools).toEqual([]);
+    expect(sc(page1).toolsPage).toEqual({ total: 1 });
     expect(page1.text).not.toContain('ghp_');
     expect(
       sc(page1).secretScan.hits.some((hit: { rule: string }) => hit.rule.startsWith('github')),
@@ -624,6 +628,77 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
     expect(sc(tool).systemPrompt).toEqual({ chars: 5010 });
     const none = await callTool(app, OPERATOR, 'self_prompt', { full: true, tool: 'nope' });
     expect(none.json.result?.isError).toBe(true);
+  });
+
+  it('記憶の文書 400・道具 300 の大きい形でも、既定の呼び出しが通り、頁送りで全件が取れる。full: true の各頁にも行は載らない', async () => {
+    sessionExtra = {
+      memoryInPrompt: {
+        documents: Array.from({ length: 400 }, (_, i) => ({
+          slug: `doc-${String(i)}`,
+          type: 'fact',
+          description: `説明${String(i)}。${'あ'.repeat(120)}`,
+          chars: 100 + i,
+          index: { kind: 'baked', form: 'toc', chars: 20 },
+        })),
+        omitted: 0,
+      },
+      tools: Array.from({ length: 300 }, (_, i) => ({
+        name: `tool_${String(i)}`,
+        description: 'd'.repeat(300),
+        inputSchema: { type: 'object' },
+        descriptionChars: 300,
+        inputSchemaChars: 15,
+      })),
+    };
+    const app = buildApp();
+
+    const first = await callTool(app, OPERATOR, 'self_prompt', {});
+    expect(first.json.result?.isError).toBeUndefined();
+    expect(sc(first).memoryInPrompt.documents.length).toBeGreaterThan(0);
+    expect(sc(first).tools.length).toBeGreaterThan(0);
+    expect(sc(first).memoryInPrompt.documentsPage).toMatchObject({
+      total: 400,
+      offset: 0,
+      nextOffset: 50,
+    });
+    expect(sc(first).toolsPage).toMatchObject({ total: 300, offset: 0, nextOffset: 50 });
+
+    const slugs: string[] = [];
+    let docsOffset: number | null = 0;
+    while (docsOffset !== null) {
+      const page = await callTool(app, OPERATOR, 'self_prompt', { docsOffset, toolsLimit: 1 });
+      expect(page.json.result?.isError).toBeUndefined();
+      slugs.push(...sc(page).memoryInPrompt.documents.map((d: { slug: string }) => d.slug));
+      docsOffset = sc(page).memoryInPrompt.documentsPage.nextOffset;
+    }
+    expect(slugs).toHaveLength(400);
+    expect(new Set(slugs).size).toBe(400);
+
+    const names: string[] = [];
+    let toolsOffset: number | null = 0;
+    while (toolsOffset !== null) {
+      const page = await callTool(app, OPERATOR, 'self_prompt', {
+        toolsOffset,
+        toolsLimit: 100,
+        docsLimit: 1,
+      });
+      expect(page.json.result?.isError).toBeUndefined();
+      names.push(...sc(page).tools.map((t: { name: string }) => t.name));
+      toolsOffset = sc(page).toolsPage.nextOffset;
+    }
+    expect(names).toHaveLength(300);
+    expect(new Set(names).size).toBe(300);
+
+    const full = await callTool(app, OPERATOR, 'self_prompt', { full: true, length: 20_000 });
+    expect(full.json.result?.isError).toBeUndefined();
+    expect(sc(full).memoryInPrompt.documents).toEqual([]);
+    expect(sc(full).memoryInPrompt.documentsPage).toEqual({ total: 400 });
+    expect(sc(full).toolsPage).toEqual({ total: 300 });
+    expect(sc(full).page.truncated).toBe(false);
+
+    const one = await callTool(app, OPERATOR, 'self_prompt', { full: true, tool: 'tool_299' });
+    expect(sc(one).tools).toHaveLength(1);
+    expect(sc(one).tools[0].description).toHaveLength(300);
   });
 });
 
