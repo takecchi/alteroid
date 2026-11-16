@@ -177,6 +177,8 @@ const WAITING = 'tail -f /tmp/run.log';
 const FD_DUP = 'pnpm test 2>&1';
 const WORKER = { agent_id: 'agent-xyz', agent_type: 'worker' };
 const SHAPE_ON = { [BASH_SHAPE_GUARD_ENV]: 'on' };
+// 形の歯は既定 on。形の歯以外を見る試験は、これを置いて元の前提（形の歯は掛からない）を保つ
+const SHAPE_OFF = { [BASH_SHAPE_GUARD_ENV]: 'off' };
 
 describe('release-prod（決定と note の全文・順）', () => {
   it('off でも確認に残り、deny 設定なら deny。作業者は actor が worker:。形の歯が on でも release-prod が先に当たる', async () => {
@@ -264,7 +266,7 @@ describe('release-prod（決定と note の全文・順）', () => {
 });
 
 describe('形の歯（ALTEROID_BASH_SHAPE_GUARD）', () => {
-  it('on なら ask / off 設定でも deny。off・未設定・空なら見ない', async () => {
+  it('on・未設定・空なら ask / off 設定でも deny。明示的に off のときだけ見ない', async () => {
     expect(
       await runCases([
         { label: 'on+unset', env: SHAPE_ON, input: bashInput({ command: FD_DUP }) },
@@ -344,9 +346,11 @@ describe('形の歯（ALTEROID_BASH_SHAPE_GUARD）', () => {
             "reason": "<reason#0>",
           },
           "shape-empty": {
-            "decision": undefined,
-            "events": [],
-            "reason": undefined,
+            "decision": "deny",
+            "events": [
+              "note: Bash の呼び出しを弾いた（manager:mgr-1・形=fd-dup）。<reason#0>",
+            ],
+            "reason": "<reason#0>",
           },
           "shape-off": {
             "decision": undefined,
@@ -361,9 +365,11 @@ describe('形の歯（ALTEROID_BASH_SHAPE_GUARD）', () => {
             "reason": "<reason#1>",
           },
           "shape-unset": {
-            "decision": undefined,
-            "events": [],
-            "reason": undefined,
+            "decision": "deny",
+            "events": [
+              "note: Bash の呼び出しを弾いた（manager:mgr-1・形=fd-dup）。<reason#0>",
+            ],
+            "reason": "<reason#0>",
           },
         },
         "reasons": [
@@ -457,15 +463,24 @@ describe('#bashGuard の off・ask・deny と run_in_background', () => {
 
   it('run_in_background が true のときだけ backgrounded（欠け・文字列 "true"・数値・false は前景）', async () => {
     const command = 'gh run watch 123 --exit-status 2>&1 | tail -60';
+    // 待ちの歯だけを見る試験なので、形の歯（`2>&1 | tail` を断る）は明示的に切る
     const table = await runCases([
-      { label: 'true', env: {}, input: bashInput({ command, run_in_background: true }) },
-      { label: 'missing', env: {}, input: bashInput({ command }) },
-      { label: 'string-true', env: {}, input: bashInput({ command, run_in_background: 'true' }) },
-      { label: 'number-1', env: {}, input: bashInput({ command, run_in_background: 1 }) },
-      { label: 'false', env: {}, input: bashInput({ command, run_in_background: false }) },
+      { label: 'true', env: SHAPE_OFF, input: bashInput({ command, run_in_background: true }) },
+      { label: 'missing', env: SHAPE_OFF, input: bashInput({ command }) },
+      {
+        label: 'string-true',
+        env: SHAPE_OFF,
+        input: bashInput({ command, run_in_background: 'true' }),
+      },
+      { label: 'number-1', env: SHAPE_OFF, input: bashInput({ command, run_in_background: 1 }) },
+      {
+        label: 'false',
+        env: SHAPE_OFF,
+        input: bashInput({ command, run_in_background: false }),
+      },
       {
         label: 'true+deny',
-        env: { [BASH_GUARD_ENV]: 'deny' },
+        env: { ...SHAPE_OFF, [BASH_GUARD_ENV]: 'deny' },
         input: bashInput({ command, run_in_background: true }),
       },
     ]);
@@ -704,8 +719,8 @@ describe('判定が例外で終わる（不正な ALTEROID_BASH_SHAPE_GUARD）',
           },
         },
         "reasons": [
-          "Bash のガードの判定が例外で終わったので、安全側で確認に上げた（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は off））。形を変えずに打ち直さず、依頼者へ報告すること。",
-          "Bash のガードの判定が例外で終わったので、安全側で拒否した（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は off））。形を変えずに打ち直さず、依頼者へ報告すること。",
+          "Bash のガードの判定が例外で終わったので、安全側で確認に上げた（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は on））。形を変えずに打ち直さず、依頼者へ報告すること。",
+          "Bash のガードの判定が例外で終わったので、安全側で拒否した（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は on））。形を変えずに打ち直さず、依頼者へ報告すること。",
           "Bash のガードの判定が例外で終わったので、安全側で確認に上げた（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes）。形を変えずに打ち直さず、依頼者へ報告すること。",
           "本番デプロイ（release-prod）を起動する形である（\`gh workflow run … release-prod…\` / \`gh api …/workflows/…release-prod…/dispatches\`）。**取り返しがつきにくい**ので、確かめるまでは通さない。起動してよいか、いつ起動するか（夜の自動反映に任せてよいか）を確かめること。",
         ],
@@ -716,7 +731,7 @@ describe('判定が例外で終わる（不正な ALTEROID_BASH_SHAPE_GUARD）',
 
 describe('env は呼び出しのたびに読む（作った後に書き換えた値が次の呼び出しから効く）', () => {
   it('runner の env を後から書き換えると、次の PreToolUse から形の歯が on になる', async () => {
-    const env: NodeJS.ProcessEnv = {};
+    const env: NodeJS.ProcessEnv = { ...SHAPE_OFF };
     const opened = await open(env);
     const first = decisionOf(await fire(opened, bashInput({ command: FD_DUP }))).decision;
     env[BASH_SHAPE_GUARD_ENV] = 'on';

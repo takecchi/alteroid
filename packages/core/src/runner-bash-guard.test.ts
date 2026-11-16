@@ -156,7 +156,7 @@ describe('結果の形', () => {
         "throwAsk": {
           "decision": {
             "kind": "ask",
-            "reason": "Bash のガードの判定が例外で終わったので、安全側で確認に上げた（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は off））。形を変えずに打ち直さず、依頼者へ報告すること。",
+            "reason": "Bash のガードの判定が例外で終わったので、安全側で確認に上げた（Error: ALTEROID_BASH_SHAPE_GUARD の値が不正: yes（使えるのは on / off。既定は on））。形を変えずに打ち直さず、依頼者へ報告すること。",
           },
           "kind": "decided",
         },
@@ -234,7 +234,7 @@ describe('口が同期で投げたときの伝わり方', () => {
 
 describe('env は参照で渡る（作った後の書き換えが次の呼び出しから効く）', () => {
   it('形の歯を後から on にすると、次の decide から deny', () => {
-    const h = harness();
+    const h = harness({ env: { [BASH_SHAPE_GUARD_ENV]: 'off' } });
     expect(h.guard.decide(bash(FD_DUP))).toEqual({ kind: 'none' });
     h.env[BASH_SHAPE_GUARD_ENV] = 'on';
     expect(h.guard.decide(bash(FD_DUP)).kind).toBe('decided');

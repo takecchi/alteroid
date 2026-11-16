@@ -14,8 +14,8 @@ export const BASH_SHAPE_GUARD_ENV = 'ALTEROID_BASH_SHAPE_GUARD';
 const BASH_SHAPE_GUARD_VALUES = ['on', 'off'] as const;
 type BashShapeGuardMode = (typeof BASH_SHAPE_GUARD_VALUES)[number];
 
-// 既定は掛けない: 作者の運用スタイルを要件にしない（north_star 禁止2）。掛けたい器が env かプロファイルで開ける
-export const DEFAULT_BASH_SHAPE_GUARD: BashShapeGuardMode = 'off';
+// 既定は掛ける: 断られる形を担当が打つと、分類器の拒否→クローンへの確認という高い往復になるため、先に断って代わりの道を返すほうが安い。切りたい器は env かプロファイルで `off` にする
+export const DEFAULT_BASH_SHAPE_GUARD: BashShapeGuardMode = 'on';
 
 // 綴り違いは黙って既定へ倒さず落とす: 持ち主が気づけないままにならないため
 export function resolveBashShapeGuard(env: NodeJS.ProcessEnv = process.env): BashShapeGuardMode {
