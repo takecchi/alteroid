@@ -84,7 +84,11 @@ const appendOf = (options: Options): string =>
 const workerPromptOf = (options: Options): string =>
   String(((options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown }).prompt);
 
-const managerPrompt = (bashGuards?: { shape: boolean; wait: boolean }): string =>
+const managerPrompt = (bashGuards?: {
+  shape: boolean;
+  wait: boolean;
+  shapeOff?: boolean;
+}): string =>
   buildManagerSystemPrompt({
     managerId: 'mgr-1',
     workerName: WORKER_AGENT_NAME,
@@ -99,22 +103,27 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
   });
 
-  it('形の歯が既定（off）で待ちの歯が ask なら、待ちの節だけが載る', async () => {
+  it('形の歯が既定（off）で待ちの歯が ask なら、待ちの節と分類器の節が載り、形の一覧は載らない', async () => {
     const options = await open({});
-    expect(appendOf(options)).toBe(managerPrompt({ shape: false, wait: true }));
-    expect(workerPromptOf(options)).toBe(buildWorkerPrompt({ shape: false, wait: true }));
+    const guards = { shape: false, wait: true, shapeOff: true };
+    expect(appendOf(options)).toBe(managerPrompt(guards));
+    expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
+    expect(appendOf(options)).toContain('# 分類器に止められやすい Bash の形');
+    expect(appendOf(options)).not.toContain('# この器で断られる Bash の形');
   });
 
   it('待ちの歯が deny でも載る', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'deny' });
-    expect(appendOf(options)).toBe(managerPrompt({ shape: false, wait: true }));
+    expect(appendOf(options)).toBe(managerPrompt({ shape: false, wait: true, shapeOff: true }));
   });
 
-  it('どちらも閉じていれば、プロンプトは1文字も増えない', async () => {
+  it('どちらも閉じていれば、歯の節は載らず、分類器の節だけが載る（作業者にも）', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'off' });
-    expect(appendOf(options)).toBe(managerPrompt());
-    expect(workerPromptOf(options)).toBe(buildWorkerPrompt());
+    const guards = { shape: false, wait: false, shapeOff: true };
+    expect(appendOf(options)).toBe(managerPrompt(guards));
+    expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
     expect(appendOf(options)).not.toContain('この器で断られる');
+    expect(appendOf(options)).toContain('# 分類器に止められやすい Bash の形');
   });
 
   it('プロファイルで形の歯を on にすると載る（runner の env は未設定）', async () => {
@@ -123,9 +132,10 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt({ shape: true, wait: false }));
   });
 
-  it('形の歯の値が不正で判定が投げても、セッションは開き、形の節は載せない', async () => {
+  it('形の歯の値が不正で判定が投げても、セッションは開き、歯の形の一覧は載せない（off として扱う）', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'off', [BASH_SHAPE_GUARD_ENV]: 'yes' });
-    expect(appendOf(options)).toBe(managerPrompt());
-    expect(workerPromptOf(options)).toBe(buildWorkerPrompt());
+    const guards = { shape: false, wait: false, shapeOff: true };
+    expect(appendOf(options)).toBe(managerPrompt(guards));
+    expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
   });
 });

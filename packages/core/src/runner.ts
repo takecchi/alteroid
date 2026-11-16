@@ -3585,9 +3585,10 @@ class RunnerSession {
    * セッションを開く時点の歯の状態（#5017）。担当・作業者のプロンプトに、断られる形の一覧を載せるかを決める。
    * 判定が投げたら載せない: プロンプトを作れなくするより、載せないほうへ倒す。
    * 既知の限界: 開いた後に設定（プロファイルを含む）が変わっても、プロンプトは作り直さない。歯そのものは呼び出しのたびに読むので、断る・断らないは変わるが、告知の一覧は開いた時点のまま。
-   * 両方とも偽なら undefined（プロンプトは1文字も増えない）。
+   * 形の歯が off（判定が投げた場合も含む）なら `shapeOff` を立てる: 歯が断らない分、Claude Code の分類器に止められる形を先に知らせる。
+   * そのため常に値を返す（`undefined` を返して1文字も増やさないのは、プロンプトを作る側へ渡さないときだけ）。
    */
-  #sessionBashGuards(): BashGuardsInPrompt | undefined {
+  #sessionBashGuards(): BashGuardsInPrompt {
     const shape = ((): boolean => {
       try {
         return resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on';
@@ -3596,7 +3597,7 @@ class RunnerSession {
       }
     })();
     const wait = this.#bashGuard !== 'off';
-    return shape || wait ? { shape, wait } : undefined;
+    return { shape, wait, ...(shape ? {} : { shapeOff: true }) };
   }
 
   // 開く時点と発言の観測の両方から呼ぶ。同じ値は1回だけ書く: 設定の誤りは1つで、日誌を2行にしないため

@@ -6,19 +6,20 @@ import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 
 const MANAGER_INPUT = { managerId: 'mgr-test', workerName: 'worker' } as const;
 const SHAPE_HEADING = '# この器で断られる Bash の形';
+const CLASSIFIER_HEADING = '# 分類器に止められやすい Bash の形';
 const WAIT_HEADING = '# この器で断られる Bash の待ちの形';
 
 describe('歯が断る Bash の形をプロンプトに載せる（#5017）', () => {
   const builders = [
     [
       '担当',
-      (g?: { shape: boolean; wait: boolean }) =>
+      (g?: { shape: boolean; wait: boolean; shapeOff?: boolean }) =>
         buildManagerSystemPrompt({
           ...MANAGER_INPUT,
           ...(g === undefined ? {} : { bashGuards: g }),
         }),
     ],
-    ['作業者', (g?: { shape: boolean; wait: boolean }) => buildWorkerPrompt(g)],
+    ['作業者', (g?: { shape: boolean; wait: boolean; shapeOff?: boolean }) => buildWorkerPrompt(g)],
   ] as const;
 
   for (const [label, build] of builders) {
@@ -50,6 +51,37 @@ describe('歯が断る Bash の形をプロンプトに載せる（#5017）', ()
         for (const { shape, instead } of Object.values(WAIT_GUARD_SUMMARIES)) {
           expect(prompt).toContain(`- ${shape} → ${instead}`);
         }
+      });
+
+      it('形の歯が off（shapeOff）なら、分類器の短い節が載り、歯の一覧は載らない', () => {
+        const prompt = build({ shape: false, wait: false, shapeOff: true });
+        expect(prompt.startsWith(build())).toBe(true);
+        expect(prompt).toContain(CLASSIFIER_HEADING);
+        expect(prompt).not.toContain(SHAPE_HEADING);
+        expect(prompt).not.toContain(WAIT_HEADING);
+        const section = prompt.slice(prompt.indexOf(CLASSIFIER_HEADING));
+        expect(section.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(4);
+        // 通る書き方は歯の要約と同じ文言を使う
+        expect(section).toContain(BASH_SHAPE_SUMMARIES.chain.instead);
+        expect(section).toContain(BASH_SHAPE_SUMMARIES['pipe-trim'].instead);
+        expect(section).toContain(BASH_SHAPE_SUMMARIES['fd-dup'].instead);
+        expect(section).toContain('git -C <絶対パス>');
+      });
+
+      it('形の歯が on なら、shapeOff が立っていても従来の一覧だけで、分類器の節は載らない', () => {
+        const prompt = build({ shape: true, wait: false, shapeOff: true });
+        expect(prompt).toBe(build({ shape: true, wait: false }));
+        expect(prompt).not.toContain(CLASSIFIER_HEADING);
+      });
+
+      it('形の歯が off で待ちの歯が on なら、待ちの節と分類器の節の両方が載る', () => {
+        const prompt = build({ shape: false, wait: true, shapeOff: true });
+        expect(prompt).toContain(CLASSIFIER_HEADING);
+        expect(prompt).toContain(WAIT_HEADING);
+      });
+
+      it('形の歯が on なら、既定の呼び出しに分類器の節は載らない', () => {
+        expect(build({ shape: true, wait: true })).not.toContain(CLASSIFIER_HEADING);
       });
 
       it('両方 on なら、形の節の後ろに待ちの節が載る', () => {

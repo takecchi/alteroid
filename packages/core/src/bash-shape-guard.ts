@@ -163,6 +163,22 @@ export function bashShapePromptLines(): string {
     .join('\n');
 }
 
+/**
+ * 形の歯が off の器へ渡す、Claude Code の分類器（auto mode）に止められやすい形の一覧（5 行以内）。
+ * 「通る書き方」は歯の要約（`BASH_SHAPE_SUMMARIES`）の `instead` をそのまま使う: 歯の文言と食い違わないようにするため。
+ * 形は歯の一覧より粗い（分類器が止めるのは、歯が断る形の一部と重なる範囲）ので、近い形は1行にまとめる。
+ * `BASH_SHAPE_SUMMARIES[...]` の添字は型で縛られるので、形の名前を変えると typecheck が落ちる。
+ */
+export function bashClassifierPromptLines(): string {
+  const S = BASH_SHAPE_SUMMARIES;
+  return [
+    `- \`cd <dir> && …\`・\`;\` での連結 → ${S.chain.instead}。場所は \`git -C <絶対パス>\`・\`pnpm -C <絶対パス>\` のようにコマンド側で指す`,
+    `- \`>/dev/null\`・\`2>&1\` → ${S['fd-dup'].instead}（静かにしたいなら \`--silent\` など、コマンド自身の選択肢）`,
+    `- \`| head\`・\`| tail\` → ${S['pipe-trim'].instead}`,
+    `- \`sed -i\`・\`cat >>\`・ヒアドキュメント → Edit / Write（${S['sed-in-place'].instead}。${S.heredoc.instead}）`,
+  ].join('\n');
+}
+
 /** どの形の理由にも最後に添える1文（#4989）。止めたのが1回の呼び出しだけで、書き直して続けてよいことを言う。 */
 export const BASH_SHAPE_CONTINUE_NOTE =
   '止めたのはこの1回の呼び出しだけなので、上のとおり書き直して、依頼者の返事を待たずにそのまま続けること。迷ったら、1回の Bash では1つのコマンドだけを、変数を使わず絶対パスで打ち、出力はそのまま読む。';

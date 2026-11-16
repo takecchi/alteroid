@@ -354,8 +354,8 @@ describe('マネージャー（runner）へ渡す Options', () => {
     await host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
     const { options } = started[0] as Started;
 
-    // env が空の既定: 待ちの歯は ask（載る）・形の歯は off（載らない）（#5017）
-    const bashGuards = { shape: false, wait: true };
+    // env が空の既定: 待ちの歯は ask（載る）・形の歯は off（歯の一覧は載らず、分類器の短い節が載る）（#5017）
+    const bashGuards = { shape: false, wait: true, shapeOff: true };
     const expectedManagerAppend = buildManagerSystemPrompt({
       managerId: 'mgr-1',
       workerName: WORKER_AGENT_NAME,

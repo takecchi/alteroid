@@ -10,7 +10,7 @@
  * `.claude/agents-md-records/memory-index.md` に在る。プロンプトの本文には載せない。
  */
 
-import { bashShapePromptLines } from './bash-shape-guard.js';
+import { bashClassifierPromptLines, bashShapePromptLines } from './bash-shape-guard.js';
 import { externalSourceNote } from './report-problem.js';
 import { waitGuardPromptLines } from './bash-wait-guard.js';
 import { excerpt } from './excerpt.js';
@@ -514,11 +514,16 @@ export interface BashGuardsInPrompt {
   shape: boolean;
   /** 待ちの歯（`ALTEROID_BASH_GUARD`）が ask / deny */
   wait: boolean;
+  /**
+   * 形の歯が off だった。立てると、分類器（Claude Code の auto mode）に止められやすい形の短い節を足す。
+   * `shape` と別の欄にしたのは、`{ shape: false, wait: false }` が「1文字も増えない」という既存の契約を保つため。
+   */
+  shapeOff?: boolean;
 }
 
 /**
  * 歯が断る Bash の形の告知。禁止の宣言の口調にしない: 器の事実（打つとその呼び出しだけが断られて理由が返る）と、通る書き方を渡す。
- * どちらも偽なら空文字を返す。
+ * `shape` が on なら歯の一覧、off（`shapeOff`）なら分類器に止められやすい形の短い節。どれも立っていなければ空文字を返す。
  */
 function bashGuardSections(guards: BashGuardsInPrompt | undefined): string {
   if (guards === undefined) return '';
@@ -529,6 +534,12 @@ function bashGuardSections(guards: BashGuardsInPrompt | undefined): string {
 この器では、次の形の Bash は1回ごとに断られる（打つと、その呼び出しだけが拒否されて理由が返る）。最初から右の書き方で打つこと。
 
 ${bashShapePromptLines()}`);
+  } else if (guards.shapeOff === true) {
+    sections.push(`# 分類器に止められやすい Bash の形
+
+この環境の Claude Code の分類器は次の形で止まり、止まるとクローンへの確認が上がる。最初から右の書き方で打つこと。
+
+${bashClassifierPromptLines()}`);
   }
   if (guards.wait) {
     sections.push(`# この器で断られる Bash の待ちの形
