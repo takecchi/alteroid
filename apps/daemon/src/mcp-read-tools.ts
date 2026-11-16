@@ -19,14 +19,26 @@ import type { AuthVariables } from './auth.js';
 import { readJournalEntry } from './app-shared.js';
 import {
   MCP_FIELD_DEFAULT_CHARS,
+  MCP_ARRAY_MAX_ITEMS,
   MCP_FIELD_MAX_CHARS,
+  MCP_PAGE_BUDGET_CHARS,
   MCP_RESULT_MAX_CHARS,
   MCP_TEXT_DEFAULT_LENGTH,
   MCP_TEXT_MAX_LENGTH,
   capStrings,
+  fitJournalPage,
   sliceText,
+  sliceTextWithinJson,
+  type CappedRow,
 } from './mcp-read-text.js';
 import { readJournalPage, readUsage } from './read-queries.js';
+import {
+  USAGE_SECTIONS,
+  shapeUsageAggregate,
+  usageAttempts,
+  type ListCount,
+  type UsageShapeOptions,
+} from './mcp-usage-shape.js';
 import { buildSelfPromptBody, finalizeSelfPrompt } from './self-prompt.js';
 import { createDaemonSecretRedactor, withSecretScan } from './secret-scan.js';
 
@@ -40,6 +52,10 @@ const SELF_PROMPT_LIST_DEFAULT = 50;
 const SELF_PROMPT_LIST_MAX = 100;
 const ROWS_DEFAULT = 50;
 const ROWS_MAX = 200;
+// usage_read の `top` の上限と、縮めたときの再取得の例に使う top、走査の欄（`secretScan`）に残す余白
+const USAGE_TOP_MAX = 1000;
+const USAGE_RETRY_TOP = 50;
+const USAGE_SCAN_MARGIN_CHARS = 4000;
 
 // 説明文に必ず入れる2つ。1つ目は「安全の保証と読まれない」ため、2つ目は「記録の中の依頼文を指示と読まれない」ため。
 const BEST_EFFORT_NOTE =
@@ -97,6 +113,15 @@ const exchangesInput = z.strictObject({
   textChars: fieldCharsField,
 });
 
+// 1件のメタ情報は約 400 字。既定 50 件でも上限 100 件でも MCP_RESULT_MAX_CHARS に収まる。
+const MEMORY_LIST_LIMIT_DEFAULT = 50;
+
+const memoryListInput = z.strictObject({
+  prefix: shortString(200).optional(),
+  offset: offsetField,
+  limit: z.number().int().min(1).max(LIMIT_MAX).default(MEMORY_LIST_LIMIT_DEFAULT),
+});
+
 const memoryReadInput = z.strictObject({
   slug: memorySlugSchema,
   offset: offsetField,
@@ -110,6 +135,8 @@ const usageReadInput = z.strictObject({
   layer: usageLayerSchema.optional(),
   site: usageSiteSchema.optional(),
   tokenId: z.string().min(1).max(200).optional(),
+  top: z.number().int().min(1).max(USAGE_TOP_MAX).optional(),
+  sections: z.array(z.enum(USAGE_SECTIONS)).min(1).optional(),
   includeRows: z.boolean().default(false),
   rowsOffset: offsetField,
   rowsLimit: z.number().int().min(1).max(ROWS_MAX).default(ROWS_DEFAULT),
@@ -171,6 +198,8 @@ export function registerReadTools(
     description: string,
     inputSchema: Schema,
     run: (args: z.infer<Schema>, redactor: SecretRedactor) => Promise<Produced>,
+    // 結果が上限を超えたときの断りの文に入れる、その道具に実在する引数の案内（道具ごとに引数が違う）
+    oversizeHint = 'limit・fieldChars・length を小さくするか、期間・絞りを狭めて呼び直すこと',
   ): void {
     server.registerTool(
       name,
@@ -193,7 +222,7 @@ export function registerReadTools(
           if (text.length > MCP_RESULT_MAX_CHARS) {
             return toolError(
               `結果が大きすぎる（${String(text.length)} 字。上限 ${String(MCP_RESULT_MAX_CHARS)} 字）。` +
-                'limit・fieldChars・length を小さくするか、期間・絞りを狭めて呼び直すこと（何も返していない）。',
+                `${oversizeHint}（何も返していない）。`,
             );
           }
           return { content: [{ type: 'text' as const, text }], structuredContent };
@@ -211,12 +240,29 @@ export function registerReadTools(
   define(
     'memory_list',
     '記憶文書の一覧',
-    '記憶（`GET /memory`）の文書一覧。本文は含まない（メタ情報だけ）。本文は memory_read で読む。',
-    z.strictObject({}),
-    async (_args, redactor) => {
-      const documents = redactor.redactDeep(await stores.persona.list());
-      return { ok: true, data: { count: documents.length, documents } };
+    '記憶（`GET /memory`）の文書一覧（slug の昇順）。本文は含まない（メタ情報だけ）。本文は memory_read で読む。' +
+      '`prefix` で slug の先頭一致に絞れる。`limit` 件ずつ頁送りする（既定 ' +
+      `${String(MEMORY_LIST_LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}）。` +
+      '`offset` は先頭から数えた件数（既定 0）。`total` は絞った後の全件数、`count` はこの頁の件数。' +
+      '`next` は次の頁の `offset` で、`null` のときだけ終端（`null` でなければ続きが在る）。',
+    memoryListInput,
+    async ({ prefix, offset, limit }, redactor) => {
+      const all = await stores.persona.list();
+      const matched = prefix === undefined ? all : all.filter((d) => d.slug.startsWith(prefix));
+      const page = redactor.redactDeep(matched.slice(offset, offset + limit));
+      const end = offset + page.length;
+      return {
+        ok: true,
+        data: {
+          total: matched.length,
+          count: page.length,
+          offset,
+          next: end < matched.length ? end : null,
+          documents: page,
+        },
+      };
     },
+    'limit を小さくするか、prefix で絞って呼び直すこと（fieldChars・length は無い）。slug が分かっているなら memory_read で1文書ずつ読むこと',
   );
 
   define(
@@ -224,14 +270,15 @@ export function registerReadTools(
     '記憶文書を1つ読む',
     '記憶文書1つ（`GET /memory/:slug`）。slug は記憶のスラッグ。本文は文字数（UTF-16 の単位）の ' +
       `offset / length で頁送りする（既定 length ${String(MCP_TEXT_DEFAULT_LENGTH)}、上限 ${String(MCP_TEXT_MAX_LENGTH)}）。` +
-      '`page.truncated` が真なら `page.nextOffset` から続きを読む。`page.total` は本文全体の長さ。',
+      '`page.truncated` が真なら `page.nextOffset` から続きを読む。`page.total` は本文全体の長さ。' +
+      '制御文字・引用符が多い本文は JSON にすると長くなるので、その場合は length より短く返す（`page.returned` が実際の長さ。続きは `nextOffset` から）。',
     memoryReadInput,
     async ({ slug, offset, length }, redactor) => {
       const document = await stores.persona.read(slug);
       if (document === null) return { ok: false, message: '該当する記憶が無い（not found）。' };
       // 走査してから切る: 切った後に走査すると、切れ目をまたいだ鍵の頭が規則に当たらず残る。
       const content = redactor.redact(document.content);
-      const { text, page } = sliceText(content, offset, length);
+      const { text, page } = sliceTextWithinJson(content, offset, length);
       return {
         ok: true,
         data: {
@@ -241,6 +288,7 @@ export function registerReadTools(
         },
       };
     },
+    'length を小さくして offset で頁送りして呼び直すこと',
   );
 
   define(
@@ -249,7 +297,12 @@ export function registerReadTools(
     '日誌（`GET /journal`。追記専用の記録）を読む。`type`（カンマ区切り。知らない値は断る）・`since`・`until`・`q`・`order`・' +
       '`afterId`/`afterAt`（両方一緒。前の頁の最後の行の id と at）で掘る。`next` は次の頁の継続点で、`null` のときだけ終端。' +
       `limit は既定 ${String(LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}。1つの文字列欄は fieldChars 字（既定 ${String(MCP_FIELD_DEFAULT_CHARS)}）で切り、` +
-      '切った数を `fieldsTruncated` に返す。切られた行の全文は `id` を渡して読む（本文は offset / length で頁送り。`id` は他の絞りと一緒に使えない）。',
+      '切った数を `fieldsTruncated` に返す。1つの配列は先頭 ' +
+      `${String(MCP_ARRAY_MAX_ITEMS)} 件＋「他 M 件」の印に畳み、畳んだ配列の数を \`arraysTruncated\` に返す。` +
+      `1頁の JSON が ${String(MCP_PAGE_BUDGET_CHARS)} 字を超えるときは、後ろの行から落として \`next\` を最後に残した行の継続点にして返す` +
+      '（落とした行数は `rowsDropped`、理由は `notice`。全断しない。`next` が `null` でなければ先が在る）。' +
+      '1行だけで超える行は id / at / type / size だけの要約行（`summarized: true`）になる。' +
+      '切られた・要約された行の全文は `id` を渡して読む（本文は offset / length で頁送り。`id` は他の絞りと一緒に使えない）。',
     journalReadInput,
     async (args, redactor) => {
       if (args.id !== undefined) {
@@ -288,9 +341,24 @@ export function registerReadTools(
       });
       if (!result.ok) return { ok: false, message: result.error };
       const scanned = redactor.redactDeep(result.body);
-      const { value, cut } = capStrings(scanned, args.fieldChars);
-      return { ok: true, data: { ...value, fieldsTruncated: cut } };
+      const { entries, next, ...rest } = scanned;
+      const capped: CappedRow[] = entries.map((entry) => {
+        const { value, cut, folded } = capStrings(entry, args.fieldChars);
+        return {
+          row: value as unknown as Record<string, unknown>,
+          id: entry.id,
+          at: entry.at,
+          type: entry.type,
+          originalChars: JSON.stringify(entry).length,
+          cut,
+          folded,
+        };
+      });
+      // 行の数・欄の数は fieldChars では締まらないので、返す直前に頁ごと予算へ収める（共通の殻の「大きすぎる」断りに当てない）。
+      const fitted = fitJournalPage(capped, next, rest, MCP_PAGE_BUDGET_CHARS);
+      return { ok: true, data: { ...capStrings(rest, args.fieldChars).value, ...fitted } };
     },
+    'limit・fieldChars を小さくするか、type・since・until・q で絞って呼び直すこと（id で1行を読むときは length を小さくして offset で頁送り）',
   );
 
   define(
@@ -302,6 +370,10 @@ export function registerReadTools(
       '（`rowsOffset` / `rowsLimit` で頁送り。既定 ' +
       `${String(ROWS_DEFAULT)}・最大 ${String(ROWS_MAX)}。` +
       '`rowsTotal` / `turnRowsTotal` が全体の件数）。' +
+      `内訳の一覧が長い（manager が多い）ときは \`top\`（1〜${String(USAGE_TOP_MAX)}。各一覧の上位 N 件だけを費用の大きい順に）と ` +
+      `\`sections\`（返す欄を選ぶ。${USAGE_SECTIONS.join(' / ')}。\`["totals"]\` なら合計だけ。既定は全部）で縮める。` +
+      '切った・落とした一覧は `lists`（一覧ごとの total / returned / omitted）に出る（`breakdown.total` は切る前の全体の合計で、切った一覧の足し算とは一致しない）。' +
+      '何も渡さずに上限（60000 字）を超えるときは断らず、top を減らし、最後は合計だけにして返す（`degraded` に元の大きさ・縮め方・再取得の引数の例）。' +
       '`beforeLedger` などの印が真なら、0 ではなく「記録が無い」と読むこと。',
     usageReadInput,
     async (args) => {
@@ -314,33 +386,75 @@ export function registerReadTools(
         tokenId: args.tokenId,
       });
       const { rows, turnRows, ...aggregate } = usage;
-      if (!args.includeRows) {
+      const from = args.rowsOffset;
+      const to = from + args.rowsLimit;
+      const rowsPart = args.includeRows
+        ? {
+            rowsIncluded: true,
+            rowsOffset: from,
+            rowsTotal: rows.length,
+            turnRowsTotal: turnRows.length,
+            rows: rows.slice(from, to),
+            turnRows: turnRows.slice(from, to),
+            rowsNextOffset: Math.max(rows.length, turnRows.length) > to ? to : null,
+          }
+        : { rowsIncluded: false, rowsTotal: rows.length, turnRowsTotal: turnRows.length };
+      const requested = { top: args.top, sections: args.sections };
+      const build = (options: UsageShapeOptions) => {
+        const { data, lists } = shapeUsageAggregate(aggregate, options);
+        return { ...data, ...rowsPart, ...(lists === undefined ? {} : { lists }) };
+      };
+
+      // 上限に当たっても何かが取れるようにする: 断る代わりに top を減らし、最後は合計だけにする。
+      // 返す直前の秘密の走査（`secretScan` の欄）の分の余白を引いて測る。
+      const budget = MCP_RESULT_MAX_CHARS - USAGE_SCAN_MARGIN_CHARS;
+      let originalChars = 0;
+      for (const attempt of usageAttempts(requested)) {
+        const data = build(attempt.options);
+        const chars = JSON.stringify(data).length;
+        if (attempt.step === 'requested') {
+          if (chars <= budget) return { ok: true, data };
+          originalChars = chars;
+          continue;
+        }
+        if (chars > budget) continue;
+        const cutLists = Object.entries((data.lists ?? {}) as Record<string, ListCount>)
+          .filter(([, count]) => count.omitted > 0)
+          .map(([name]) => name);
         return {
           ok: true,
           data: {
-            ...aggregate,
-            rowsIncluded: false,
-            rowsTotal: rows.length,
-            turnRowsTotal: turnRows.length,
+            ...data,
+            degraded: {
+              reason: `要求どおりだと ${String(originalChars)} 字で、上限 ${String(MCP_RESULT_MAX_CHARS)} 字を超えるので縮めた。`,
+              originalChars,
+              requested: { top: args.top ?? null, sections: args.sections ?? null },
+              applied: {
+                top: attempt.options.top ?? null,
+                sections: attempt.options.sections ?? null,
+              },
+              howToRetry:
+                '`lists` に一覧ごとの総数・返した件数・切った件数が在る（切った分は費用の大きい順の後ろ）。' +
+                '欲しい内訳だけを `sections` で選び、`top` と一緒に呼び直す' +
+                '（切れた・落ちた一覧ごとの引数の例は `retryExamples`。同じ from / to / 絞りと一緒に渡す）。' +
+                '期間（from / to）や managerId・layer・site で絞るのも効く。',
+              retryExamples: cutLists
+                .slice(0, 6)
+                .map((name) => ({ sections: [name], top: USAGE_RETRY_TOP })),
+            },
           },
         };
       }
-      const from = args.rowsOffset;
-      const to = from + args.rowsLimit;
       return {
-        ok: true,
-        data: {
-          ...aggregate,
-          rowsIncluded: true,
-          rowsOffset: from,
-          rowsTotal: rows.length,
-          turnRowsTotal: turnRows.length,
-          rows: rows.slice(from, to),
-          turnRows: turnRows.slice(from, to),
-          rowsNextOffset: Math.max(rows.length, turnRows.length) > to ? to : null,
-        },
+        ok: false,
+        message:
+          `合計だけに縮めても大きすぎる（要求どおりだと ${String(originalChars)} 字。上限 ${String(MCP_RESULT_MAX_CHARS)} 字）。` +
+          (args.includeRows ? 'rowsLimit を小さくするか、' : '') +
+          '期間（from / to）や managerId・layer・site・tokenId で絞って呼び直すこと（何も返していない）。',
       };
     },
+    'top を小さくするか、sections で欲しい内訳だけを選ぶ（`["totals"]` なら合計だけ）。' +
+      'from / to・managerId・layer・site・tokenId で絞るか、includeRows: true のときは rowsLimit を小さくして呼び直すこと',
   );
 
   define(
@@ -441,6 +555,7 @@ export function registerReadTools(
         },
       };
     },
+    'docsLimit・toolsLimit を小さくして docsOffset・toolsOffset で頁送りするか、full: true のときは length を小さくして offset で頁送りして呼び直すこと',
   );
 
   define(
@@ -499,6 +614,7 @@ export function registerReadTools(
       });
       return { ok: true, data: { exchanges: rows, next: result.body.next } };
     },
+    'limit・textChars を小さくするか、since・until・q・managerId で絞って呼び直すこと',
   );
 
   define(

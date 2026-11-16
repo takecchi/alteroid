@@ -390,6 +390,128 @@ describe('読み取りの道具: 日誌・やり取り', () => {
     expect(over.json.result?.isError === true || over.json.error !== undefined).toBe(true);
   });
 
+  it('journal_read は添付 600 + 却下 600 件の行でも limit=1 で全断せず、配列を畳み、id で全取得できる', async () => {
+    const app = buildApp();
+    const attachments = Array.from({ length: 600 }, (_, i) => ({
+      id: `att-${String(i)}`,
+      name: `file-${String(i)}.txt`,
+      mediaType: 'text/plain',
+      size: i,
+      sha256: 'a'.repeat(64),
+    }));
+    const rejectedAttachments = Array.from({ length: 600 }, (_, i) => ({
+      name: `bad-${String(i)}.bin`,
+      reason: '大きすぎる',
+    }));
+    const row = await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      managerId: 'mgr-a',
+      text: '添付つきの報告',
+      attachments,
+      rejectedAttachments,
+    });
+    const result = await callTool(app, OPERATOR, 'journal_read', { limit: 1 });
+    expect(result.json.result?.isError).not.toBe(true);
+    const [entry] = sc(result).entries as { id: string; attachments: unknown[] }[];
+    expect(entry?.id).toBe(row.id);
+    expect(entry?.attachments).toHaveLength(21);
+    expect(entry?.attachments.at(-1)).toContain('他 580 件');
+    expect(sc(result).arraysTruncated).toBe(2);
+    expect(sc(result).next).toBeNull();
+
+    const whole = await callTool(app, OPERATOR, 'journal_read', { id: row.id, length: 20_000 });
+    let json = sc(whole).entryJson as string;
+    let nextOffset = sc(whole).page.nextOffset as number | null;
+    while (nextOffset !== null) {
+      const more = await callTool(app, OPERATOR, 'journal_read', {
+        id: row.id,
+        offset: nextOffset,
+        length: 20_000,
+      });
+      json += sc(more).entryJson as string;
+      nextOffset = sc(more).page.nextOffset as number | null;
+    }
+    const full = JSON.parse(json) as { attachments: unknown[]; rejectedAttachments: unknown[] };
+    expect(full.attachments).toHaveLength(600);
+    expect(full.rejectedAttachments).toHaveLength(600);
+  });
+
+  it('journal_read は limit=100 で頁が予算を超えるとき、後ろの行を落として next を継続点にし、全行を取りこぼさず辿れる', async () => {
+    const app = buildApp();
+    const ids: string[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      const row = await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `発言${String(i)} ${'長'.repeat(5000)}`,
+      });
+      ids.push(row.id);
+    }
+    const seen: string[] = [];
+    let cursor: { id: string; at: string } | null = null;
+    let pages = 0;
+    let firstDropped = 0;
+    do {
+      const result: Rpc = await callTool(app, OPERATOR, 'journal_read', {
+        limit: 100,
+        order: 'asc',
+        fieldChars: 4000,
+        ...(cursor === null ? {} : { afterId: cursor.id, afterAt: cursor.at }),
+      });
+      expect(result.json.result?.isError).not.toBe(true);
+      // 殻の上限（60000 字）は結果 JSON 1つぶんに掛かる（RPC の封筒は content と structuredContent の2つぶん）
+      expect(JSON.stringify(sc(result)).length).toBeLessThan(60_000);
+      const entries = sc(result).entries as { id: string }[];
+      if (pages === 0) {
+        firstDropped = sc(result).rowsDropped as number;
+        expect(entries.length).toBeLessThan(100);
+        expect(sc(result).notice).toContain('next');
+        expect(sc(result).next).toEqual(expect.objectContaining({ id: entries.at(-1)?.id }));
+      }
+      seen.push(...entries.map((entry) => entry.id));
+      cursor = sc(result).next as { id: string; at: string } | null;
+      pages += 1;
+    } while (cursor !== null && pages < 100);
+    expect(firstDropped).toBeGreaterThan(0);
+    expect(seen).toEqual(ids);
+  });
+
+  it('journal_read は1行だけで頁の予算を超えるとき、id / at / type / size の要約行にして id で頁送りするよう案内する', async () => {
+    const app = buildApp();
+    // 配列を畳んでも超える行: 長い文字列欄を fieldChars の上限いっぱいで多数持たせる
+    const attachments = Array.from({ length: 20 }, (_, i) => ({
+      id: `att-${String(i)}`,
+      name: 'n'.repeat(3900),
+      mediaType: 'text/plain',
+      size: i,
+      sha256: 'b'.repeat(3900),
+    }));
+    const row = await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: 'x',
+      attachments,
+    });
+    const result = await callTool(app, OPERATOR, 'journal_read', { limit: 1, fieldChars: 4000 });
+    expect(result.json.result?.isError).not.toBe(true);
+    const [entry] = sc(result).entries as Record<string, unknown>[];
+    expect(entry).toEqual({
+      id: row.id,
+      at: row.at,
+      type: 'exchange',
+      size: expect.any(Number),
+      summarized: true,
+    });
+    expect(sc(result).notice).toContain(row.id);
+    expect(sc(result).rowsSummarized).toBe(1);
+    const whole = await callTool(app, OPERATOR, 'journal_read', { id: row.id, length: 100 });
+    expect(sc(whole).entryJson).toHaveLength(100);
+  });
+
   it('journal_read の type は未知の値を断る（HTTP と同じ文）', async () => {
     const app = buildApp();
     const result = await callTool(app, OPERATOR, 'journal_read', { type: 'exchange,nope' });
@@ -542,6 +664,121 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
     expect(sc(plain).today).toBe(http.today);
   });
 
+  // 1日 × manager 数百件。長い managerId で、既定の集計（byManager）だけで 60000 字を超える大きさにする
+  async function seedManyManagers(count: number) {
+    for (let i = 0; i < count; i += 1) {
+      const managerId = `manager-${String(i).padStart(4, '0')}-${'x'.repeat(40)}`;
+      await stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId,
+        date: '2026-11-15',
+        at: '2026-11-15T10:00:00.000Z',
+        snapshot: {
+          models: {
+            'claude-opus-5': {
+              inputTokens: 100 + i,
+              outputTokens: 10,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: i + 1,
+            },
+          },
+        },
+      });
+    }
+  }
+
+  it('usage_read: 既定のまま上限を超える大きさでも断らず、縮めて返す（縮めた印・元の大きさ・再取得の引数つき）', async () => {
+    const app = buildApp();
+    await seedManyManagers(400);
+    const result = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      layer: 'manager',
+    });
+    expect(result.json.result?.isError).not.toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(60_000);
+    const degraded = sc(result).degraded;
+    expect(degraded.originalChars).toBeGreaterThan(60_000);
+    expect(degraded.applied.top).toBeGreaterThan(0);
+    expect(degraded.retryExamples.length).toBeGreaterThan(0);
+    expect(degraded.howToRetry).toContain('sections');
+    // 黙って欠けない: 総数・返した件数・切った件数が一覧ごとに出る。合計は切る前の全体
+    const lists = sc(result).lists.byManager;
+    expect(lists.total).toBe(400);
+    expect(lists.returned + lists.omitted).toBe(400);
+    expect(lists.omitted).toBeGreaterThan(0);
+    expect(sc(result).breakdown.byManager).toHaveLength(lists.returned);
+    expect(sc(result).breakdown.total.costUsd).toBe((400 * 401) / 2);
+    // 費用の大きい順
+    expect(sc(result).breakdown.byManager[0].totals.costUsd).toBe(400);
+  });
+
+  it('usage_read: sections は返す欄だけを選び、["totals"] なら合計だけ。落とした一覧は lists に総数が残る', async () => {
+    const app = buildApp();
+    await seedManyManagers(400);
+    const totalsOnly = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      sections: ['totals'],
+    });
+    expect(totalsOnly.json.result?.isError).not.toBe(true);
+    expect(sc(totalsOnly).degraded).toBeUndefined();
+    expect(sc(totalsOnly).breakdown.total.costUsd).toBe((400 * 401) / 2);
+    expect(sc(totalsOnly).breakdown.byManager).toBeUndefined();
+    expect(sc(totalsOnly).unrecordedManagers).toBeUndefined();
+    expect(sc(totalsOnly).lists.byManager).toEqual({ total: 400, returned: 0, omitted: 400 });
+
+    const one = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      sections: ['byLayer'],
+    });
+    expect(sc(one).breakdown.byLayer).toHaveLength(1);
+    expect(sc(one).breakdown.byManager).toBeUndefined();
+  });
+
+  it('usage_read: top は各一覧の上位 N 件を費用の大きい順に返し、切った分を lists に出す', async () => {
+    const app = buildApp();
+    await seedManyManagers(30);
+    const result = await callTool(app, OPERATOR, 'usage_read', { top: 3, sections: ['byManager'] });
+    const costs = (sc(result).breakdown.byManager as { totals: { costUsd: number } }[]).map(
+      (entry) => entry.totals.costUsd,
+    );
+    expect(costs).toEqual([30, 29, 28]);
+    expect(sc(result).lists.byManager).toEqual({ total: 30, returned: 3, omitted: 27 });
+    expect(sc(result).degraded).toBeUndefined();
+  });
+
+  it('usage_read: top も sections も渡さず小さいときは、従来の応答のまま（lists・degraded を足さない）', async () => {
+    const app = buildApp();
+    await seedUsage();
+    const plain = await callTool(app, OPERATOR, 'usage_read', {});
+    expect(sc(plain).lists).toBeUndefined();
+    expect(sc(plain).degraded).toBeUndefined();
+    expect(sc(plain).breakdown.byDate).toHaveLength(3);
+  });
+
+  it('断りの文は、その道具に実在する引数だけを挙げる（memory_list に limit・fieldChars・length は無い）', async () => {
+    const app = buildApp();
+    // memory_list は頁送りになったので、既定の頁では溢れない。上限の頁（limit 100）に長い slug・題を詰めて溢れさせる
+    for (let i = 0; i < 100; i += 1) {
+      await stores.persona.write(
+        `doc-${String(i).padStart(3, '0')}-${'s'.repeat(110)}`,
+        `# ${'題'.repeat(300)}\n`,
+      );
+    }
+    const result = await callTool(app, OPERATOR, 'memory_list', { limit: 100 });
+    const text = result.json.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('大きすぎる');
+    expect(text).toContain('prefix');
+    expect(text).toContain('（fieldChars・length は無い）');
+    expect(text).toContain('memory_read');
+  });
+
   it('self_prompt は既定で大きさだけ（本文なし）。full: true は systemPrompt.text を頁送りし、道具は tool で1本ずつ', async () => {
     const app = buildApp();
     const small = await callTool(app, OPERATOR, 'self_prompt', {});
@@ -667,13 +904,70 @@ describe('読み取りの道具: 走査の失敗は結果を返さない', () =>
 
   it('結果が上限を超えるなら、切らずに狭め方を言って断る', async () => {
     const app = buildApp();
-    // 上限を超える結果は頁送りの上限では作れないので、大量の記憶の一覧で作る（1件のメタ情報が数百字）
-    for (let i = 0; i < 700; i += 1) {
-      await stores.persona.write(`doc-${String(i)}`, 'x'.repeat(10));
+    // 日誌を limit 最大・fieldChars 最大で読むと上限を超える
+    for (let i = 0; i < 100; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        managerId: 'mgr-1',
+        text: 'あ'.repeat(4_000),
+      });
     }
-    const result = await callTool(app, OPERATOR, 'memory_list');
+    const result = await callTool(app, OPERATOR, 'exchanges', { limit: 100, textChars: 4_000 });
     expect(result.json.result?.isError).toBe(true);
     expect(result.json.result?.structuredContent).toBeUndefined();
     expect(result.json.result?.content?.[0]?.text).toContain('大きすぎる');
+  });
+
+  it('memory_list は件数が多くても既定の呼び出しで頁が取れ、next を辿ると全件を重複なく読める', async () => {
+    const app = buildApp();
+    for (let i = 0; i < 700; i += 1) {
+      await stores.persona.write(`doc-${String(i).padStart(3, '0')}`, 'x'.repeat(10));
+    }
+    await stores.persona.write('other', 'y');
+    const first = await callTool(app, OPERATOR, 'memory_list');
+    expect(first.json.result?.isError).not.toBe(true);
+    expect(sc(first).total).toBe(701);
+    expect(sc(first).count).toBe(50);
+    expect(sc(first).next).toBe(50);
+
+    const slugs: string[] = [];
+    let next: number | null = 0;
+    while (next !== null) {
+      const page = await callTool(app, OPERATOR, 'memory_list', { limit: 100, offset: next });
+      expect(page.json.result?.isError).not.toBe(true);
+      slugs.push(...sc(page).documents.map((d: { slug: string }) => d.slug));
+      next = sc(page).next as number | null;
+    }
+    expect(slugs).toHaveLength(701);
+    expect(new Set(slugs).size).toBe(701);
+
+    const filtered = await callTool(app, OPERATOR, 'memory_list', { prefix: 'oth' });
+    expect(sc(filtered).total).toBe(1);
+    expect(sc(filtered).next).toBeNull();
+    const beyond = await callTool(app, OPERATOR, 'memory_list', { offset: 5_000 });
+    expect(sc(beyond).count).toBe(0);
+    expect(sc(beyond).next).toBeNull();
+  });
+
+  it('memory_read は制御文字だらけの本文でも、JSON にした長さで締めて断らず、nextOffset で全部読める', async () => {
+    const app = buildApp();
+    const body = '\u0001'.repeat(60_000);
+    await stores.persona.write('ctl', body);
+    let offset: number | null = 0;
+    let read = 0;
+    while (offset !== null) {
+      const result = await callTool(app, OPERATOR, 'memory_read', {
+        slug: 'ctl',
+        offset,
+        length: 20_000,
+      });
+      expect(result.json.result?.isError).not.toBe(true);
+      expect(sc(result).page.offset).toBe(offset);
+      read += sc(result).page.returned as number;
+      offset = sc(result).page.nextOffset as number | null;
+    }
+    expect(read).toBe(60_001);
   });
 });
