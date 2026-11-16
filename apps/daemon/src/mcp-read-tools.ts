@@ -38,6 +38,8 @@ import { createDaemonSecretRedactor, withSecretScan } from './secret-scan.js';
 
 const LIMIT_DEFAULT = 20;
 const LIMIT_MAX = 100;
+const SELF_PROMPT_LIST_DEFAULT = 50;
+const SELF_PROMPT_LIST_MAX = 100;
 const ROWS_DEFAULT = 50;
 const ROWS_MAX = 200;
 
@@ -121,7 +123,25 @@ const selfPromptInput = z.strictObject({
   field: z.enum(['description', 'inputSchema']).default('description'),
   offset: offsetField,
   length: lengthField,
+  docsOffset: offsetField,
+  docsLimit: z.number().int().min(1).max(SELF_PROMPT_LIST_MAX).default(SELF_PROMPT_LIST_DEFAULT),
+  toolsOffset: offsetField,
+  toolsLimit: z.number().int().min(1).max(SELF_PROMPT_LIST_MAX).default(SELF_PROMPT_LIST_DEFAULT),
 });
+
+// 件数の頁（`full: false` の記憶の文書・道具の行）。総数・次の位置を添えて返す
+function pageList<T>(items: readonly T[], offset: number, limit: number) {
+  const end = offset + limit;
+  return {
+    rows: items.slice(offset, end),
+    page: {
+      total: items.length,
+      offset,
+      returned: Math.max(0, Math.min(items.length, end) - offset),
+      nextOffset: items.length > end ? end : null,
+    },
+  };
+}
 
 type Produced = { ok: true; data: Record<string, unknown> } | { ok: false; message: string };
 
@@ -348,6 +368,10 @@ export function registerReadTools(
     'self_prompt',
     'クローンが焼いたプロンプトを読む',
     'クローンがいま焼いているプロンプトの内容（`GET /self/prompt`）。既定は `full: false`（大きさ・索引・道具の名前と大きさだけで、長い本文は無い）。' +
+      '`full: false` の記憶の文書（`memoryInPrompt.documents`）と道具（`tools`）は件数の頁で返す: ' +
+      `docsOffset / docsLimit・toolsOffset / toolsLimit（既定 limit ${String(SELF_PROMPT_LIST_DEFAULT)}・最大 ${String(SELF_PROMPT_LIST_MAX)}）。` +
+      '`memoryInPrompt.documentsPage` / `toolsPage` が total・returned・nextOffset（null なら終端）を返すので、nextOffset を次の offset に渡して全件を取る。' +
+      '`full: true` の頁には文書・道具の行を載せない（件数 total だけ。道具は `tool` で選んだ1本だけ載る）。' +
       '`full: true` のときは長い文字列を1回に1つだけ頁送りで返す: `tool` を省けば `systemPrompt.text`、' +
       '`tool` に道具の名前を渡せばその道具の `field`（`description` か `inputSchema`。後者は JSON の文字列）。' +
       `offset / length は文字数（UTF-16 の単位。既定 length ${String(MCP_TEXT_DEFAULT_LENGTH)}、上限 ${String(MCP_TEXT_MAX_LENGTH)}）。` +
@@ -359,7 +383,37 @@ export function registerReadTools(
         buildSelfPromptBody(clone.promptSnapshot(), { full: args.full }),
         redactor,
       );
-      if (!args.full) return { ok: true, data: body };
+      // 記憶の文書・道具の行は件数が多いと1回の結果の上限を超えるので、`full: false` でも頁で切る（docsOffset/docsLimit・toolsOffset/toolsLimit）。
+      // `full: true` の頁には毎回載せない（固定部は件数だけ。道具の行は tool で選んだ1本だけ）。
+      const docs = body.memoryInPrompt?.documents ?? [];
+      const docsPaged = pageList(docs, args.docsOffset, args.docsLimit);
+      const memoryInPrompt =
+        body.memoryInPrompt === null
+          ? null
+          : args.full
+            ? {
+                documents: [],
+                omittedDocuments: body.memoryInPrompt.omittedDocuments,
+                documentsPage: { total: docs.length },
+              }
+            : {
+                documents: docsPaged.rows,
+                omittedDocuments: body.memoryInPrompt.omittedDocuments,
+                documentsPage: docsPaged.page,
+              };
+      if (!args.full) {
+        const toolsPaged = pageList(body.tools ?? [], args.toolsOffset, args.toolsLimit);
+        return {
+          ok: true,
+          data: {
+            ...body,
+            memoryInPrompt,
+            tools: body.tools === null ? null : toolsPaged.rows,
+            toolsPage: body.tools === null ? null : toolsPaged.page,
+          },
+        };
+      }
+      const toolsTotal = body.tools?.length ?? 0;
 
       // 長い本文（description・inputSchema）を外した道具の行。大きさ（chars 系）は残る
       const bare = (tool: NonNullable<typeof body.tools>[number]) => ({
@@ -375,9 +429,11 @@ export function registerReadTools(
           ok: true,
           data: {
             ...body,
+            memoryInPrompt,
             systemPrompt:
               body.systemPrompt === null ? null : { chars: body.systemPrompt.chars, text },
-            tools: body.tools?.map(bare) ?? null,
+            tools: body.tools === null ? null : [],
+            toolsPage: body.tools === null ? null : { total: toolsTotal },
             page: { target: 'systemPrompt.text', ...page },
           },
         };
@@ -398,10 +454,10 @@ export function registerReadTools(
         ok: true,
         data: {
           ...body,
+          memoryInPrompt,
           systemPrompt: body.systemPrompt === null ? null : { chars: body.systemPrompt.chars },
-          tools: body.tools?.map((tool) =>
-            tool.name === args.tool ? { ...bare(tool), [args.field]: text } : bare(tool),
-          ),
+          tools: [{ ...bare(selected), [args.field]: text }],
+          toolsPage: { total: toolsTotal },
           page: { target: `tools[${args.tool}].${args.field}`, ...page },
         },
       };
