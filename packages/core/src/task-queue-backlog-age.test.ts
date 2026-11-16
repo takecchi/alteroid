@@ -6,6 +6,7 @@ import type { Task } from './schema.js';
 import type { Stores, TaskList } from './store.js';
 import { describeTaskBacklogAge, describeTaskQueueHead } from './task-tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // 滞留している Task（waiting / needs_decision）の件数と、最も古いものの古さ（updatedAt からの経過）を、待ち行列の節に1行足す。
 // 新しい仕様を先に書いた試験（実装の前は赤）。今の出力を固定する側は task-queue-notice-pin.test.ts が持つ。
@@ -181,7 +182,9 @@ describe('describeTaskQueueHead への足し方', () => {
       COUNT_LINE(2, 0, 0),
       '- a（状態: queued（待ち行列） / origin: self）title-a',
       '- b（状態: queued（待ち行列） / origin: self）title-b',
-      '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
+      // 2026-11: 案内の全文は「差し込みの読み方」へ移した（参照だけが残る）。以前の期待値:
+      //   '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
+      readingRef(READING.queue),
     ]);
     expect(describeTaskQueueHead(list([]), { limit: 3, nowMs: NOW })).toEqual([
       COUNT_LINE(0, 0, 0),

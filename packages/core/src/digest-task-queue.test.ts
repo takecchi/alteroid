@@ -10,6 +10,7 @@ import {
   TASK_QUEUE_HEAD_LIMIT,
 } from './task-tools.js';
 import { createMemoryStores } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // #5469 P6b: 発意 tick の入力に待ち行列の先頭（件数1行＋先頭3件＋案内1行）を載せ、digest から台帳の2節・件数の4項目・固定注記を消す
 
@@ -69,7 +70,9 @@ describe('describeTaskQueueHead（純関数）', () => {
       '- m（状態: queued（待ち行列） / origin: manager）title-m',
       '- a-first-id（状態: needs_decision（決めてほしい） / origin: external）title-a-first-id',
       '- …ほか 2 件（task_list で全部見える）',
-      '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
+      // 2026-11: 案内の全文は「差し込みの読み方」へ移した（参照だけが残る）。以前の期待値:
+      //   '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
+      readingRef(READING.queue),
     ]);
   });
 

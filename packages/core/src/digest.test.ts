@@ -21,6 +21,7 @@ import type { SessionMissingKind } from './manager.js';
 import { UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import { DIGEST_IDLE_MANAGERS_NOTE, READING, readingRef } from './turn-readings.js';
 import { usageDate } from './usage.js';
 
 describe('describeManagerState', () => {
@@ -310,7 +311,9 @@ describe('活動の要約', () => {
     expect(section.split('\n')).toEqual([
       '## マネージャー（走行中・返事待ちから先に出す）',
       '- 手が止まっている担当（done・stopped）1 本: mgr-healthy-turn',
-      '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
+      // 2026-11: 固定の注記は「差し込みの読み方」へ移した（参照だけが残る）。以前の期待値:
+      //   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。',
+      readingRef(READING.digestIdleManagers),
     ]);
   });
 
@@ -855,7 +858,9 @@ describe('上限で切ったことを黙らない', () => {
 
     expect(digest).toContain(`委譲（この期間に動いた）${total} 本 /`);
     expect(digest).toContain('…ほか 3 件');
-    expect(digest).toContain('manager_list');
+    // 2026-11: 引き口（manager_list）の全文はシステムプロンプトの「差し込みの読み方」へ移した。要約には参照が出て、全文（DIGEST_IDLE_MANAGERS_NOTE）が manager_list を名指す
+    expect(digest).toContain(readingRef(READING.digestIdleManagers));
+    expect(DIGEST_IDLE_MANAGERS_NOTE).toContain('manager_list');
     // 2026-10-16 #4938 の案1で期待値を変えた（done は1本ずつではなく、id だけの1行に畳む。id の並びにも同じ上限）。以前の期待値:
     //   const shownIds = …filter((i) => digest.includes(`mgr-${i} [`));
     //   expect(shownIds).toHaveLength(MAX_ITEMS);

@@ -18,6 +18,11 @@ import {
   latestManagerStartAt,
   RECENT_MANAGER_START_WINDOW_MS,
 } from './situation.js';
+import { READING, READINGS_NOTICE, readingRef } from './turn-readings.js';
+
+// 2026-11: 「区分の読み方」の全文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。
+// 毎回の出力には参照が出る（READINGS_REF）。以前 text に直接かけていた文言の検査は、参照が出ること + 全文（READINGS_NOTICE）がその文言を持つことの2つへ分けて縛る。
+const READINGS_REF = readingRef(READING.categories);
 
 function summary(
   id: string,
@@ -632,8 +637,9 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('直近のターンが失敗で終わっている');
-    expect(text).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
-    expect(text).toContain('その本数は1本以上あるときだけ上の行に出る');
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
+    expect(READINGS_NOTICE).toContain('その本数は1本以上あるときだけ上の行に出る');
   });
 
   it('⭐ 手が空いているの中に「枠(利用上限)で止まっている」本数が並び、断り書きが出る', () => {
@@ -685,8 +691,9 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('枠(利用上限)で止まっている');
-    expect(text).toContain('失敗や利用上限で止まった委譲も `done` のまま座る');
-    expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain('失敗や利用上限で止まった委譲も `done` のまま座る');
+    expect(READINGS_NOTICE).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
   it('⭐ 走行中の中に「宛先の runner が名簿から消えている」本数が並び、断り書きが出る', () => {
@@ -736,10 +743,11 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('宛先の runner が名簿から entry ごと消えている');
-    expect(text).toContain(
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain(
       '「走行中」は進んでいることでも、宛先の runner が名簿に居ることでもなく',
     );
-    expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
+    expect(READINGS_NOTICE).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
   it('⭐ 「その他」の説明文に lost が入っていない（failed / stopped だけを名指しする）', () => {
@@ -747,7 +755,9 @@ describe('describeSituation', () => {
       managers: [summary('a', 'failed', false)],
       runners: [],
     });
-    const note = text.split('\n').find((line) => line.includes('「その他」は終端したもの'));
+    // 説明文の全文は READINGS_NOTICE（システムプロンプトの〈区分〉の項）。入力には参照が出る
+    expect(text).toContain(READINGS_REF);
+    const note = READINGS_NOTICE.split('。').find((part) => part.includes('「その他」は終端したもの'));
     expect(note, '「その他」の説明文が見つからない').toBeDefined();
     expect(note).toContain('（failed / stopped）');
     expect(note).not.toContain('lost');
@@ -775,15 +785,19 @@ describe('describeSituation', () => {
       managers: [summary('a', 'done', true)],
       runners: [{ state: 'connected' }],
     });
-    expect(text).toContain('「手が空いている」は空き枠でも');
-    expect(text).not.toContain('あと何本');
-    expect(text).not.toContain('空き枠は');
-    expect(text).not.toContain('残り');
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain('「手が空いている」は空き枠でも');
+    for (const body of [text, READINGS_NOTICE]) {
+      expect(body).not.toContain('あと何本');
+      expect(body).not.toContain('空き枠は');
+      expect(body).not.toContain('残り');
+    }
   });
 
   it('背景処理待ちが器の名乗り次第であることを断る', () => {
     const text = describeSituation({ managers: [], runners: [] });
-    expect(text).toContain('「背景処理待ち」は器が名乗った分だけで');
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain('「背景処理待ち」は器が名乗った分だけで');
   });
 
   it('「走行中」は status だけでなく背景処理待ちの印を見て数えることを、本数と断り書きの両方で測る', () => {
@@ -795,8 +809,9 @@ describe('describeSituation', () => {
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
     expect(countsLine).toContain('走行中 0');
     expect(countsLine).toContain('背景処理待ち 1');
-    expect(text).toContain('背景処理待ちを含まない');
-    expect(text).toContain('`running`');
+    expect(text).toContain(READINGS_REF);
+    expect(READINGS_NOTICE).toContain('背景処理待ちを含まない');
+    expect(READINGS_NOTICE).toContain('`running`');
   });
 
   it('（陰性対照）印を外すと同じ委譲が走行中側へ数え直されることを、差分そのもので測る', () => {

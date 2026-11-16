@@ -4,6 +4,7 @@ import { ORIGIN_NO_TASK_GUIDE } from './clone-batch-prompts.js';
 import type { ManagerSummary } from './manager.js';
 import type { JobStatus } from './schema.js';
 import { describeSituation } from './situation.js';
+import { READING, READINGS_NOTICE, readingRef } from './turn-readings.js';
 
 function summary(id: string, status: JobStatus): ManagerSummary {
   return {
@@ -22,13 +23,17 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
   it('READINGS_NOTICE: 新しい1文字列で、旧の長い文は含まない', () => {
     const text = describeSituation({ managers: [], runners: [] });
 
-    expect(text).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
-    expect(text).toContain('背景処理待ちを含まない');
-    expect(text).toContain('「手が空いている」');
-    expect(text).not.toContain('**「手が空いている」は「空き枠」ではない**');
-    expect(text).not.toContain('**「手が空いている」は「終わった」でもない**');
-    expect(text).not.toContain('**「手が空いている」は「枠が空いた」でもない**');
-    expect(text).not.toContain('**「走行中」は「宛先の runner が名簿に居る」でもない**');
+    // 2026-11: 全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が出て、全文（READINGS_NOTICE）が文言を持つ
+    expect(text).toContain(readingRef(READING.categories));
+    expect(READINGS_NOTICE).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
+    expect(READINGS_NOTICE).toContain('背景処理待ちを含まない');
+    expect(READINGS_NOTICE).toContain('「手が空いている」');
+    for (const body of [text, READINGS_NOTICE]) {
+      expect(body).not.toContain('**「手が空いている」は「空き枠」ではない**');
+      expect(body).not.toContain('**「手が空いている」は「終わった」でもない**');
+      expect(body).not.toContain('**「手が空いている」は「枠が空いた」でもない**');
+      expect(body).not.toContain('**「走行中」は「宛先の runner が名簿に居る」でもない**');
+    }
   });
 
   it('LOST_NOTICE は不変（lost の意味と起こし直しの注意が残る）', () => {

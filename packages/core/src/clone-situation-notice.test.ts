@@ -9,6 +9,7 @@ import type { RunnerLiveness } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 import { createCloneMcpServer } from './tools.js';
 import type { ToolContext } from './tools.js';
 import { fakeManagerPool } from './manager-pool.test-support.js';
@@ -648,9 +649,11 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
   });
 });
 
-describe('同じ会話の2ターン目も、状況の説明文と数の行を全文で出す（#4476）', () => {
+describe('同じ会話の2ターン目も、状況の説明文の参照と数の行を同じ形で出す（#4476）', () => {
+  // 2026-11: 区分の読み方の全文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。毎ターンには参照が同じ形で出る（2ターン目も「前のターンと変化なし」へ畳まれない）
   const READINGS_HEAD =
     '**区分の読み方** — 「手が空いている」は空き枠でも、終わった／枠が空いたでもない';
+  const READINGS_REF = readingRef(READING.categories);
 
   async function humanTurn(s: Fake & { clone: CloneHost }, n: number): Promise<string> {
     s.clone.post({
@@ -664,14 +667,15 @@ describe('同じ会話の2ターン目も、状況の説明文と数の行を全
     return s.inputs[n - 1] ?? '';
   }
 
-  it('⭐ 畳みを外したので、2ターン目も状況の全文が出る', async () => {
+  it('⭐ 畳みを外したので、2ターン目も状況の参照と数の行が同じ形で出る', async () => {
     const s = bootClone(createMemoryStores(), busyPool(), undefined, {});
 
     const first = await humanTurn(s, 1);
     const second = await humanTurn(s, 2);
 
     for (const text of [first, second]) {
-      expect(text).toContain(READINGS_HEAD);
+      expect(text).toContain(READINGS_REF);
+      expect(text).not.toContain(READINGS_HEAD);
       expect(text).toContain('委譲 全 3 本');
       expect(text).toContain('器 2 台: connected 1 / vacating 1。');
     }

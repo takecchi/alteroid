@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DIGEST_COUNTS_LINE_HEAD,
-  DIGEST_COUNTS_TOOLS_NOTE,
+  DIGEST_COUNTS_TOOLS_REF,
   MAX_ITEMS,
   STANDING_SECTION_HEADING_HEAD,
   TASK_QUEUE_SECTION_HEADING_HEAD,
@@ -26,6 +26,7 @@ import type { ManagerAwaitingBackground } from './manager.js';
 import type { Job, JournalEntry, ScheduledRequest, Task } from './schema.js';
 import type { TaskList } from './store.js';
 import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // B1（`buildActivityDigest` の節ごとの切り出し）の純関数が、切り出し前の式と 1 文字も違わないことの歯。
 // 「移し替えで 1 文字も変えていない」ことの歯であって、文面の正しさの保証ではない（文面そのものは digest-full-text-pin.test.ts が全文で固定している）。
@@ -36,8 +37,9 @@ import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
 
 // --- 旧式の写し ---
 
-const OLD_DIGEST_IDLE_MANAGERS_NOTE =
-  '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
+// 2026-11: 固定の注記の全文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。写しの側も、参照へ置き換えた形に合わせる。以前の値:
+//   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。'
+const OLD_DIGEST_IDLE_MANAGERS_NOTE = readingRef(READING.digestIdleManagers);
 
 const OLD_ESCALATION_RETAIN_CAPPED_NOTICE =
   '- ⚠ エスカレーションの件数は少なく出ている可能性がある（保持の上限に当たり、束ねた元の行を全部は読んでいない）';
@@ -326,7 +328,8 @@ function legacyCountsDigest(input: CountsDigestInput): string {
     ...(unreadableLine === ''
       ? []
       : [`- 読めない行（壊れた行。上の件数には入っていない）: ${unreadableLine}`]),
-    DIGEST_COUNTS_TOOLS_NOTE,
+    // 2026-11: 全文（DIGEST_COUNTS_TOOLS_NOTE）から参照へ
+    DIGEST_COUNTS_TOOLS_REF,
   ].join('\n');
 }
 
