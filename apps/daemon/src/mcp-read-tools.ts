@@ -256,7 +256,7 @@ export function registerReadTools(
         },
       };
     },
-    'memory_list に絞る引数は無い。slug が分かっているなら memory_read で1文書ずつ読むこと',
+    'limit を小さくするか、prefix で絞って呼び直すこと（続きは offset に next を渡す）',
   );
 
   define(
