@@ -50,6 +50,34 @@ export function sliceText(
   };
 }
 
+/** 頁の本文1つの、JSON にした長さ（エスケープ後。UTF-16 の単位）の上限。制御文字だらけの本文は JSON で最大6倍になるので、`length` だけでは結果の上限を守れない */
+export const MCP_TEXT_JSON_MAX_CHARS = 40_000;
+
+/**
+ * `sliceText` と同じだが、返す本文が JSON になった長さ（引用符を含む）も `MCP_TEXT_JSON_MAX_CHARS` に収める。
+ * 収まらないときは `length` を縮めて切り直す。`page.returned` / `nextOffset` は実際に返した範囲を指すので、続きは `nextOffset` から読める。
+ */
+export function sliceTextWithinJson(
+  text: string,
+  offset: number,
+  length: number,
+): { text: string; page: TextPage } {
+  let want = length;
+  for (;;) {
+    const sliced = sliceText(text, offset, want);
+    const escaped = JSON.stringify(sliced.text).length;
+    if (escaped <= MCP_TEXT_JSON_MAX_CHARS || sliced.page.returned <= 1) return sliced;
+    // 返した長さに比例して縮める（必ず1以上減る）
+    want = Math.max(
+      1,
+      Math.min(
+        sliced.page.returned - 1,
+        Math.floor((sliced.page.returned * MCP_TEXT_JSON_MAX_CHARS) / escaped),
+      ),
+    );
+  }
+}
+
 /** 日誌の一覧で、1行の1つの配列に残す件数。文字列だけ切っても、件数の多い配列（添付・計時の行など）1つで頁が予算を超えるため */
 export const MCP_ARRAY_MAX_ITEMS = 20;
 

@@ -31,6 +31,7 @@ import {
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withCliSessionEnv,
 } from './claude-provider.js';
+import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { WORKER_AGENT_NAME } from './runner.js';
@@ -1228,7 +1229,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       signal,
     );
 
-    expect(result).toEqual({ continue: true });
+    expect(result).toEqual({ continue: true, systemMessage: CLONE_COMPACTION_INSTRUCTIONS });
     expect(captured).toEqual({
       transcriptPath: '/tmp/t.jsonl',
       sessionId: 'session-1',
@@ -1261,7 +1262,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       signal,
     );
 
-    expect(result).toEqual({ continue: true });
+    expect(result).toEqual({ continue: true, systemMessage: CLONE_COMPACTION_INSTRUCTIONS });
     expect(captured).toEqual({ signal });
     expect(captured).not.toHaveProperty('transcriptPath');
     expect(captured).not.toHaveProperty('sessionId');

@@ -43,6 +43,7 @@ import type {
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
+import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
 import { splitInProcessMcpServers } from './clone-mcp-config-file.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
@@ -123,6 +124,19 @@ function wrapObservationHook<T>(
   return async (input, _toolUseId, options) => {
     await hook(toRecord(input, options?.signal));
     return { continue: true };
+  };
+}
+
+// クローン本体の PreCompact: 観測の記録を渡したうえで、要約への指示を `systemMessage` で返す。
+// 指示を足す口はこの返り値だけである（`hookSpecificOutput` に PreCompact の型は無い。同梱 CLI は返り値の `systemMessage` を要約の追加の指示に使う）。
+// 観測のフックは投げた例外を握らず投げ返す（`wrapObservationHook` と同じ）: 指示を足すためだけに、退避・蒸留の失敗の扱いを変えないため
+function wrapPreCompactHookWithInstructions(
+  hook: AgentObservationHook<AgentPreCompactRecord>,
+  instructions: string,
+): HookCallback {
+  return async (input, _toolUseId, options) => {
+    await hook(toAgentPreCompactRecord(input, options?.signal));
+    return { continue: true, systemMessage: instructions };
   };
 }
 
@@ -503,7 +517,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       PreCompact: [
         {
           timeout: PRE_COMPACT_HOOK_TIMEOUT_SECONDS,
-          hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)],
+          hooks: [wrapPreCompactHookWithInstructions(onPreCompact, CLONE_COMPACTION_INSTRUCTIONS)],
         },
       ],
       // effort を `PreCompact` で拾わない: `PreCompact` はセッション生涯に対して1本のフックで、`BaseHookInput.effort` はツール実行の文脈で発火するフックにしか付かないため
