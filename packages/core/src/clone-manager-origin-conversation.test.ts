@@ -7,6 +7,7 @@ import type { InboxEvent, Job } from './schema.js';
 import type { Stores } from './store.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import { ORIGIN_NO_TASK_GUIDE, ORIGIN_NO_TASK_REF } from './clone-batch-prompts.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer, createCloneTools } from './tools.js';
 import type { ToolContext } from './tools.js';
@@ -87,8 +88,10 @@ describe('マネージャーからの一件は、委譲の起点の会話を名�
     const input = await inputOf(s.calls, 'Hoge の調査が終わった');
 
     expect(input).toContain('起点の会話: conv-hoge');
-    expect(input).toContain('`task_say` で書く');
-    expect(input).toContain('task_set_status で done にする');
+    // 2026-11: 知らせ方の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が出て、全文（ORIGIN_NO_TASK_GUIDE）が言う
+    expect(input).toContain(`起点の会話: conv-hoge${ORIGIN_NO_TASK_REF}`);
+    expect(ORIGIN_NO_TASK_GUIDE).toContain('`task_say` で書く');
+    expect(ORIGIN_NO_TASK_GUIDE).toContain('task_set_status で done にする');
     await s.clone.stop();
   });
 

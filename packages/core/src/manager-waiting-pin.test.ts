@@ -9,6 +9,7 @@ import {
 } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 const JOB_ID = 'mgr-waiting-pin';
 const T0 = '2026-11-01T00:00:00.000Z';
@@ -160,8 +161,9 @@ const item = (requestId: string, summary: string, kind: 'question' | 'permission
 const AT1 = '2026-11-01T00:00:01.000Z';
 const AT2 = '2026-11-01T00:00:02.000Z';
 const AT3 = '2026-11-01T00:00:03.000Z';
-const AFTER_ANSWER =
-  '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。';
+// 2026-11: 答えたあとの段落の全文はシステムプロンプトの「差し込みの読み方」へ移した。受信箱へ配る本文には参照が付く。以前の値:
+//   '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。'
+const AFTER_ANSWER = `\n${readingRef(READING.permissionAfterAnswer)}`;
 const escalation = (question: string, approvalId: string) => ({
   type: 'escalation',
   question,

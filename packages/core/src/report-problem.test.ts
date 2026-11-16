@@ -13,6 +13,7 @@ import {
   summarizeReportProblem,
 } from './report-problem.js';
 import type { InboxEvent } from './schema.js';
+import { READING, readingRef } from './turn-readings.js';
 
 const AT = '2026-11-01T00:00:00.000Z';
 const report = {
@@ -185,8 +186,8 @@ describe('プロンプト（単発と束）', () => {
     const prompt = buildExternalEventPrompt({ source: 'ci', body });
     expect(prompt).toBe(
       `[system] 外部から出来事が届いた（source: ci）。人間はこれを見ていない。\n${EXTERNAL_EVENT_FRAMING}\n\n` +
-        `中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。\n` +
-        `判断の根拠が記憶に無く、しかも放っておけないことなら \`ask_human\` に積む。聞かずに動いたなら \`journal_write\` に残せ。\n\n---\n\n${body}`,
+        // 2026-11: 2行の指示の全文はシステムプロンプトの「差し込みの読み方」へ移した。ここに出るのは参照（以前は2行の全文）
+        `${readingRef(READING.external)}\n\n---\n\n${body}`,
     );
     const otherBatch = externalBatchPrompt([event('a', 'ci', report), event('b', 'ci', report)]);
     expect(otherBatch).not.toContain(REPORT_PROBLEM_CAUTION);

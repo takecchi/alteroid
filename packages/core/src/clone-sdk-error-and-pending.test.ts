@@ -12,6 +12,7 @@ import {
   withoutQueueNotice,
 } from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
+import { READING, readingRef, TASK_INTAKE_GUIDE } from './turn-readings.js';
 
 describe('クローン — SDK のエラーを応答として扱わない（日報がエラー文になる穴）', () => {
   const orgSpendLimit =
@@ -333,7 +334,9 @@ describe('クローン — 処理待ちのあいだに積み上がった発言',
     expect(merged).toContain('として積んだ');
     expect(merged).toContain('evt-続き1');
     expect(merged).toContain('evt-続き2');
-    expect(merged).toContain('返事をしたターンの終わりに自動で done になる');
+    // 2026-11: 取り込みの案内の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が出て、全文（TASK_INTAKE_GUIDE）が言う
+    expect(merged).toContain(readingRef(READING.intake));
+    expect(TASK_INTAKE_GUIDE).toContain('返事をしたターンの終わりに自動で done になる');
 
     await s.clone.stop();
   }, 15_000);

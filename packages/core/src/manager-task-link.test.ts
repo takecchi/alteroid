@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeManagerOrigin, ORIGIN_NO_TASK_GUIDE } from './clone-batch-prompts.js';
+import {
+  describeManagerOrigin,
+  ORIGIN_NO_TASK_GUIDE,
+  ORIGIN_NO_TASK_REF,
+  ORIGIN_TASK_GUIDE,
+  ORIGIN_TASK_REF,
+} from './clone-batch-prompts.js';
 import { createManagerPool, type ManagerPool } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import { fakeRunnerClient } from './runner-client.test-support.js';
@@ -1992,12 +1998,17 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
 
   it('⭐ 起点の会話が無くても taskId があれば、「task_say で書く」案内を出し、task 無しの手順（task_list で探す・task_add で足す）は出さない', () => {
     const none = describeManagerOrigin({ kind: 'job', conversationId: null, taskId: 't-1' });
-    expect(none).toContain('結び付いた task へ `task_say` で書く');
-    expect(none).toContain('task_set_status で done にする');
+    // 2026-11: 案内の全文はシステムプロンプトの「差し込みの読み方」へ移した（〈起点の task〉の項）。入力には参照が出て、全文（ORIGIN_TASK_GUIDE）が言う
+    expect(none).toContain(ORIGIN_TASK_REF);
+    expect(ORIGIN_TASK_GUIDE).toContain('結び付いた task へ `task_say` で書く');
+    expect(ORIGIN_TASK_GUIDE).toContain('task_set_status で done にする');
+    expect(ORIGIN_TASK_GUIDE).not.toContain('task_list で探し');
     expect(none).not.toContain('task_list で探し');
+    expect(none).not.toContain(ORIGIN_NO_TASK_REF);
     const conv = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1', taskId: 't-1' });
-    expect(conv).toContain('結び付いた task へ `task_say` で書く');
+    expect(conv).toContain(ORIGIN_TASK_REF);
     expect(conv).not.toContain('task_list で探し');
+    expect(conv).not.toContain(ORIGIN_NO_TASK_REF);
   });
 
   // 経緯: 以前は起点の会話の無い委譲にだけ別の手順（ORIGIN_NONE_GUIDE「task_add で足すと新しい会話ができる」）を出し、この試験はその違いを固定していた。
@@ -2005,8 +2016,9 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
   it('⭐ taskId が無い委譲は、起点の会話の有無によらず同じ手順（task_list で探す・無ければ task_add で足す）を出す', () => {
     const conv = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' });
     const none = describeManagerOrigin({ kind: 'job', conversationId: null });
-    expect(conv).toContain(ORIGIN_NO_TASK_GUIDE);
-    expect(none).toContain(ORIGIN_NO_TASK_GUIDE);
+    // 2026-11: 案内の全文は「差し込みの読み方」へ移した（〈起点〉の項）。どちらの入力にも同じ参照が出る
+    expect(conv).toContain(ORIGIN_NO_TASK_REF);
+    expect(none).toContain(ORIGIN_NO_TASK_REF);
     expect(none).toContain('起点の会話: 無し');
     expect(none).not.toContain('task_add で足すと新しい会話ができる');
   });
@@ -2014,7 +2026,9 @@ describe('報告は、委譲が結び付いた task を名乗る', () => {
   // manager_list の行（`ORIGIN_HINT_NO_TASK_FULL`）は起点の会話があるときにしか案内を出さないので「この会話を起点にした」のまま。手順の語（task_list で探して task_say、無ければ task_add）を揃える
   it('⭐ taskId が無い起点の会話の案内は、manager_list の行と同じ手順（task_list で探して task_say、無ければ task_add）', () => {
     const text = describeManagerOrigin({ kind: 'job', conversationId: 'conv-1' });
-    expect(text).toContain(
+    // 2026-11: 手順の全文は「差し込みの読み方」へ移した。入力には参照が出て、全文（ORIGIN_NO_TASK_GUIDE）が手順を言う
+    expect(text).toContain(ORIGIN_NO_TASK_REF);
+    expect(ORIGIN_NO_TASK_GUIDE).toContain(
       '人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す',
     );
     expect(text).not.toContain('結び付いた task〔');

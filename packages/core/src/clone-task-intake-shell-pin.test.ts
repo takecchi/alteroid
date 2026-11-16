@@ -16,6 +16,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent, Job, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // `Clone` の「Task の取り込み」の殻（`#openHumanTask`・`#taskQueueNoticeFor`・`#waitingReplyLinesFor`・`#taskQueueNotice`、
 // 状態は `#taskOpens`・`#humanTaskFailures`）を、`createClone` 経由で固定する。モデルへ渡る入力・日誌・stderr・Task ストアの状態を観測する。
@@ -397,7 +398,9 @@ describe('返事待ちの task の読み出し（#waitingReplyLinesFor）が投�
 
     expect(noticeOf(input)).not.toContain(WAITING_MARK);
     expect(noticeOf(input)).toContain('いま届いたこの一件は task `evt-返事です` として積んだ');
-    expect(noticeOf(input)).toContain('全部は task_list）');
+    // 2026-11: 括弧の案内の全文は「差し込みの読み方」へ移した。入力には参照が出る（以前: '全部は task_list）'）
+    expect(noticeOf(input)).toContain(readingRef(READING.queue));
+    expect(noticeOf(input)).not.toContain('全部は task_list）');
     expect(noticeOf(input)).not.toContain('全文は `task_list`');
     expect(stderr.filter((line) => line.includes('返事待ちの task の断り書き')))
       .toMatchInlineSnapshot(`
@@ -452,7 +455,9 @@ describe('返事待ちの task の読み出し（#waitingReplyLinesFor）が投�
 
     expect(noticeOf(input)).not.toContain(WAITING_MARK);
     expect(noticeOf(input)).toContain('いま届いたこの一件は task `evt-返事です` として積んだ');
-    expect(noticeOf(input)).toContain('全部は task_list）');
+    // 2026-11: 括弧の案内の全文は「差し込みの読み方」へ移した。入力には参照が出る（以前: '全部は task_list）'）
+    expect(noticeOf(input)).toContain(readingRef(READING.queue));
+    expect(noticeOf(input)).not.toContain('全部は task_list）');
     expect(noticeOf(input)).not.toContain('全文は `task_list`');
     expect(stderr.filter((line) => line.includes('返事待ちの task の断り書き')))
       .toMatchInlineSnapshot(`

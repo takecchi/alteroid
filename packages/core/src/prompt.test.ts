@@ -12,6 +12,7 @@ import {
   buildWorkerPrompt,
   PROMPT_CHARACTER_BUDGET,
 } from './prompt.js';
+import { READING, readingRef, SELF_INITIATIVE_INSTRUCTIONS } from './turn-readings.js';
 import { matchesManagerScratchDirName } from './unpushed-work.js';
 
 describe('マネージャーのシステムプロンプト — 委譲の指針', () => {
@@ -492,7 +493,9 @@ describe('プロンプト全体の文字数上限（#414）', () => {
     const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: hugeDigest });
     expect(prompt.slice(0, PROMPT_CHARACTER_BUDGET).length).toBe(PROMPT_CHARACTER_BUDGET);
     expect(prompt).toContain('文字省略');
-    expect(prompt).toContain('次にやることがあるかを決めよ');
+    // 2026-11: 固定の指示の全文は「差し込みの読み方」へ移した（以前: '次にやることがあるかを決めよ' を本文に直接）。本体が切られても参照は残る
+    expect(prompt).toContain(readingRef(READING.selfInitiative));
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('次にやることがあるかを決めよ');
   });
 
   it('buildTimerPrompt: 継続中の依頼の本文（digest より前）は残り、digest 側だけが削られる', () => {
@@ -515,17 +518,23 @@ describe('プロンプト全体の文字数上限（#414）', () => {
 describe('発意 tick の結び — 「何もしないという結論でよい」の対（#1103）', () => {
   it('既存の文はそのまま残り、新しい1文がすぐ後に続く', () => {
     const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: '短い digest' });
-    expect(prompt).toContain(
-      '**何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。',
-    );
-    expect(prompt).toContain(
-      'ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。',
+    // 2026-11: 固定の指示の全文は「差し込みの読み方」へ移した。入力には参照が出て、全文（SELF_INITIATIVE_INSTRUCTIONS）が以前と同じ文を同じ順で持つ
+    expect(prompt).toContain(readingRef(READING.selfInitiative));
+    const nothing =
+      '**何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。';
+    const but = 'ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。';
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain(nothing);
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain(but);
+    expect(SELF_INITIATIVE_INSTRUCTIONS.indexOf(but)).toBeGreaterThan(
+      SELF_INITIATIVE_INSTRUCTIONS.indexOf(nothing),
     );
   });
 
   it('situation の本数・内訳で足りるなら manager_list / runner_list を引かない旨の1文がある', () => {
     const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: '短い digest' });
-    expect(prompt).toContain(
+    // 2026-11: 固定の指示の全文は「差し込みの読み方」へ移した。入力には参照が出て、全文が1文を持つ
+    expect(prompt).toContain(readingRef(READING.selfInitiative));
+    expect(SELF_INITIATIVE_INSTRUCTIONS).toContain(
       'いまの全体（situation）の本数・内訳で足りるなら `manager_list` / `runner_list` は引かない。内訳が要るときだけ引く。',
     );
   });

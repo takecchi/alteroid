@@ -3,7 +3,12 @@ import type { InboxEvent } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
-import { MANAGER_REPORT_BODY_LIMIT } from './clone-batch-prompts.js';
+import {
+  MANAGER_REPORT_BODY_LIMIT,
+  REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_REF,
+} from './clone-batch-prompts.js';
+import { CONFIRMATION_GUIDE, READING, readingRef } from './turn-readings.js';
 
 // 3つの describe で共有する: 定義を describe ごとに置くと、実時間の待ちの数（scripts/wallclock-waits-baseline.json、#2146）が describe の数だけ増えるため
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 400));
@@ -431,8 +436,11 @@ describe('クローン — 同じマネージャーの連続する report をま
     const order = ['報告1本目', '報告2本目', '質問1本目'].map((text) => merged.indexOf(text));
     expect(order.every((index) => index > -1)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(merged).toContain('managerId: "mgr-Q", requestId: "req-1"');
-    expect(merged).toContain('manager_send');
+    // 2026-11: 応じ方の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には宛先と参照が出て、全文（CONFIRMATION_GUIDE）が manager_send を言う
+    expect(merged).toContain(
+      `宛先: managerId: "mgr-Q", requestId: "req-1"${readingRef(READING.confirmation)}`,
+    );
+    expect(CONFIRMATION_GUIDE).toContain('manager_send');
 
     await s.clone.stop();
   }, 15_000);
@@ -619,10 +627,13 @@ describe('クローン — 同じマネージャーの連続する report をま
     expect(solo).toContain('[system] マネージャー mgr-Z から届いた。（報告）');
     expect(solo).toContain('単独の報告');
     expect(solo).toContain('受け取ってから');
-    expect(solo).toContain(
+    // 2026-11: 応じ方の全文はシステムプロンプトの「差し込みの読み方」へ移した。単独の報告の末尾には参照が出て、全文（REPORT_FOLLOW_UP_GUIDE）が言う
+    expect(solo).toContain(REPORT_FOLLOW_UP_REF);
+    expect(solo).not.toContain(REPORT_FOLLOW_UP_GUIDE);
+    expect(REPORT_FOLLOW_UP_GUIDE).toContain(
       '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
     );
-    expect(solo).toContain('学びや判断の基準になったことがあれば記憶へ移すこと。');
+    expect(REPORT_FOLLOW_UP_GUIDE).toContain('学びや判断の基準になったことがあれば記憶へ移すこと。');
     expect(solo).not.toContain('続けて');
     expect(solo).not.toContain('まとめて読んでから');
     expect(solo).not.toContain('**(1)**');

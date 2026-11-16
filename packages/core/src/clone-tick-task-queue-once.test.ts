@@ -9,6 +9,7 @@ import { createLocalRunner } from './runner-local.js';
 import { DAILY_REPORT_KIND, localDate } from './schedule.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // tick のターンで待ち行列の先頭を1回だけ載せる。
 // 断り書き（`commitment`）の待ち行列の先頭と、tick の要約（digest）の「待ち行列の先頭」の節は、同じ `describeTaskQueueHead` で、tick のたびに同じ数行が2回載っていた。
@@ -18,7 +19,8 @@ const TIMER_KIND = 'issue-round';
 const NOTICE_HEAD = '[system] 待ち行列（';
 const DIGEST_HEAD = '## 待ち行列の先頭';
 const TAIL = '全文は `task_list`。並べ替えは `task_move`。';
-const HEAD_GUIDE = '（先頭が先にやるもの。';
+// 2026-11: 括弧の案内の全文（「（先頭が先にやるもの。…」）はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が出る
+const HEAD_GUIDE = readingRef(READING.queue);
 const FIRST_TASK_LINE = '- task-0（';
 
 interface Boot {

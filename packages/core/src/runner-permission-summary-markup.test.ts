@@ -8,12 +8,16 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE } from './classifier-denial-streak.js';
+import {
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+} from './classifier-denial-streak.js';
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import { PERMISSION_ASK_AFTER_ANSWER, READING, readingRef } from './turn-readings.js';
 
 /** manager.ts は `kind === 'permission'` の `summary` を Markdown でないと決め打ちして `markup: 'none'` を立てる。runner.ts がここへ記法を足したら黙って外れるので、字面をバイト単位で固定する。 */
 function fakeManagerSdk(fake: { withApplyFlagSettings?: boolean } = {}) {
@@ -90,9 +94,12 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
     expect(event).toMatchObject({ kind: 'permission' });
     // 2026-10-10（#4447）: 配る本文の末尾に「答えたあと」の1行が付くようになった（manager.ts が足す。記法は含まない）。
     // 以前の期待値は 'Bash の実行許可: {"a":1}' だった。runner の summary の字面は変わっていない。
+    // 2026-11: 答えたあとの段落の全文はシステムプロンプトの「差し込みの読み方」へ移した。配る本文の末尾には参照が付く（runner の summary の字面は変わっていない）。以前の期待値:
+    //   'Bash の実行許可: {"a":1}\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。'
     expect((event as { text: string }).text).toBe(
-      'Bash の実行許可: {"a":1}\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。',
+      `Bash の実行許可: {"a":1}\n${readingRef(READING.permissionAfterAnswer)}`,
     );
+    expect(PERMISSION_ASK_AFTER_ANSWER).toContain('allow すれば、この呼び出しがそのまま通る');
 
     await pool.stop();
   });
@@ -118,8 +125,9 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
 
     const event = inbox.find((entry) => entry.type === 'manager_message');
     // 2026-10-10（#4447）: 末尾に「答えたあと」の1行が付くようになった。以前の期待値は 'Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）'。
+    // 2026-11: 答えたあとの段落は参照へ置き換えた（全文は「差し込みの読み方」）。理由の行は変わらない
     expect((event as { text: string }).text).toBe(
-      'Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。',
+      `Bash の実行許可: {"a":1}\n理由: 無限待ちの形（代替あり）\n${readingRef(READING.permissionAfterAnswer)}`,
     );
 
     await pool.stop();
@@ -162,7 +170,13 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
       (entry) => entry.type === 'manager_message' && entry.kind === 'permission',
     );
     const text = (event as { text: string } | undefined)?.text ?? '';
-    expect(text).toContain('答えたあと: allow しても、この呼び出しは自動では撃ち直されない。');
+    // 2026-11: runner の「自動では撃ち直されない」の段落は参照へ置き換えた（全文 DENIAL_ASK_AFTER_ANSWER_PARAGRAPH は「差し込みの読み方」）
+    expect(text).toContain(readingRef(READING.denialAfterAnswer));
+    expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH).toContain(
+      '答えたあと: allow しても、この呼び出しは自動では撃ち直されない。',
+    );
+    expect(text).not.toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH);
+    expect(text).not.toContain(readingRef(READING.permissionAfterAnswer));
     expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
 
     await pool.stop();
@@ -210,7 +224,9 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
     const streaked = permissionTexts().filter((text) => text.startsWith('⚠'));
     expect(streaked.length).toBeGreaterThan(0);
     for (const text of streaked) {
-      expect(text).toContain('答えたあと: allow しても、この呼び出しは自動では撃ち直されない。');
+      expect(text).toContain(readingRef(READING.denialAfterAnswer));
+      expect(text).not.toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH);
+      expect(text).not.toContain(readingRef(READING.permissionAfterAnswer));
       expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
     }
 
@@ -259,7 +275,10 @@ describe('runner.ts の #onPermission が組み立てる summary（issue #287）
     const texts = permissionTexts();
     expect(texts.some((text) => text.startsWith('⚠'))).toBe(true);
     for (const text of texts) {
-      expect(text).toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE);
+      // 2026-11: 一時規則を足せる Bash 用の段落も参照へ置き換えた（全文 DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE は「差し込みの読み方」）
+      expect(text).toContain(readingRef(READING.denialAfterAnswerBashRule));
+      expect(text).not.toContain(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE);
+      expect(text).not.toContain(readingRef(READING.permissionAfterAnswer));
       expect(text).not.toContain('allow すれば、この呼び出しがそのまま通る');
     }
 
