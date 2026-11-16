@@ -17,13 +17,17 @@ import type { AuthVariables } from './auth.js';
 import { readJournalEntry } from './app-shared.js';
 import {
   MCP_FIELD_DEFAULT_CHARS,
+  MCP_ARRAY_MAX_ITEMS,
   MCP_FIELD_MAX_CHARS,
+  MCP_PAGE_BUDGET_CHARS,
   MCP_RESULT_MAX_CHARS,
   MCP_TEXT_DEFAULT_LENGTH,
   MCP_TEXT_MAX_LENGTH,
   capStrings,
+  fitJournalPage,
   sliceText,
   sliceTextWithinJson,
+  type CappedRow,
 } from './mcp-read-text.js';
 import { readJournalPage, readUsage } from './read-queries.js';
 import {
@@ -319,7 +323,7 @@ export function registerReadTools(
         },
       };
     },
-    'memory_list に絞る引数は無い。slug が分かっているなら memory_read で1文書ずつ読むこと',
+    'limit を小さくするか、prefix で絞って呼び直すこと（fieldChars・length は無い）。slug が分かっているなら memory_read で1文書ずつ読むこと',
   );
 
   define(
@@ -354,7 +358,12 @@ export function registerReadTools(
     '日誌（`GET /journal`。追記専用の記録）を読む。`type`（カンマ区切り。知らない値は断る）・`since`・`until`・`q`・`order`・' +
       '`afterId`/`afterAt`（両方一緒。前の頁の最後の行の id と at）で掘る。`next` は次の頁の継続点で、`null` のときだけ終端。' +
       `limit は既定 ${String(LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}。1つの文字列欄は fieldChars 字（既定 ${String(MCP_FIELD_DEFAULT_CHARS)}）で切り、` +
-      '切った数を `fieldsTruncated` に返す。切られた行の全文は `id` を渡して読む（本文は offset / length で頁送り。`id` は他の絞りと一緒に使えない）。',
+      '切った数を `fieldsTruncated` に返す。1つの配列は先頭 ' +
+      `${String(MCP_ARRAY_MAX_ITEMS)} 件＋「他 M 件」の印に畳み、畳んだ配列の数を \`arraysTruncated\` に返す。` +
+      `1頁の JSON が ${String(MCP_PAGE_BUDGET_CHARS)} 字を超えるときは、後ろの行から落として \`next\` を最後に残した行の継続点にして返す` +
+      '（落とした行数は `rowsDropped`、理由は `notice`。全断しない。`next` が `null` でなければ先が在る）。' +
+      '1行だけで超える行は id / at / type / size だけの要約行（`summarized: true`）になる。' +
+      '切られた・要約された行の全文は `id` を渡して読む（本文は offset / length で頁送り。`id` は他の絞りと一緒に使えない）。',
     journalReadInput,
     async (args, redactor) => {
       if (args.id !== undefined) {
@@ -393,8 +402,22 @@ export function registerReadTools(
       });
       if (!result.ok) return { ok: false, message: result.error };
       const scanned = redactor.redactDeep(result.body);
-      const { value, cut } = capStrings(scanned, args.fieldChars);
-      return { ok: true, data: { ...value, fieldsTruncated: cut } };
+      const { entries, next, ...rest } = scanned;
+      const capped: CappedRow[] = entries.map((entry) => {
+        const { value, cut, folded } = capStrings(entry, args.fieldChars);
+        return {
+          row: value as unknown as Record<string, unknown>,
+          id: entry.id,
+          at: entry.at,
+          type: entry.type,
+          originalChars: JSON.stringify(entry).length,
+          cut,
+          folded,
+        };
+      });
+      // 行の数・欄の数は fieldChars では締まらないので、返す直前に頁ごと予算へ収める（共通の殻の「大きすぎる」断りに当てない）。
+      const fitted = fitJournalPage(capped, next, rest, MCP_PAGE_BUDGET_CHARS);
+      return { ok: true, data: { ...capStrings(rest, args.fieldChars).value, ...fitted } };
     },
     'limit・fieldChars を小さくするか、type・since・until・q で絞って呼び直すこと（id で1行を読むときは length を小さくして offset で頁送り）',
   );

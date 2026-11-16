@@ -332,6 +332,128 @@ describe('読み取りの道具: 日誌・やり取り', () => {
     expect(over.json.result?.isError === true || over.json.error !== undefined).toBe(true);
   });
 
+  it('journal_read は添付 600 + 却下 600 件の行でも limit=1 で全断せず、配列を畳み、id で全取得できる', async () => {
+    const app = buildApp();
+    const attachments = Array.from({ length: 600 }, (_, i) => ({
+      id: `att-${String(i)}`,
+      name: `file-${String(i)}.txt`,
+      mediaType: 'text/plain',
+      size: i,
+      sha256: 'a'.repeat(64),
+    }));
+    const rejectedAttachments = Array.from({ length: 600 }, (_, i) => ({
+      name: `bad-${String(i)}.bin`,
+      reason: '大きすぎる',
+    }));
+    const row = await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      managerId: 'mgr-a',
+      text: '添付つきの報告',
+      attachments,
+      rejectedAttachments,
+    });
+    const result = await callTool(app, OPERATOR, 'journal_read', { limit: 1 });
+    expect(result.json.result?.isError).not.toBe(true);
+    const [entry] = sc(result).entries as { id: string; attachments: unknown[] }[];
+    expect(entry?.id).toBe(row.id);
+    expect(entry?.attachments).toHaveLength(21);
+    expect(entry?.attachments.at(-1)).toContain('他 580 件');
+    expect(sc(result).arraysTruncated).toBe(2);
+    expect(sc(result).next).toBeNull();
+
+    const whole = await callTool(app, OPERATOR, 'journal_read', { id: row.id, length: 20_000 });
+    let json = sc(whole).entryJson as string;
+    let nextOffset = sc(whole).page.nextOffset as number | null;
+    while (nextOffset !== null) {
+      const more = await callTool(app, OPERATOR, 'journal_read', {
+        id: row.id,
+        offset: nextOffset,
+        length: 20_000,
+      });
+      json += sc(more).entryJson as string;
+      nextOffset = sc(more).page.nextOffset as number | null;
+    }
+    const full = JSON.parse(json) as { attachments: unknown[]; rejectedAttachments: unknown[] };
+    expect(full.attachments).toHaveLength(600);
+    expect(full.rejectedAttachments).toHaveLength(600);
+  });
+
+  it('journal_read は limit=100 で頁が予算を超えるとき、後ろの行を落として next を継続点にし、全行を取りこぼさず辿れる', async () => {
+    const app = buildApp();
+    const ids: string[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      const row = await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: `発言${String(i)} ${'長'.repeat(5000)}`,
+      });
+      ids.push(row.id);
+    }
+    const seen: string[] = [];
+    let cursor: { id: string; at: string } | null = null;
+    let pages = 0;
+    let firstDropped = 0;
+    do {
+      const result: Rpc = await callTool(app, OPERATOR, 'journal_read', {
+        limit: 100,
+        order: 'asc',
+        fieldChars: 4000,
+        ...(cursor === null ? {} : { afterId: cursor.id, afterAt: cursor.at }),
+      });
+      expect(result.json.result?.isError).not.toBe(true);
+      // 殻の上限（60000 字）は結果 JSON 1つぶんに掛かる（RPC の封筒は content と structuredContent の2つぶん）
+      expect(JSON.stringify(sc(result)).length).toBeLessThan(60_000);
+      const entries = sc(result).entries as { id: string }[];
+      if (pages === 0) {
+        firstDropped = sc(result).rowsDropped as number;
+        expect(entries.length).toBeLessThan(100);
+        expect(sc(result).notice).toContain('next');
+        expect(sc(result).next).toEqual(expect.objectContaining({ id: entries.at(-1)?.id }));
+      }
+      seen.push(...entries.map((entry) => entry.id));
+      cursor = sc(result).next as { id: string; at: string } | null;
+      pages += 1;
+    } while (cursor !== null && pages < 100);
+    expect(firstDropped).toBeGreaterThan(0);
+    expect(seen).toEqual(ids);
+  });
+
+  it('journal_read は1行だけで頁の予算を超えるとき、id / at / type / size の要約行にして id で頁送りするよう案内する', async () => {
+    const app = buildApp();
+    // 配列を畳んでも超える行: 長い文字列欄を fieldChars の上限いっぱいで多数持たせる
+    const attachments = Array.from({ length: 20 }, (_, i) => ({
+      id: `att-${String(i)}`,
+      name: 'n'.repeat(3900),
+      mediaType: 'text/plain',
+      size: i,
+      sha256: 'b'.repeat(3900),
+    }));
+    const row = await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: 'x',
+      attachments,
+    });
+    const result = await callTool(app, OPERATOR, 'journal_read', { limit: 1, fieldChars: 4000 });
+    expect(result.json.result?.isError).not.toBe(true);
+    const [entry] = sc(result).entries as Record<string, unknown>[];
+    expect(entry).toEqual({
+      id: row.id,
+      at: row.at,
+      type: 'exchange',
+      size: expect.any(Number),
+      summarized: true,
+    });
+    expect(sc(result).notice).toContain(row.id);
+    expect(sc(result).rowsSummarized).toBe(1);
+    const whole = await callTool(app, OPERATOR, 'journal_read', { id: row.id, length: 100 });
+    expect(sc(whole).entryJson).toHaveLength(100);
+  });
+
   it('journal_read の type は未知の値を断る（HTTP と同じ文）', async () => {
     const app = buildApp();
     const result = await callTool(app, OPERATOR, 'journal_read', { type: 'exchange,nope' });
@@ -691,14 +813,18 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
 
   it('断りの文は、その道具に実在する引数だけを挙げる（memory_list に limit・fieldChars・length は無い）', async () => {
     const app = buildApp();
-    for (let i = 0; i < 700; i += 1) {
-      await stores.persona.write(`doc-${String(i)}`, 'x'.repeat(10));
+    // memory_list は頁送りになったので、既定の頁では溢れない。上限の頁（limit 100）に長い slug・題を詰めて溢れさせる
+    for (let i = 0; i < 100; i += 1) {
+      await stores.persona.write(
+        `doc-${String(i).padStart(3, '0')}-${'s'.repeat(110)}`,
+        `# ${'題'.repeat(300)}\n`,
+      );
     }
-    const result = await callTool(app, OPERATOR, 'memory_list');
+    const result = await callTool(app, OPERATOR, 'memory_list', { limit: 100 });
     const text = result.json.result?.content?.[0]?.text ?? '';
     expect(text).toContain('大きすぎる');
-    expect(text).not.toContain('limit');
-    expect(text).not.toContain('fieldChars');
+    expect(text).toContain('prefix');
+    expect(text).toContain('（fieldChars・length は無い）');
     expect(text).toContain('memory_read');
   });
 
