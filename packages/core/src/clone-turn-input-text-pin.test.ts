@@ -767,8 +767,8 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）
       - evt-一件だけ（状態: queued（待ち行列） / origin: human）一件だけ
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
-      いま届いたこの一件は task \`evt-一件だけ\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
+      （読み方は〈待ち行列〉）
+      いま届いたこの一件は task \`evt-一件だけ\` として積んだ。（読み方は〈取り込み〉）
 
       ---
       "
@@ -783,8 +783,8 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       - 待ち行列: 開いている 2 件（queued 2 / waiting 0 / needs_decision 0）
       - evt-続き1（状態: queued（待ち行列） / origin: human）続き1
       - evt-続き2（状態: queued（待ち行列） / origin: human）続き2
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
-      いま届いたこの 2 件は task \`evt-続き1\`, \`evt-続き2\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
+      （読み方は〈待ち行列〉）
+      いま届いたこの 2 件は task \`evt-続き1\`, \`evt-続き2\` として積んだ。（読み方は〈取り込み〉）
 
       ---
       "
@@ -796,7 +796,7 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
     const notice = await mergedQueueNotice(createMemoryStores(), texts);
 
     expect(lineStartingWith(notice, 'いま届いたこの 50 件は task ')).toMatchInlineSnapshot(
-      `"いま届いたこの 50 件は task \`evt-続き0\`, \`evt-続き1\`, \`evt-続き2\`, \`evt-続き3\`, \`evt-続き4\`, \`evt-続き5\`, \`evt-続き6\`, \`evt-続き7\`, \`evt-続き8\`, \`evt-続き9\`, \`evt-続き10\`, \`evt-続き11\`, \`evt-続き12\`, \`evt-続き13\`, \`evt-続き14\`, \`evt-続き15\`, \`evt-続き16\`, \`evt-続き17\`, \`evt-続き18\`, \`evt-続き19\`, \`evt-続き20\`, \`evt-続き21\`, \`evt-続き22\`, \`evt-続き23\`, \`evt-続き24\`, \`evt-続き25\`, \`evt-続き26\`, \`evt-続き27\`, \`evt-続き28\`, \`evt-続き29\`, \`evt-続き30\`, \`evt-続き31\`, \`evt-続き32\`, \`evt-続き33\`, \`e…（188 文字省略。全 588 文字） として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。"`,
+      `"いま届いたこの 50 件は task \`evt-続き0\`, \`evt-続き1\`, \`evt-続き2\`, \`evt-続き3\`, \`evt-続き4\`, \`evt-続き5\`, \`evt-続き6\`, \`evt-続き7\`, \`evt-続き8\`, \`evt-続き9\`, \`evt-続き10\`, \`evt-続き11\`, \`evt-続き12\`, \`evt-続き13\`, \`evt-続き14\`, \`evt-続き15\`, \`evt-続き16\`, \`evt-続き17\`, \`evt-続き18\`, \`evt-続き19\`, \`evt-続き20\`, \`evt-続き21\`, \`evt-続き22\`, \`evt-続き23\`, \`evt-続き24\`, \`evt-続き25\`, \`evt-続き26\`, \`evt-続き27\`, \`evt-続き28\`, \`evt-続き29\`, \`evt-続き30\`, \`evt-続き31\`, \`evt-続き32\`, \`evt-続き33\`, \`e…（188 文字省略。全 588 文字） として積んだ。（読み方は〈取り込み〉）"`,
     );
   });
 
@@ -840,8 +840,8 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
       - 待ち行列: 開いている 2 件（queued 2 / waiting 0 / needs_decision 0）
       - evt-ok-1（状態: queued（待ち行列） / origin: human）ok-1
       - evt-ok-2（状態: queued（待ち行列） / origin: human）ok-2
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
-      いま届いたこの 2 件は task \`evt-ok-1\`, \`evt-ok-2\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
+      （読み方は〈待ち行列〉）
+      いま届いたこの 2 件は task \`evt-ok-1\`, \`evt-ok-2\` として積んだ。（読み方は〈取り込み〉）
       **⚠️ いま届いたこの 2 件は Task として積めなかった（id: \`evt-ng-1\`, \`evt-ng-2\`）。** 待ち行列には載っていない。必要なら \`task_add\` で載せ直すこと（理由は日誌に残してある）。
 
       ---
@@ -864,7 +864,7 @@ describe('待ち行列の「積んだ／積めなかった」の行（#taskQueue
 
     expect(notice).toMatchInlineSnapshot(`
       "[system] **待ち行列を読めなかった（09:00:00Z に試みた材料。理由: Error: task 台帳が壊れている）。** ⟹ **開いている仕事が何件あるかは、この回は判定できていない——0 件だったのでも、異常が無かったのでもない。** 読み直す手は \`task_list\` である（同じ理由で失敗するなら、失敗として返る）。
-      いま届いたこの一件は task \`evt-ok-1\` として積んだ。返事をしたターンの終わりに自動で done になる。続けるなら \`task_keep\`、委譲するなら \`manager_start\` に \`taskId\`。
+      いま届いたこの一件は task \`evt-ok-1\` として積んだ。（読み方は〈取り込み〉）
       **⚠️ いま届いたこの 1 件は Task として積めなかった（id: \`evt-ng-1\`）。** 待ち行列には載っていない。必要なら \`task_add\` で載せ直すこと（理由は日誌に残してある）。
 
       ---

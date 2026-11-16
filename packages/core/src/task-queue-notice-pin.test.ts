@@ -91,7 +91,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）
+      （読み方は〈待ち行列〉）
 
       ---
       "
@@ -122,7 +122,7 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
       - q-1（状態: queued（待ち行列） / origin: self）title-q-1
       - w-1（状態: waiting（待ち（外の返事・時間待ち）） / origin: self）title-w-1
       - n-1（状態: needs_decision（決めてほしい） / origin: self）title-n-1
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）"
+      （読み方は〈待ち行列〉）"
     `);
   });
 
@@ -147,10 +147,6 @@ describe('待ち行列の節の今の出力（pin。今の作りで通る）', (
       { shape: 'counts' },
     );
     const lines = counts.split('\n').filter((line) => line.includes('待ち行列'));
-    expect(lines).toMatchInlineSnapshot(`
-      [
-        "（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— 待ち行列は \`task_list\`、回答待ちは \`approvals_list\`、決めたこと・エスカレーション・記憶の更新・外部イベントは \`journal_read\`、使った分は \`usage_read\`）",
-      ]
-    `);
+    expect(lines).toMatchInlineSnapshot(`[]`);
   });
 });

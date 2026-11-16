@@ -200,8 +200,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         受け取ってから<経過>経過（受け取った時刻: <時刻>）。
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
 
-        続きが要るなら \`manager_send\` で指示を出し、要らないなら何もしなくてよい。
-        学びや判断の基準になったことがあれば記憶へ移すこと。"
+        （読み方は〈報告〉）"
       `);
       expect(s.images[at]).toEqual([]);
       await s.clone.stop();
@@ -221,8 +220,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         受け取ってから<経過>経過（受け取った時刻: <時刻>）。
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
 
-        続きが要るなら \`manager_send\` で指示を出し、要らないなら何もしなくてよい。
-        学びや判断の基準になったことがあれば記憶へ移すこと。"
+        （読み方は〈報告〉）"
       `);
       expect(s.images[at]).toEqual([]);
       await s.clone.stop();
@@ -242,8 +240,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         受け取ってから<経過>経過（受け取った時刻: <時刻>）。
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
 
-        続きが要るなら \`manager_send\` で指示を出し、要らないなら何もしなくてよい。
-        学びや判断の基準になったことがあれば記憶へ移すこと。"
+        （読み方は〈報告〉）"
       `);
       expect(s.images[at]).toEqual([Buffer.from(PNG).toString('base64')]);
       await s.clone.stop();
@@ -266,8 +263,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         受け取ってから<経過>経過（受け取った時刻: <時刻>）。
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
 
-        続きが要るなら \`manager_send\` で指示を出し、要らないなら何もしなくてよい。
-        学びや判断の基準になったことがあれば記憶へ移すこと。"
+        （読み方は〈報告〉）"
       `);
       expect(s.images[at]).toEqual([]);
       await s.clone.stop();
@@ -282,9 +278,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         "[system] マネージャー mgr-pin から届いた。（質問）
         質問の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        返事をするまで mgr-pin のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
-        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-pin", requestId: "rq-live"）で返し、その判断を \`journal_write\` に残せ。
-        根拠が無いなら \`ask_human\` に managerId: "mgr-pin", requestId: "rq-live" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
+        宛先: managerId: "mgr-pin", requestId: "rq-live"（読み方は〈確認〉）"
       `);
       await s.clone.stop();
     }, 15_000);
@@ -315,9 +309,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         "[system] マネージャー mgr-elsewhere から届いた。（質問）
         質問の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        返事をするまで mgr-elsewhere のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
-        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-elsewhere", requestId: "rq-live"）で返し、その判断を \`journal_write\` に残せ。
-        根拠が無いなら \`ask_human\` に managerId: "mgr-elsewhere", requestId: "rq-live" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
+        宛先: managerId: "mgr-elsewhere", requestId: "rq-live"（読み方は〈確認〉）"
       `);
       await s.clone.stop();
     }, 15_000);
@@ -329,9 +321,7 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         "[system] マネージャー mgr-pin から届いた。（質問）
         質問の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        返事をするまで mgr-pin のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
-        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-pin"）で返し、その判断を \`journal_write\` に残せ。
-        根拠が無いなら \`ask_human\` に managerId: "mgr-pin" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
+        宛先: managerId: "mgr-pin"（読み方は〈確認〉）"
       `);
       await s.clone.stop();
     }, 15_000);
@@ -354,19 +344,13 @@ describe('マネージャーの一件を1件ずつ受けたターンの、マネ
         "[system] マネージャー mgr-pin から届いた。（実行の許可確認）
         許可の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        返事をするまで mgr-pin のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
-        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-pin", requestId: "rq-live"）で返し、その判断を \`journal_write\` に残せ。
-        許可確認なので \`decision\` に allow / deny を明示すること。
-        根拠が無いなら \`ask_human\` に managerId: "mgr-pin", requestId: "rq-live" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
+        宛先: managerId: "mgr-pin", requestId: "rq-live"（読み方は〈確認〉〈許可確認〉）"
       `);
       expect(managerSection(s.inputs[second] ?? '')).toMatchInlineSnapshot(`
         "[system] マネージャー mgr-pin から届いた。（実行の許可確認）
         許可の本文
         起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）
-        返事をするまで mgr-pin のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。
-        記憶に根拠があるなら自分で決めて \`manager_send\`（managerId: "mgr-pin", requestId: "rq-live"）で返し、その判断を \`journal_write\` に残せ。
-        許可確認なので \`decision\` に allow / deny を明示すること。
-        根拠が無いなら \`ask_human\` に managerId: "mgr-pin", requestId: "rq-live" を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。（宛先を添えないと、人間が答えてもこの仕事を再開できない）"
+        宛先: managerId: "mgr-pin", requestId: "rq-live"（読み方は〈確認〉〈許可確認〉）"
       `);
       await s.clone.stop();
     }, 15_000);

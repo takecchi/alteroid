@@ -148,7 +148,7 @@ describe('B1 要約の組み立ての固定 — 失敗の文面と出し分け',
         "## 待ち行列の先頭
       - 待ち行列: 開いている 1 件（queued 1 / waiting 0 / needs_decision 0）
       - task-0（状態: queued（待ち行列） / origin: self）待ち行列の仕事 0
-      （先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）",
+      （読み方は〈待ち行列〉）",
       ]
     `);
     await s.clone.stop();
