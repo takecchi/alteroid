@@ -105,7 +105,8 @@ export const CONFIRMATION_GUIDE = [
 ].join('\n');
 
 /** 許可確認にだけ足す1行。 */
-export const PERMISSION_DECISION_GUIDE = '許可確認なので `decision` に allow / deny を明示すること。';
+export const PERMISSION_DECISION_GUIDE =
+  '許可確認なので `decision` に allow / deny を明示すること。';
 
 /** 通常の許可確認（分類器の拒否ではないもの）の、答えたあと。 */
 export const PERMISSION_ASK_AFTER_ANSWER =
@@ -160,23 +161,79 @@ export const DIGEST_IDLE_MANAGERS_NOTE =
 /** 項の並び。システムプロンプトの節はこの順で組む（入力に出てくる順に近い並び）。試験が「どの全文も毎ターンの入力に出ない」を確かめるので export する。 */
 export const TURN_READING_ENTRIES: readonly { name: ReadingName; where: string; text: string }[] = [
   { name: READING.categories, where: '「いまの全体」の委譲の行', text: READINGS_NOTICE },
-  { name: READING.queue, where: '「待ち行列」・要約の「待ち行列の先頭」', text: TASK_QUEUE_HEAD_GUIDE },
-  { name: READING.intake, where: '「いま届いたこの一件は task … として積んだ」', text: TASK_INTAKE_GUIDE },
+  {
+    name: READING.queue,
+    where: '「待ち行列」・要約の「待ち行列の先頭」',
+    text: TASK_QUEUE_HEAD_GUIDE,
+  },
+  {
+    name: READING.intake,
+    where: '「いま届いたこの一件は task … として積んだ」',
+    text: TASK_INTAKE_GUIDE,
+  },
   { name: READING.report, where: 'マネージャーからの報告（1件）', text: REPORT_FOLLOW_UP_GUIDE },
-  { name: READING.reportBatch, where: 'マネージャーからの報告の束', text: BATCH_REPORT_FOLLOW_UP_GUIDE },
-  { name: READING.originNoTask, where: '「起点の会話」の行（task に結び付いていない委譲）', text: ORIGIN_NO_TASK_GUIDE },
-  { name: READING.originTask, where: '「起点の会話」の行（task に結び付いた委譲）', text: ORIGIN_TASK_GUIDE },
-  { name: READING.confirmation, where: 'マネージャーの質問・許可確認の「宛先」の行', text: CONFIRMATION_GUIDE },
+  {
+    name: READING.reportBatch,
+    where: 'マネージャーからの報告の束',
+    text: BATCH_REPORT_FOLLOW_UP_GUIDE,
+  },
+  {
+    name: READING.originNoTask,
+    where: '「起点の会話」の行（task に結び付いていない委譲）',
+    text: ORIGIN_NO_TASK_GUIDE,
+  },
+  {
+    name: READING.originTask,
+    where: '「起点の会話」の行（task に結び付いた委譲）',
+    text: ORIGIN_TASK_GUIDE,
+  },
+  {
+    name: READING.confirmation,
+    where: 'マネージャーの質問・許可確認の「宛先」の行',
+    text: CONFIRMATION_GUIDE,
+  },
   { name: READING.permission, where: '許可確認の「宛先」の行', text: PERMISSION_DECISION_GUIDE },
-  { name: READING.permissionAfterAnswer, where: '許可確認（分類器の拒否ではないもの）', text: PERMISSION_ASK_AFTER_ANSWER },
-  { name: READING.denialAfterAnswer, where: '分類器の拒否の確認（一時規則を足せない呼び出し）', text: DENIAL_ASK_AFTER_ANSWER_PARAGRAPH },
-  { name: READING.denialAfterAnswerBashRule, where: '分類器の拒否の確認（一時規則を足せる Bash の呼び出し）', text: DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE },
-  { name: READING.timerPlain, where: '定期ジョブ（依頼の本文なし）', text: TIMER_PLAIN_INSTRUCTION },
-  { name: READING.timerRequest, where: '定期ジョブ（継続中の依頼の本文つき）', text: TIMER_REQUEST_INSTRUCTIONS },
-  { name: READING.selfInitiative, where: '発意（誰にも呼ばれていない時間）', text: SELF_INITIATIVE_INSTRUCTIONS },
+  {
+    name: READING.permissionAfterAnswer,
+    where: '許可確認（分類器の拒否ではないもの）',
+    text: PERMISSION_ASK_AFTER_ANSWER,
+  },
+  {
+    name: READING.denialAfterAnswer,
+    where: '分類器の拒否の確認（一時規則を足せない呼び出し）',
+    text: DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
+  },
+  {
+    name: READING.denialAfterAnswerBashRule,
+    where: '分類器の拒否の確認（一時規則を足せる Bash の呼び出し）',
+    text: DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
+  },
+  {
+    name: READING.timerPlain,
+    where: '定期ジョブ（依頼の本文なし）',
+    text: TIMER_PLAIN_INSTRUCTION,
+  },
+  {
+    name: READING.timerRequest,
+    where: '定期ジョブ（継続中の依頼の本文つき）',
+    text: TIMER_REQUEST_INSTRUCTIONS,
+  },
+  {
+    name: READING.selfInitiative,
+    where: '発意（誰にも呼ばれていない時間）',
+    text: SELF_INITIATIVE_INSTRUCTIONS,
+  },
   { name: READING.external, where: '外部から届いた出来事', text: EXTERNAL_EVENT_INSTRUCTION },
-  { name: READING.digestCounts, where: '定期の依頼の回の要約（件数の形）', text: DIGEST_COUNTS_TOOLS_NOTE },
-  { name: READING.digestIdleManagers, where: '要約の、手が止まっている担当の行', text: DIGEST_IDLE_MANAGERS_NOTE },
+  {
+    name: READING.digestCounts,
+    where: '定期の依頼の回の要約（件数の形）',
+    text: DIGEST_COUNTS_TOOLS_NOTE,
+  },
+  {
+    name: READING.digestIdleManagers,
+    where: '要約の、手が止まっている担当の行',
+    text: DIGEST_IDLE_MANAGERS_NOTE,
+  },
 ];
 
 /** クローンのシステムプロンプトに1度だけ置く節。 */

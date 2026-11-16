@@ -400,7 +400,6 @@ interface TimerPromptInput {
   digest: string;
 }
 
-
 export function buildTimerPrompt({
   kind,
   target,
