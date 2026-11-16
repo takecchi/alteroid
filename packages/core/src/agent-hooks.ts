@@ -19,8 +19,20 @@ export interface AgentToolAuditFailureRecord {
   agentId?: string;
   agentType?: string;
   error?: string;
+  /**
+   * コマンドの失敗の欄。`error` の自由文に出力を持たない provider（Codex の `commandExecution`）が載せる。
+   * 受け手が欄ごとに伏せてから切る（`tool-failure-error.ts`）。
+   */
+  commandFailure?: AgentCommandFailureDetail;
   isInterrupt?: boolean;
   toolUseId?: string;
+}
+
+// 文に組まずに欄のまま運ぶ: 送り手が切ると、受け手しか知らない秘密（保管庫の値）が切り口にかかったとき型に当たらず、頭が残るため
+export interface AgentCommandFailureDetail {
+  command?: string;
+  cwd?: string;
+  output?: string;
 }
 
 export interface AgentPreCompactRecord {

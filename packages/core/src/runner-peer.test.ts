@@ -1190,6 +1190,41 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
+  it('peer の 127 の失敗の note は、コマンドの先頭・cwd・出力の先頭を持ち、鍵らしい値と保管庫の値は伏せる', async () => {
+    const token = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+    const vaultValue = 'hunter2secretpassphrase';
+    const s = await setupPeerCall(
+      [
+        {
+          type: 'commandExecution',
+          id: 'c127',
+          command: `gh-helper --token ${token} sync`,
+          cwd: '/tmp/mgr-1',
+          commandActions: [],
+          status: 'failed',
+          exitCode: 127,
+          aggregatedOutput: `/bin/bash: line 1: gh-helper: command not found (${vaultValue})\n`,
+        },
+      ],
+      { vault: [{ name: 'SOME_VALUE', value: vaultValue }] },
+    );
+    await s.approve('allow');
+    const notes = s.events.flatMap((e) =>
+      e.type === 'note' && e.text.startsWith('tool_use_failure:') ? [e.text] : [],
+    );
+    expect(notes).toHaveLength(1);
+    const note = notes[0]!;
+    expect(note).toContain('actor=peer:mgr-1:codex');
+    expect(note).toContain('error=コマンドが失敗した（終了コード 127）');
+    expect(note).toContain('コマンド=gh-helper --token [REDACTED] sync');
+    expect(note).toContain('cwd=/tmp/mgr-1');
+    expect(note).toContain('出力=/bin/bash: line 1: gh-helper: command not found');
+    expect(note).not.toContain(token);
+    expect(note).not.toContain(vaultValue);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
   it('peer のターンは、作業者と同じ tool_running / tool_end として降りる（ターンの開始ですぐ。#4122）', async () => {
     const s = await setupPeerCall([], {
       models: { codex: ['gpt-5.5'] },

@@ -90,3 +90,97 @@ describe('toCodexToolAudit: パスの欄の伏せ字（#4143）', () => {
     expect(JSON.stringify(result)).toContain('[REDACTED]');
   });
 });
+
+describe('toCodexToolAudit: commandExecution の失敗は、コマンド・cwd・出力を伏せて運ぶ', () => {
+  const FAKE_TOKEN = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+  const env = { OPENAI_API_TOKEN: 'tok-0123456789abcdef' };
+  const redact = (text: string) => redactErrorText(text, env);
+  const command = (fields: Record<string, unknown>): CodexThreadItem =>
+    ({
+      type: 'commandExecution',
+      id: 'c1',
+      command: 'rg -n foo',
+      cwd: '/tmp/mgr-1/work',
+      commandActions: [],
+      ...fields,
+    }) as CodexThreadItem;
+  const failureOf = (item: CodexThreadItem) => {
+    const audit = toCodexToolAudit(item, redact);
+    if (audit?.outcome !== 'failure') throw new Error(`失敗ではない: ${audit?.outcome}`);
+    return audit.record;
+  };
+
+  it('127 で落ちたら、終了コードの error に、コマンド・cwd・出力の欄が付く', () => {
+    const record = failureOf(
+      command({
+        status: 'failed',
+        exitCode: 127,
+        aggregatedOutput: '/bin/bash: line 1: rg: command not found\n',
+      }),
+    );
+    expect(record.error).toBe('コマンドが失敗した（終了コード 127）');
+    expect(record.commandFailure).toEqual({
+      command: 'rg -n foo',
+      cwd: '/tmp/mgr-1/work',
+      output: '/bin/bash: line 1: rg: command not found',
+    });
+  });
+
+  it('status が completed でも終了コードが非0なら、同じ欄が付く', () => {
+    const record = failureOf(command({ status: 'completed', exitCode: 2, aggregatedOutput: 'x' }));
+    expect(record.commandFailure).toEqual({
+      command: 'rg -n foo',
+      cwd: '/tmp/mgr-1/work',
+      output: 'x',
+    });
+  });
+
+  it('aggregatedOutput が null・無いときは output の欄を作らない', () => {
+    expect(
+      failureOf(command({ status: 'failed', exitCode: 127, aggregatedOutput: null }))
+        .commandFailure,
+    ).not.toHaveProperty('output');
+    expect(
+      failureOf(command({ status: 'failed', exitCode: 127 })).commandFailure,
+    ).not.toHaveProperty('output');
+  });
+
+  it('コマンドと出力の中の鍵らしい値（固有の形・env の鍵の値）を伏せる', () => {
+    const record = failureOf(
+      command({
+        command: `curl -H "Authorization: token ${FAKE_TOKEN}" https://x.test --key tok-0123456789abcdef`,
+        status: 'failed',
+        exitCode: 127,
+        aggregatedOutput: `curl: not found (token=${FAKE_TOKEN}, tok-0123456789abcdef)`,
+      }),
+    );
+    const carried = JSON.stringify(record);
+    expect(carried).not.toContain(FAKE_TOKEN);
+    expect(carried).not.toContain('tok-0123456789abcdef');
+    expect(record.commandFailure?.command).toContain('curl -H');
+    expect(record.commandFailure?.output).toContain('curl: not found');
+    expect(record.commandFailure?.output).toContain('[REDACTED]');
+  });
+
+  it('巨大な出力は上限で切って運ぶ。切り口にかかった鍵も、切る前に伏せるので頭が残らない', () => {
+    const record = failureOf(
+      command({
+        status: 'failed',
+        exitCode: 1,
+        aggregatedOutput: 'a'.repeat(3990) + ' ' + FAKE_TOKEN,
+      }),
+    );
+    const output = record.commandFailure?.output ?? '';
+    expect(output.length).toBeLessThanOrEqual(4001);
+    expect(output).not.toContain('ghp_');
+  });
+
+  it('成功では出力を運ばない', () => {
+    const audit = toCodexToolAudit(
+      command({ status: 'completed', exitCode: 0, aggregatedOutput: 'SECRET-OUTPUT' }),
+      redact,
+    );
+    expect(audit?.outcome).toBe('success');
+    expect(JSON.stringify(audit)).not.toContain('SECRET-OUTPUT');
+  });
+});

@@ -1,5 +1,10 @@
-import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
+import type {
+  AgentCommandFailureDetail,
+  AgentToolAuditFailureRecord,
+  AgentToolAuditRecord,
+} from './agent-hooks.js';
 import { CODEX_TOOL_ITEM_TYPES, type CodexThreadItem } from './codex-protocol.js';
+import { clipWithEllipsis } from './excerpt.js';
 
 type CodexToolAudit =
   | { readonly outcome: 'success'; readonly record: AgentToolAuditRecord }
@@ -47,7 +52,28 @@ interface Shape {
   toolInput?: unknown;
   toolResponse?: unknown;
   failure?: string;
+  commandFailure?: AgentCommandFailureDetail;
   declined?: boolean;
+}
+
+// 運ぶ量の上限。表に出るのは受け手が切った先頭（数百字）だけなので、この切り口は表に出ない。巨大な出力を記録に抱えたまま回さないため
+const COMMAND_FAILURE_CARRY_CHARS = 4000;
+
+// 伏せてから切る: 先に切ると、切り口にかかった鍵が型に当たらず頭が残るため
+function carryOf(text: string, redact: (text: string) => string): string {
+  return clipWithEllipsis(redact(text).replace(/\s+/g, ' ').trim(), COMMAND_FAILURE_CARRY_CHARS);
+}
+
+// 出力を失敗の時だけ運ぶ: 運ばないと 127 の「command not found」のような落ちた理由が記録から消えるため（Claude の Bash の失敗は error に出力の先頭を持つ）。成功では今までどおり載せない
+function redactCommandFailure(
+  detail: AgentCommandFailureDetail,
+  redact: (text: string) => string,
+): AgentCommandFailureDetail {
+  return {
+    ...(detail.command === undefined ? {} : { command: carryOf(detail.command, redact) }),
+    ...(detail.cwd === undefined ? {} : { cwd: carryOf(detail.cwd, redact) }),
+    ...(detail.output === undefined ? {} : { output: carryOf(detail.output, redact) }),
+  };
 }
 
 function shapeOf(item: Fields): Shape | undefined {
@@ -64,14 +90,22 @@ function shapeOf(item: Fields): Shape | undefined {
         ...(exitCode === undefined ? {} : { toolResponse: { exitCode } }),
       };
       if (status === 'declined') return { ...shape, declined: true };
+      const commandFailure: AgentCommandFailureDetail = {
+        ...(str(item['command']) === undefined ? {} : { command: str(item['command']) }),
+        ...(str(item['cwd']) === undefined ? {} : { cwd: str(item['cwd']) }),
+        ...(str(item['aggregatedOutput']) === undefined
+          ? {}
+          : { output: str(item['aggregatedOutput']) }),
+      };
       if (status === 'failed') {
         return {
           ...shape,
           failure: `コマンドが失敗した${exitCode === undefined ? '' : `（終了コード ${exitCode}）`}`,
+          commandFailure,
         };
       }
       if (exitCode !== undefined && exitCode !== 0) {
-        return { ...shape, failure: `コマンドが終了コード ${exitCode} で終わった` };
+        return { ...shape, failure: `コマンドが終了コード ${exitCode} で終わった`, commandFailure };
       }
       return shape;
     }
@@ -193,6 +227,9 @@ export function toCodexToolAudit(
         toolName: shape.toolName,
         ...toolInput,
         error: redact(shape.failure),
+        ...(shape.commandFailure === undefined
+          ? {}
+          : { commandFailure: redactCommandFailure(shape.commandFailure, redact) }),
         toolUseId,
       },
     };

@@ -127,6 +127,7 @@ import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
 import { excerptLine } from './excerpt.js';
+import { toolFailureErrorText } from './tool-failure-error.js';
 import { relocateMcpConfigArgs } from './mcp-config-arg.js';
 import {
   RUNNER_MCP_CONFIG_DIR_PREFIX,
@@ -385,9 +386,6 @@ export { decideAnswer, hasNegationMarker, inferDecision } from './runner-decide-
 export { closeParkedPeers };
 
 export const TOOL_USE_FAILURE_NOTE_PREFIX = 'tool_use_failure:';
-
-// 切らずに残さない: `error` は上限の無い自由文で、巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
-const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 
 // 日誌の1行を埋め尽くさない長さで、落ちた理由（最後の数行）が収まる長さ
 const DELEGATION_STDERR_TAIL_CHARS = 2000;
@@ -3613,13 +3611,7 @@ class RunnerSession {
 
   // `tool_use` にしない: 旧 daemon が未知の欄を落とすため
   #notePeerToolUseFailure(provider: AgentProviderId, record: AgentToolAuditFailureRecord): void {
-    const error =
-      typeof record.error === 'string'
-        ? excerptLine(
-            redactErrorText(record.error, process.env, this.#vaultValues()),
-            TOOL_USE_FAILURE_ERROR_EXCERPT,
-          )
-        : '(不明)';
+    const error = toolFailureErrorText(record, process.env, this.#vaultValues());
     this.#note(
       `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=${peerActorOf(this.#id, provider)}・error=${error}`,
     );
@@ -5693,14 +5685,8 @@ class RunnerSession {
 
     const actor = actorOf(this.#id, record);
     const tool = record.toolName ?? '(不明)';
-    const error =
-      typeof record.error === 'string'
-        ? // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る
-          excerptLine(
-            redactErrorText(record.error, process.env, this.#vaultValues()),
-            TOOL_USE_FAILURE_ERROR_EXCERPT,
-          )
-        : '(不明)';
+    // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る
+    const error = toolFailureErrorText(record, process.env, this.#vaultValues());
 
     this.#note(`${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${tool}・actor=${actor}・error=${error}`);
   }
