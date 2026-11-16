@@ -516,6 +516,31 @@ describe('読み取りの道具: 日誌・やり取り', () => {
     expect(sc(narrow).next).not.toBeNull();
   });
 
+  it('exchanges は向き（role）とは別に、書き手（sender）と種類（kind）を返す', async () => {
+    const app = buildApp();
+    const base = { type: 'exchange', with: 'manager', managerId: 'mgr-x' } as const;
+    await stores.journal.append({
+      ...base,
+      role: 'outbound',
+      text: '[応答] [mgr-x] [system] rescue_restore: 預かりを読み出せなかった。',
+    });
+    await stores.journal.append({
+      ...base,
+      role: 'outbound',
+      text: '[応答] [mgr-x] 続きをお願いします',
+    });
+    await stores.journal.append({ ...base, role: 'inbound', text: '[判断] 承認した' });
+    await stores.journal.append({ ...base, role: 'inbound', text: '素の報告' });
+    const result = await callTool(app, OPERATOR, 'exchanges', { order: 'asc' });
+    const rows = sc(result).exchanges as { role: string; sender: string; kind: string | null }[];
+    expect(rows.map(({ role, sender, kind }) => ({ role, sender, kind }))).toEqual([
+      { role: 'outbound', sender: 'system', kind: 'reply' },
+      { role: 'outbound', sender: 'clone', kind: 'reply' },
+      { role: 'inbound', sender: 'manager', kind: 'decision' },
+      { role: 'inbound', sender: 'manager', kind: null },
+    ]);
+  });
+
   it('exchanges に生ログ（transcript）の口は無い', async () => {
     const app = buildApp();
     const list = await rpc(app, OPERATOR, 'tools/list');

@@ -180,9 +180,25 @@ function sumCostUsd(models: Record<string, UsageTotals>): number {
 // - 過大に数える側: 数え直しでない読みで opus が丸ごと欠け、他のモデルだけが載ると、欠落ぶんが今回の合計を上回って誤って reset になる。基準は今回だけになるので、次の累積で opus が戻ると、差分ではなく opus の全量が増分に積まれ、二重計上になる（#5402 と同じ規模）
 // - 少なく数える側: 欠落が支配的でない数え直し（合計が前回以上になる、など）は拾えず、基準に残った前回の値に追いつくまでの消費が積まれない
 // reset の発生は日誌で見張れる: `turn_usage` 行の `reset`（fromCostUsd / toCostUsd）と、reset 時に出る gauge の exchange（「自分の消費の累積が数え直された」）
+// 減ったのに数え直しにしない場合がある（resume の遅れ。2026-11-14 の本番事象）: 「a resumed or forked session continues from the total its transcript saved」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、
+// 保存済みの transcript の累積は直前の result より少し古いことがある。再開した最初の result が 2411.69 → 2403.43 と約 0.3% 減っただけで reset にすると、
+// 記録済みの約 2,403 ドルが全量でもう一度積まれる（同じ日に 2 回起き、台帳の 1 日が約 4,800 ドル過大になった）。
+// 本物の数え直し（resume 先が空・/clear）は 0 付近から始まる。今回の cost 合計が前回の `RESUME_LAG_RATIO` 以上なら、前回の累積を引き継いだ読み（減ったのは遅れぶん）として扱う
+const RESUME_LAG_RATIO = 0.9;
+
+function isResumeLag(
+  prev: Record<string, UsageTotals>,
+  next: Record<string, UsageTotals>,
+): boolean {
+  if (hasUnreadableCost(next)) return false;
+  const before = sumCostUsd(prev);
+  return before > 0 && sumCostUsd(next) >= before * RESUME_LAG_RATIO;
+}
+
 function detectReset(
   prev: Record<string, UsageTotals>,
   next: Record<string, UsageTotals>,
+  tolerateResumeLag: boolean,
 ): boolean {
   for (const [model, before] of Object.entries(prev)) {
     const after = next[model];
@@ -195,7 +211,7 @@ function detectReset(
       after.webSearchRequests < before.webSearchRequests ||
       after.costUsd < before.costUsd
     ) {
-      return true;
+      return !(tolerateResumeLag && isResumeLag(prev, next));
     }
   }
   // 欠落したモデルが支配的なときも数え直しとする（Issue #5405）: 数え直し直後の最初の累積に主なモデルが載らず別のモデルだけが載ると、載ったモデルが前回以上で上の判定に掛からず、基準に残った前回の主なモデルに追いつくまでの消費が積まれない
@@ -212,6 +228,33 @@ function detectReset(
 
 function hasUnreadableCost(models: Record<string, UsageTotals>): boolean {
   return Object.values(models).some((m) => (m.unreadable?.costUsd ?? 0) > 0);
+}
+
+// 遅れて減った読み（`isResumeLag`）のとき基準を下げない: 下げると、前回までに積んだ分をもう一度追い越すときに同じ分が増分になるため
+function mergeHighWater(
+  prev: Record<string, UsageTotals>,
+  next: Record<string, UsageTotals>,
+): Record<string, UsageTotals> {
+  const merged: Record<string, UsageTotals> = { ...prev };
+  for (const [model, after] of Object.entries(next)) {
+    const before = prev[model];
+    merged[model] =
+      before === undefined
+        ? after
+        : {
+            ...after,
+            inputTokens: Math.max(after.inputTokens, before.inputTokens),
+            outputTokens: Math.max(after.outputTokens, before.outputTokens),
+            cacheReadInputTokens: Math.max(after.cacheReadInputTokens, before.cacheReadInputTokens),
+            cacheCreationInputTokens: Math.max(
+              after.cacheCreationInputTokens,
+              before.cacheCreationInputTokens,
+            ),
+            webSearchRequests: Math.max(after.webSearchRequests, before.webSearchRequests),
+            costUsd: Math.max(after.costUsd, before.costUsd),
+          };
+  }
+  return merged;
 }
 
 function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
@@ -269,6 +312,8 @@ export function foldUsageSnapshot(
   baseline: UsageBaseline | null,
   snapshot: UsageSnapshot,
   at: string,
+  // 古い runner の控えとの比べでは false にする: あそこは減ったら積まず `skipped: decreased` と報せる契約で、遅れの許容は基準（現役の runner）の側だけに要る
+  tolerateResumeLag = true,
 ): UsageFold {
   const prev = baseline?.models ?? {};
   const next = snapshot.models;
@@ -277,7 +322,7 @@ export function foldUsageSnapshot(
     return { delta: {}, baseline };
   }
 
-  const reset = baseline !== null && detectReset(prev, next);
+  const reset = baseline !== null && detectReset(prev, next, tolerateResumeLag);
 
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(next)) {
@@ -296,7 +341,7 @@ export function foldUsageSnapshot(
       managerId: baseline?.managerId ?? '',
       sessionId: snapshot.sessionId ?? baseline?.sessionId,
       // 今回に無かったモデルの前回値を引き継ぐ: 落とすと、そのモデルが次に現れたときの差分が全量になり二重に積まれるため。数え直しのときだけ引き継がない（古い累積は無効）
-      models: reset ? next : { ...prev, ...next },
+      models: reset ? next : mergeHighWater(prev, next),
       updatedAt: at,
       resets: (baseline?.resets ?? 0) + (reset ? 1 : 0),
       lastResetAt: reset ? at : baseline?.lastResetAt,
@@ -408,6 +453,7 @@ export function foldRecordForStore(
       { ...identity, models: previous, updatedAt: input.at, resets: 0 },
       input.snapshot,
       input.at,
+      false,
     );
     if (own.reset !== undefined) {
       return keep({
