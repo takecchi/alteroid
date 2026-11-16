@@ -609,13 +609,70 @@ describe('読み取りの道具: 走査の失敗は結果を返さない', () =>
 
   it('結果が上限を超えるなら、切らずに狭め方を言って断る', async () => {
     const app = buildApp();
-    // 上限を超える結果は頁送りの上限では作れないので、大量の記憶の一覧で作る（1件のメタ情報が数百字）
-    for (let i = 0; i < 700; i += 1) {
-      await stores.persona.write(`doc-${String(i)}`, 'x'.repeat(10));
+    // 日誌を limit 最大・fieldChars 最大で読むと上限を超える
+    for (let i = 0; i < 100; i += 1) {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'manager',
+        role: 'outbound',
+        managerId: 'mgr-1',
+        text: 'あ'.repeat(4_000),
+      });
     }
-    const result = await callTool(app, OPERATOR, 'memory_list');
+    const result = await callTool(app, OPERATOR, 'exchanges', { limit: 100, textChars: 4_000 });
     expect(result.json.result?.isError).toBe(true);
     expect(result.json.result?.structuredContent).toBeUndefined();
     expect(result.json.result?.content?.[0]?.text).toContain('大きすぎる');
+  });
+
+  it('memory_list は件数が多くても既定の呼び出しで頁が取れ、next を辿ると全件を重複なく読める', async () => {
+    const app = buildApp();
+    for (let i = 0; i < 700; i += 1) {
+      await stores.persona.write(`doc-${String(i).padStart(3, '0')}`, 'x'.repeat(10));
+    }
+    await stores.persona.write('other', 'y');
+    const first = await callTool(app, OPERATOR, 'memory_list');
+    expect(first.json.result?.isError).not.toBe(true);
+    expect(sc(first).total).toBe(701);
+    expect(sc(first).count).toBe(50);
+    expect(sc(first).next).toBe(50);
+
+    const slugs: string[] = [];
+    let next: number | null = 0;
+    while (next !== null) {
+      const page = await callTool(app, OPERATOR, 'memory_list', { limit: 100, offset: next });
+      expect(page.json.result?.isError).not.toBe(true);
+      slugs.push(...sc(page).documents.map((d: { slug: string }) => d.slug));
+      next = sc(page).next as number | null;
+    }
+    expect(slugs).toHaveLength(701);
+    expect(new Set(slugs).size).toBe(701);
+
+    const filtered = await callTool(app, OPERATOR, 'memory_list', { prefix: 'oth' });
+    expect(sc(filtered).total).toBe(1);
+    expect(sc(filtered).next).toBeNull();
+    const beyond = await callTool(app, OPERATOR, 'memory_list', { offset: 5_000 });
+    expect(sc(beyond).count).toBe(0);
+    expect(sc(beyond).next).toBeNull();
+  });
+
+  it('memory_read は制御文字だらけの本文でも、JSON にした長さで締めて断らず、nextOffset で全部読める', async () => {
+    const app = buildApp();
+    const body = '\u0001'.repeat(60_000);
+    await stores.persona.write('ctl', body);
+    let offset: number | null = 0;
+    let read = 0;
+    while (offset !== null) {
+      const result = await callTool(app, OPERATOR, 'memory_read', {
+        slug: 'ctl',
+        offset,
+        length: 20_000,
+      });
+      expect(result.json.result?.isError).not.toBe(true);
+      expect(sc(result).page.offset).toBe(offset);
+      read += sc(result).page.returned as number;
+      offset = sc(result).page.nextOffset as number | null;
+    }
+    expect(read).toBe(60_001);
   });
 });

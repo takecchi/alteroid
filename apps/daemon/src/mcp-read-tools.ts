@@ -23,6 +23,7 @@ import {
   MCP_TEXT_MAX_LENGTH,
   capStrings,
   sliceText,
+  sliceTextWithinJson,
 } from './mcp-read-text.js';
 import { readJournalPage, readUsage } from './read-queries.js';
 import { buildSelfPromptBody, finalizeSelfPrompt } from './self-prompt.js';
@@ -93,6 +94,15 @@ const exchangesInput = z.strictObject({
   afterAt: shortString().optional(),
   limit: limitField,
   textChars: fieldCharsField,
+});
+
+// 1件のメタ情報は約 400 字。既定 50 件でも上限 100 件でも MCP_RESULT_MAX_CHARS に収まる。
+const MEMORY_LIST_LIMIT_DEFAULT = 50;
+
+const memoryListInput = z.strictObject({
+  prefix: shortString(200).optional(),
+  offset: offsetField,
+  limit: z.number().int().min(1).max(LIMIT_MAX).default(MEMORY_LIST_LIMIT_DEFAULT),
 });
 
 const memoryReadInput = z.strictObject({
@@ -209,11 +219,27 @@ export function registerReadTools(
   define(
     'memory_list',
     '記憶文書の一覧',
-    '記憶（`GET /memory`）の文書一覧。本文は含まない（メタ情報だけ）。本文は memory_read で読む。',
-    z.strictObject({}),
-    async (_args, redactor) => {
-      const documents = redactor.redactDeep(await stores.persona.list());
-      return { ok: true, data: { count: documents.length, documents } };
+    '記憶（`GET /memory`）の文書一覧（slug の昇順）。本文は含まない（メタ情報だけ）。本文は memory_read で読む。' +
+      '`prefix` で slug の先頭一致に絞れる。`limit` 件ずつ頁送りする（既定 ' +
+      `${String(MEMORY_LIST_LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}）。` +
+      '`offset` は先頭から数えた件数（既定 0）。`total` は絞った後の全件数、`count` はこの頁の件数。' +
+      '`next` は次の頁の `offset` で、`null` のときだけ終端（`null` でなければ続きが在る）。',
+    memoryListInput,
+    async ({ prefix, offset, limit }, redactor) => {
+      const all = await stores.persona.list();
+      const matched = prefix === undefined ? all : all.filter((d) => d.slug.startsWith(prefix));
+      const page = redactor.redactDeep(matched.slice(offset, offset + limit));
+      const end = offset + page.length;
+      return {
+        ok: true,
+        data: {
+          total: matched.length,
+          count: page.length,
+          offset,
+          next: end < matched.length ? end : null,
+          documents: page,
+        },
+      };
     },
   );
 
@@ -222,14 +248,15 @@ export function registerReadTools(
     '記憶文書を1つ読む',
     '記憶文書1つ（`GET /memory/:slug`）。slug は記憶のスラッグ。本文は文字数（UTF-16 の単位）の ' +
       `offset / length で頁送りする（既定 length ${String(MCP_TEXT_DEFAULT_LENGTH)}、上限 ${String(MCP_TEXT_MAX_LENGTH)}）。` +
-      '`page.truncated` が真なら `page.nextOffset` から続きを読む。`page.total` は本文全体の長さ。',
+      '`page.truncated` が真なら `page.nextOffset` から続きを読む。`page.total` は本文全体の長さ。' +
+      '制御文字・引用符が多い本文は JSON にすると長くなるので、その場合は length より短く返す（`page.returned` が実際の長さ。続きは `nextOffset` から）。',
     memoryReadInput,
     async ({ slug, offset, length }, redactor) => {
       const document = await stores.persona.read(slug);
       if (document === null) return { ok: false, message: '該当する記憶が無い（not found）。' };
       // 走査してから切る: 切った後に走査すると、切れ目をまたいだ鍵の頭が規則に当たらず残る。
       const content = redactor.redact(document.content);
-      const { text, page } = sliceText(content, offset, length);
+      const { text, page } = sliceTextWithinJson(content, offset, length);
       return {
         ok: true,
         data: {

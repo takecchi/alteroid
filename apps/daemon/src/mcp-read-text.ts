@@ -50,6 +50,34 @@ export function sliceText(
   };
 }
 
+/** 頁の本文1つの、JSON にした長さ（エスケープ後。UTF-16 の単位）の上限。制御文字だらけの本文は JSON で最大6倍になるので、`length` だけでは結果の上限を守れない */
+export const MCP_TEXT_JSON_MAX_CHARS = 40_000;
+
+/**
+ * `sliceText` と同じだが、返す本文が JSON になった長さ（引用符を含む）も `MCP_TEXT_JSON_MAX_CHARS` に収める。
+ * 収まらないときは `length` を縮めて切り直す。`page.returned` / `nextOffset` は実際に返した範囲を指すので、続きは `nextOffset` から読める。
+ */
+export function sliceTextWithinJson(
+  text: string,
+  offset: number,
+  length: number,
+): { text: string; page: TextPage } {
+  let want = length;
+  for (;;) {
+    const sliced = sliceText(text, offset, want);
+    const escaped = JSON.stringify(sliced.text).length;
+    if (escaped <= MCP_TEXT_JSON_MAX_CHARS || sliced.page.returned <= 1) return sliced;
+    // 返した長さに比例して縮める（必ず1以上減る）
+    want = Math.max(
+      1,
+      Math.min(
+        sliced.page.returned - 1,
+        Math.floor((sliced.page.returned * MCP_TEXT_JSON_MAX_CHARS) / escaped),
+      ),
+    );
+  }
+}
+
 /** 構造の中の長い文字列（キーは切らない）を `max` 字で切る。切った印は文字列の末尾に残し、切った個数を返す */
 export function capStrings<T>(value: T, max: number): { value: T; cut: number } {
   let cut = 0;
