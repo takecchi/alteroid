@@ -391,6 +391,29 @@ function isEnvSet(env: NodeJS.ProcessEnv, key: string): boolean {
   return (env[key] ?? '').trim() !== '';
 }
 
+/**
+ * クローン本体のセッションの自動要約の窓（トークン）の既定値。
+ *
+ * 窓を置かないと SDK の既定（1M の窓のモデルで約 967k）まで文脈が伸び、毎ターンの読み直しの量がそこへ向かって増え続ける。
+ * 350k は、窓を絞って要約を早めに起こす値（オーナー決定。要約の指示は `CLONE_COMPACTION_INSTRUCTIONS`）。
+ * CLI が受け付ける範囲は 100k〜1M（`500k` の形で書ける）。
+ */
+export const CLONE_AUTO_COMPACT_WINDOW_DEFAULT = '350k';
+
+const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+
+/**
+ * クローン本体の env に自動要約の窓の既定値を足した新しい env（渡された env は書き換えない）。
+ *
+ * **既に値が置かれていれば上書きしない**: 環境変数でも実行環境プロファイル（`profile_write`）でも、人間やクローンが
+ * 環境ごとに窓を決められるようにするため（`auto` や別の値もそのまま通る）。空文字・空白だけは「置いていない」と読む。
+ * `settings` では渡さない: CLI は env が置かれていれば env を優先するので、`settings` に載せると env での上書きと食い違う。
+ */
+export function withCloneAutoCompactWindow(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (isEnvSet(env, AUTO_COMPACT_WINDOW_ENV_KEY)) return { ...env };
+  return { ...env, [AUTO_COMPACT_WINDOW_ENV_KEY]: CLONE_AUTO_COMPACT_WINDOW_DEFAULT };
+}
+
 /** モデルの降格止め → 題名づけ止めの順に、置かれていない鍵だけ '1' を足した新しい env（渡された env は書き換えない）。 */
 export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out = { ...env };
@@ -490,6 +513,8 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
 
   return {
     ...cloneBaseOptions(request, { ...NO_ATTRIBUTION_SETTINGS }),
+    // 本セッションだけに足す: 蒸留は1回きりで会話を持ち越さず、要約が走る場面が無い。マネージャーは別の判断が要る（まだ入れない）
+    env: withCloneAutoCompactWindow(withCliSessionEnv(request.env)),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),

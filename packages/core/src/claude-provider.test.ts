@@ -30,6 +30,7 @@ import {
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withCliSessionEnv,
+  withCloneAutoCompactWindow,
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
@@ -2246,6 +2247,40 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
         expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500k' });
       },
     );
+
+    it('クローン本体: env に窓が無ければ既定の 350k を渡す（settings には載せない）', () => {
+      const options = cloneOptions({ PATH: '/bin' });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' });
+      expect(options.settings).not.toHaveProperty('autoCompactWindow');
+    });
+
+    it.each([['500k'], ['auto'], ['1000000']])(
+      'クローン本体: env に窓が %s と置かれていれば、既定で上書きせずそのまま渡す',
+      (value) => {
+        const options = cloneOptions({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+        expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+      },
+    );
+
+    it.each([[''], ['  ']])('クローン本体: 窓が空（%j）なら置いていないと読み、既定を渡す', (value) => {
+      const options = cloneOptions({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' });
+    });
+
+    it('withCloneAutoCompactWindow は渡された env を書き換えない', () => {
+      const env: NodeJS.ProcessEnv = { PATH: '/bin' };
+      withCloneAutoCompactWindow(env);
+      expect(env).toEqual({ PATH: '/bin' });
+    });
+
+    it('マネージャーと蒸留には既定を入れない（効果と代償を見てから決める）', () => {
+      expect(managerOptions({ PATH: '/bin' }).env).not.toHaveProperty(
+        'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+      );
+      expect(distillOptions({ PATH: '/bin' }).env).not.toHaveProperty(
+        'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+      );
+    });
 
     it('帰属を消す settings は残る', () => {
       for (const build of [cloneOptions, managerOptions]) {
