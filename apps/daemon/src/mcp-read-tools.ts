@@ -503,7 +503,7 @@ export function registerReadTools(
         },
       };
     },
-    'length を小さくして offset で頁送りするか、full: false（大きさだけ）で呼び直すこと',
+    'docsLimit・toolsLimit を小さくして docsOffset・toolsOffset で頁送りするか、full: true のときは length を小さくして offset で頁送りして呼び直すこと',
   );
 
   define(
