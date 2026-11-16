@@ -7,8 +7,10 @@ import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores, humanMessage } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // #5299: マネージャーからの質問・許可確認（いま待たれているもの）の応じ方の骨組みは、同じ会話の2回目以降も毎回全文で出す。
+// 2026-11: 固定文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。毎ターンには参照が同じ形で出ることを縛る（全文は出ない。2回目以降も同じ長さ・同じ形）。
 
 const MANAGER_ID = 'mgr-aaaa1111';
 const SKELETON = 'のこの1件だけが止まっている';
@@ -172,8 +174,8 @@ function guideOf(input: string): string {
   return next.slice(0, end < 0 ? undefined : end).join('\n');
 }
 
-describe('マネージャーの質問・許可確認の応じ方は、同じ会話の2回目以降も毎回全文で出る（#5299）', () => {
-  it('⭐ 既定では、質問も許可確認も2回目以降も応じ方が全文のまま', async () => {
+describe('マネージャーの質問・許可確認の応じ方は、同じ会話の2回目以降も毎回同じ形の参照で出る（#5299）', () => {
+  it('⭐ 既定では、質問も許可確認も応じ方は全文を出さず、宛先と参照が2回目以降も毎回同じ形で出る', async () => {
     for (const kind of ['question', 'permission'] as const) {
       const s = boot({ env: {} });
       const first = guideOf(await deliver(s, confirmation(kind, 'rq1')));
@@ -185,10 +187,16 @@ describe('マネージャーの質問・許可確認の応じ方は、同じ会�
         [second, 'rq2'],
         [third, 'rq3'],
       ] as const) {
-        expect(text).toContain(SKELETON);
-        expect(text).toContain(ASK_HUMAN_SKELETON);
-        expect(text).toContain(`managerId: "${MANAGER_ID}", requestId: "${requestId}"`);
-        if (kind === 'permission') expect(text).toContain(DECISION);
+        expect(text).not.toContain(SKELETON);
+        expect(text).not.toContain(ASK_HUMAN_SKELETON);
+        expect(text).not.toContain(DECISION);
+        expect(text).toContain(
+          `宛先: managerId: "${MANAGER_ID}", requestId: "${requestId}"${
+            kind === 'permission'
+              ? readingRef(READING.confirmation, READING.permission)
+              : readingRef(READING.confirmation)
+          }`,
+        );
       }
       expect(second.length).toBe(first.length);
       expect(third.length).toBe(first.length);

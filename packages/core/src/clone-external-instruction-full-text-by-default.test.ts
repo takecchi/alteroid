@@ -4,13 +4,19 @@ import { describe, expect, it } from 'vitest';
 import { createClone } from './clone.js';
 import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
-import { buildExternalEventPrompt, EXTERNAL_EVENT_FRAMING } from './prompt.js';
+import {
+  buildExternalEventPrompt,
+  EXTERNAL_EVENT_FRAMING,
+  externalEventInstruction,
+} from './prompt.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // #5301: 外部イベントの2行の指示は、同じ会話の2回目以降も毎回全文で出す。
 // `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）も毎回出る。
+// 2026-11: 2行の指示はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。毎ターンには参照が同じ形で出ることを縛る（全文は出ない。2回目以降も同じ形）。安全の文は移していないので毎回出る。
 
 /** 2行の指示の全文にある説明の文。 */
 const INSTRUCTION_HEAD = '記憶にある目的と価値観に照らして、何をするか決めよ';
@@ -130,8 +136,8 @@ function instructionOf(input: string): string {
   return rest.slice(0, end < 0 ? undefined : end).trim();
 }
 
-describe('外部イベントの2行の指示は、同じ会話の2回目以降も毎回全文で出る（#5301）', () => {
-  it('⭐ 既定では、単発も束ねた入力も、2回目以降も2行の指示が全文のまま', async () => {
+describe('外部イベントの2行の指示は、同じ会話の2回目以降も毎回同じ形の参照で出る（#5301）', () => {
+  it('⭐ 既定では、単発も束ねた入力も、2回目以降も指示の参照が同じ形で出る', async () => {
     const s = boot({ env: {} });
     const inputs = [
       await deliver(s, externalEvent(1)),
@@ -140,8 +146,10 @@ describe('外部イベントの2行の指示は、同じ会話の2回目以降�
     ];
     for (const input of inputs) {
       const text = instructionOf(input);
-      expect(text).toContain(INSTRUCTION_HEAD);
-      expect(text).toContain(INSTRUCTION_TAIL);
+      expect(text).toBe(externalEventInstruction());
+      expect(text).toContain(readingRef(READING.external));
+      expect(text).not.toContain(INSTRUCTION_HEAD);
+      expect(text).not.toContain(INSTRUCTION_TAIL);
       expect(input).toContain(EXTERNAL_EVENT_FRAMING);
     }
     expect(instructionOf(inputs[1] ?? '')).toBe(instructionOf(inputs[0] ?? ''));
@@ -152,15 +160,18 @@ describe('外部イベントの2行の指示は、同じ会話の2回目以降�
     await waitFor(() => s.inputs.length > before, '束の入力');
     const merged = s.inputs[before] ?? '';
     expect(merged, '同じ tick に積んだ2件は束の入力になる').toContain('まとめて渡す');
-    expect(merged).toContain(INSTRUCTION_HEAD);
-    expect(merged).toContain(INSTRUCTION_TAIL);
+    expect(merged).toContain(readingRef(READING.external));
+    expect(merged).not.toContain(INSTRUCTION_HEAD);
+    expect(merged).not.toContain(INSTRUCTION_TAIL);
     await s.clone.stop();
   });
 
-  it('⭐ プロンプトの組み立てを直接呼んでも（既定）、2行の指示は全文のまま1文字も変わらない', () => {
+  it('⭐ プロンプトの組み立てを直接呼んでも（既定）、2行の指示は全文を出さず参照が1文字も変わらず出る', () => {
     const plain = buildExternalEventPrompt({ source: 'ci', body: '本文' });
-    expect(plain).toContain(INSTRUCTION_HEAD);
-    expect(plain).toContain(INSTRUCTION_TAIL);
+    expect(plain).toContain(externalEventInstruction());
+    expect(plain).toContain(readingRef(READING.external));
+    expect(plain).not.toContain(INSTRUCTION_HEAD);
+    expect(plain).not.toContain(INSTRUCTION_TAIL);
     expect(plain).toContain(EXTERNAL_EVENT_FRAMING);
   });
 });

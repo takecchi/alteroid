@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { ORIGIN_NO_TASK_GUIDE, REPORT_FOLLOW_UP_GUIDE } from './clone-batch-prompts.js';
+import {
+  ORIGIN_NO_TASK_GUIDE,
+  ORIGIN_NO_TASK_REF,
+  REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_REF,
+} from './clone-batch-prompts.js';
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 import type { InboxEvent, Job } from './schema.js';
@@ -54,9 +59,10 @@ async function mergedInput(
 
 const count = (text: string, needle: string): number => text.split(needle).length - 1;
 
+// 2026-11: 固定文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。同一の案内を末尾に1回へまとめる仕組みは外し、各件に参照が同じ形で残ることを縛る。
 describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎件全文で出す', () => {
   it.each([['未設定', {}]] as const)(
-    '⭐ 既定では（%s）、起点が同じ3件でも枠と経過を毎件全文で出し、同一の案内は末尾に1回だけ出す',
+    '⭐ 既定では（%s）、起点が同じ3件でも枠と経過を毎件全文で出し、同一の案内は各件に参照で残る（末尾にまとめない）',
     async (_name, env) => {
       const { merged, stop } = await mergedInput(
         [job('mgr-A', 'conv-1'), job('mgr-B', 'conv-1'), job('mgr-C', 'conv-1')],
@@ -65,11 +71,12 @@ describe('混合の束 — 起点が同じ会話の件でも固定の枠を毎�
       );
 
       expect(count(merged, 'から届いた。')).toBe(3);
-      // 重複の除去だけが変わった所: 同一の案内は束の末尾に1回（各件には印が残る）。件ごとの文は毎件全文のまま
-      expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(1);
-      expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(1);
-      expect(count(merged, '（→末尾の共通の案内1）')).toBe(3);
-      expect(count(merged, '（→末尾の共通の案内2）')).toBe(3);
+      // 同一の定型は束の末尾へまとめず（#6824 の仕組みは外した）、各件に参照が同じ形で残る。全文は出ない。件ごとの文は毎件全文のまま
+      expect(count(merged, ORIGIN_NO_TASK_REF)).toBe(3);
+      expect(count(merged, REPORT_FOLLOW_UP_REF)).toBe(3);
+      expect(count(merged, ORIGIN_NO_TASK_GUIDE)).toBe(0);
+      expect(count(merged, REPORT_FOLLOW_UP_GUIDE)).toBe(0);
+      expect(merged).not.toContain('共通の案内');
       expect(count(merged, '起点の会話: conv-1')).toBe(3);
       expect(count(merged, '受け取ってから')).toBe(3);
       expect(count(merged, '受け取り 20')).toBe(0);

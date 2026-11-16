@@ -5,16 +5,21 @@ import { createClone } from './clone.js';
 import { waitFor } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import { READING, readingRef } from './turn-readings.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 // #5297: 断り書きの骨組みの文は、同じ会話の2回目以降も毎回全文で出す。
 // #5469 P6c: 骨組みは「待ち行列の先頭・task として積んだ・全文と並べ替え」に替わった（旧: 台帳の件数・commitment_close・commitment_list）。
 // #5923: クローンは台帳へ書かなくなったので、台帳の閉じ方（commitment_close）の骨組みと、その歯（回答のターン）は外した。
+// 2026-11: 固定文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。毎ターンには参照が同じ形で出ることを縛る（全文は出ない。2回目以降に「前回と同じ」へ畳まれないことは変わらない）。
 
+// 骨組みの全文（移した先は〈取り込み〉の項）。毎ターンの入力には出ない
 const SKELETON = '返事をしたターンの終わりに自動で done になる';
-// 括弧の案内（先頭の描画の末尾の1行）。旧: この後ろに「全文は `task_list`。並べ替えは `task_move`。」が続いたが、同趣旨の再掲なので外した
+// 括弧の案内（先頭の描画の末尾の1行）の全文。旧: この後ろに「全文は `task_list`。並べ替えは `task_move`。」が続いたが、同趣旨の再掲なので外した
 const HEAD_GUIDE = '全部は task_list）';
+const HEAD_REF = readingRef(READING.queue);
+const INTAKE_REF = readingRef(READING.intake);
 const TAIL_REPEAT = '全文は `task_list`。並べ替えは `task_move`。';
 const QUEUE_HEAD = '[system] 待ち行列（';
 
@@ -125,7 +130,7 @@ function ledgerLines(input: string): string {
 }
 
 describe('台帳の2行は、同じ会話の2回目以降も骨組みが毎回全文で出る（#5297）', () => {
-  it('⭐ 既定では、台帳の2行も末尾の固定文も2回目以降も全文のまま', async () => {
+  it('⭐ 既定では、台帳の2行は全文を出さず、参照が2回目以降も毎回同じ形で出る', async () => {
     const s = boot({ env: {} });
     const first = await humanTurn(s);
     const second = await humanTurn(s);
@@ -133,9 +138,10 @@ describe('台帳の2行は、同じ会話の2回目以降も骨組みが毎回�
 
     for (const turn of [first, second, third]) {
       const lines = ledgerLines(turn.input);
-      expect(lines).toContain(SKELETON);
-      expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。`);
-      expect(lines).toContain(HEAD_GUIDE);
+      expect(lines).not.toContain(SKELETON);
+      expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。${INTAKE_REF}`);
+      expect(lines).toContain(HEAD_REF);
+      expect(lines).not.toContain(HEAD_GUIDE);
       expect(lines).not.toContain(TAIL_REPEAT);
       expect(turn.input).not.toContain('会話の上と同じ');
     }

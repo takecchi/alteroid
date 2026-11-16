@@ -2,15 +2,18 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { createClone } from './clone.js';
-import { REPORT_FOLLOW_UP_GUIDE } from './clone-batch-prompts.js';
+import { REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_REF } from './clone-batch-prompts.js';
 import { waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // #4937: tick の要約は、同じ会話の中でも前回からの差分にせず、毎回全文で出す
+// 2026-11: 固定文（固定の指示・件数の形の注記・応じ方の案内・待ち行列の案内）はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。
+// 毎ターンには参照が同じ形で出ることを縛る（全文は出ない。2回目以降に「会話の上と同じ」「変わっていない」へ畳まれないことは変わらない）。
 
 const TIMER_KIND = 'issue-round';
 const REQUEST_BODY = `open issue を見て、着手できるものから進める。${'依頼の本文の長い説明。'.repeat(40)}`;
@@ -291,7 +294,9 @@ describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {
     for (const i of [0, 1, 2]) expect(self).toContain(`- task-${i}（`);
     expect(self).not.toContain('- task-3（');
     expect(self).toContain('- …ほか 1 件（task_list で全部見える）');
-    expect(self).toContain('先頭が先にやるもの');
+    // 案内の全文（先頭が先にやるもの…）はシステムプロンプトへ移した。入力には参照が出る
+    expect(self).toContain(readingRef(READING.queue));
+    expect(self).not.toContain('先頭が先にやるもの');
     await s.clone.stop();
   });
 });
@@ -326,9 +331,12 @@ async function seedIdleManager(stores: Stores): Promise<void> {
   });
 }
 
+// 全文は出ず、〈件数だけの要約〉〈止まっている担当〉の参照が毎回同じ形で出る（旧: 全文が毎回出る）
 function expectCountsFull(text: string): void {
-  expect(text).toContain(COUNTS_TOOLS_NOTE_FULL);
-  expect(text).toContain(IDLE_MANAGERS_NOTE_FULL);
+  expect(text).toContain(readingRef(READING.digestCounts));
+  expect(text).toContain(readingRef(READING.digestIdleManagers));
+  expect(text).not.toContain(COUNTS_TOOLS_NOTE_FULL);
+  expect(text).not.toContain(IDLE_MANAGERS_NOTE_FULL);
   expect(text).not.toContain(COUNTS_TOOLS_NOTE_REF);
   expect(text).not.toContain(IDLE_MANAGERS_NOTE_REF);
 }
@@ -371,11 +379,11 @@ function countsLineOf(text: string): string {
 }
 
 // 2回目以降も毎回全文になる（既定の全文を固定する）。
-describe('tick・報告の包みの固定文は、2回目以降も毎回全文のまま', () => {
+describe('tick・報告の包みの固定文は、2回目以降も毎回同じ形の参照で出る（畳まない）', () => {
   const OFF_ENVS = [['未設定', {}]] as const;
 
   it.each(OFF_ENVS)(
-    '⭐ 定期の tick（%s）: 依頼の本文・固定の指示・件数の形の固定の注記・継続中の依頼の行が毎回全文',
+    '⭐ 定期の tick（%s）: 依頼の本文・継続中の依頼の行が毎回全文、固定の指示・件数の形の固定の注記は参照が毎回同じ形',
     async (_name, env) => {
       const s = boot({ env });
       await seed(s.stores);
@@ -390,7 +398,8 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回全文�
       for (const text of [first, second, third]) {
         // 依頼の本文（requestSeenAt）と固定の指示（fixed）
         expect(text).toContain(REQUEST_BODY.trim());
-        expect(text).toContain(INSTRUCTION_HEAD);
+        expect(text).toContain(readingRef(READING.timerRequest));
+        expect(text).not.toContain(INSTRUCTION_HEAD);
         expect(text).not.toContain(INSTRUCTION_REF);
         expect(text).not.toMatch(/依頼の本文は前回/u);
         // 件数の形の固定の注記（#5392）
@@ -407,7 +416,7 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回全文�
   );
 
   it.each(OFF_ENVS)(
-    '⭐ 自発の tick（%s）: 固定の指示・変わらない節・件数の行の項目名が毎回全文',
+    '⭐ 自発の tick（%s）: 固定の指示は参照が毎回同じ形、変わらない節・件数の行の項目名が毎回全文',
     async (_name, env) => {
       const s = boot({ env });
       await seed(s.stores);
@@ -417,7 +426,8 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回全文�
       const third = await selfTick(s);
 
       for (const text of [first, second, third]) {
-        expect(text).toContain(SELF_INSTRUCTION_HEAD);
+        expect(text).toContain(readingRef(READING.selfInitiative));
+        expect(text).not.toContain(SELF_INSTRUCTION_HEAD);
         expect(text).not.toContain(INSTRUCTION_REF);
         expectCompleteFull(text);
         expect(text).toContain('担当 7 の途中経過');
@@ -433,7 +443,7 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回全文�
     },
   );
 
-  it.each(OFF_ENVS)('⭐ 担当の報告の包み（%s）: 応じ方の案内が毎回全文', async (_name, env) => {
+  it.each(OFF_ENVS)('⭐ 担当の報告の包み（%s）: 応じ方の参照が毎回同じ形', async (_name, env) => {
     const s = boot({ env });
     const report = async (managerId: string, text: string): Promise<string> => {
       const before = s.inputs.length;
@@ -455,7 +465,8 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回全文�
     const third = await report('mgr-c', '3件目の報告の本文');
 
     for (const text of [first, second, third]) {
-      expect(text).toContain(REPORT_FOLLOW_UP_GUIDE);
+      expect(text).toContain(REPORT_FOLLOW_UP_REF);
+      expect(text).not.toContain(REPORT_FOLLOW_UP_GUIDE);
     }
     await s.clone.stop();
   });
