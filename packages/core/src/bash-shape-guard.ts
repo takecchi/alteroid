@@ -1105,8 +1105,108 @@ function findTrimmedPipe(command: string): 'head' | 'tail' | undefined {
   return undefined;
 }
 
+// 他にも当たった形の直し方を、1文だけ（先頭の形と同じ往復を避けるため。1回の拒否で全部の直し方を返す）
+// `pipe-trim`・`pipe-masks-exit` は最初の1文が「通らない」で終わり直し方が次の文に在るので、ここで短く言い直す
+const PIPE_TRIM_EXTRA = '管の最後の段の `head`・`tail` は、管を外してそのまま打つこと。';
+
+function firstSentence(text: string): string {
+  const end = text.indexOf('。');
+  return end < 0 ? text : text.slice(0, end + 1);
+}
+
+type IndependentForm =
+  | 'redirect'
+  | 'fd-dup'
+  | 'pipe-stderr'
+  | 'cd-git'
+  | 'cd-chain'
+  | 'pipe-masks-exit'
+  | 'pipe-trim'
+  | 'chain';
+
+const INDEPENDENT_FORMS = new Set<BashShapeForm>([
+  'redirect',
+  'fd-dup',
+  'pipe-stderr',
+  'cd-git',
+  'cd-chain',
+  'pipe-masks-exit',
+  'pipe-trim',
+  'chain',
+]);
+
+const REDIRECT_FAMILY = new Set<BashShapeForm>(['redirect', 'fd-dup', 'pipe-stderr']);
+
+// `cd` の後ろに `git` が来れば `cd-git`、他のコマンドが来れば `cd-chain`（inspectBashShapeFirst の走査と同じ判定）
+function findCdForm(
+  scrubbed: string,
+  tokenMask: readonly boolean[],
+): 'cd-git' | 'cd-chain' | undefined {
+  let sawCd = false;
+  let sawChain = false;
+  for (const tokens of splitSegments(scrubbed, tokenMask)) {
+    const word = commandWordOf(tokens);
+    if (word === undefined) continue;
+    if (word.name === 'cd') {
+      sawCd = true;
+    } else if (sawCd) {
+      if (word.name === 'git') return 'cd-git';
+      sawChain = true;
+    }
+  }
+  return sawChain ? 'cd-chain' : undefined;
+}
+
+// 互いに独立に判定できる形を、先頭の優先順のまま全部集めて、理由の1文にして返す。外側のコマンドだけを見る
+function collectIndependentForms(command: string): { form: IndependentForm; sentence: string }[] {
+  const found: { form: IndependentForm; sentence: string }[] = [];
+  const subs = findQuotedSubstitutions(command);
+  const visible = subs.length > 0 ? maskSubstitutions(command, subs) : command;
+  const scan = computeQuoteScan(visible);
+  const skip = computeNonShellRegions(visible, scan.outside);
+  const redirect = findRedirect(visible, scan.outside, skip);
+  if (redirect !== undefined)
+    found.push({ form: redirect, sentence: firstSentence(REASONS[redirect]) });
+  const scrubbed = scrubComments(visible, scan.comment);
+  const tokenMask = scan.outside.map((o, i) => o || scan.comment[i] === true);
+  const cd = findCdForm(scrubbed, tokenMask);
+  if (cd !== undefined) found.push({ form: cd, sentence: firstSentence(REASONS[cd]) });
+  const masking = inspectPipeExitMasking(command);
+  if (masking?.kind === 'mutating') {
+    found.push({
+      form: 'pipe-masks-exit',
+      sentence: `\`${masking.name}\` を管の最後でない段に置く形は、管を外して \`${masking.name} …\` だけを打つこと。`,
+    });
+  }
+  if (findTrimmedPipe(command) !== undefined) {
+    found.push({ form: 'pipe-trim', sentence: PIPE_TRIM_EXTRA });
+  }
+  if (findChainSemicolon(scrubbed, tokenMask, skip)) {
+    found.push({ form: 'chain', sentence: firstSentence(REASONS.chain) });
+  }
+  return found;
+}
+
+/**
+ * 最初に当たった形の理由を先頭に、他にも当たった形（redirect 系・cd 系・chain・pipe-trim・pipe-masks-exit）の直し方を
+ * 1文ずつ「（他にも: …）」で添えて返す。先頭の形（`form`）と先頭の理由は inspectBashShapeFirst のとおり。
+ * heredoc・インタプリタ・git・gh・mv 系が先頭のときは広げない。
+ */
+export function inspectBashShape(command: string): BashShapeVerdict {
+  const first = inspectBashShapeFirst(command);
+  if (!first.blocked || !INDEPENDENT_FORMS.has(first.form)) return first;
+  const extras = collectIndependentForms(command).filter(
+    (e) =>
+      e.form !== first.form && !(REDIRECT_FAMILY.has(first.form) && REDIRECT_FAMILY.has(e.form)),
+  );
+  if (extras.length === 0 || !first.reason.endsWith(BASH_SHAPE_CONTINUE_NOTE)) return first;
+  const head = first.reason.slice(0, first.reason.length - BASH_SHAPE_CONTINUE_NOTE.length);
+  const others = extras.map((e) => e.sentence).join('／');
+  return { ...first, reason: `${head}（他にも: ${others}）${BASH_SHAPE_CONTINUE_NOTE}` };
+}
+
 // `valueSubstitution` は二重引用符の中の `$(...)` の中身を読むときだけ立てる: 値を1行取る管（`"$(ls | head -1)"`）を `pipe-trim` で断らないため
-export function inspectBashShape(
+function inspectBashShapeFirst(
   command: string,
   depth = 0,
   valueSubstitution = false,
@@ -1149,7 +1249,7 @@ export function inspectBashShape(
     } else if (depth === 0 && SHELLS.has(word.name)) {
       const script = shellScriptOperand(word.rawArgs);
       if (script !== undefined) {
-        const inner = inspectBashShape(dequote(script), depth + 1);
+        const inner = inspectBashShapeFirst(dequote(script), depth + 1);
         if (inner.blocked) return inner;
       }
     }
@@ -1159,7 +1259,7 @@ export function inspectBashShape(
   if (sawCdChain) return blocked('cd-chain');
 
   for (const sub of subs) {
-    const inner = inspectBashShape(sub.body, depth + 1, true);
+    const inner = inspectBashShapeFirst(sub.body, depth + 1, true);
     if (!inner.blocked) continue;
     return inner.form === 'heredoc' ? blocked('subst-heredoc') : inner;
   }
