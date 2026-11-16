@@ -9,6 +9,15 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, setup, waitFor, waitForExpect, waitForTerminal } from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
 import { fakeManagerPool } from './manager-pool.test-support.js';
+import {
+  READING,
+  readingRef,
+  SELF_INITIATIVE_INSTRUCTIONS,
+  TIMER_PLAIN_INSTRUCTION,
+  TIMER_REQUEST_INSTRUCTIONS,
+} from './turn-readings.js';
+
+const SELF_INITIATIVE_REF = readingRef(READING.selfInitiative);
 
 describe('クローン — 自律（人間以外の起点）', () => {
   const inputsOf = (s: Setup) => () => (s.calls[0]?.inputs ?? []).join('\n');
@@ -43,9 +52,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       reason: '定期 tick',
     });
 
+    // 2026-11: 固定の指示（「次にやることがあるか」…）はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が届く
     await waitFor(
-      () => inputsOf(s)().includes('次にやることがあるか'),
-      '『次にやることがあるか』という問いかけが入力に届く',
+      () => inputsOf(s)().includes(SELF_INITIATIVE_REF),
+      '発意の指示の参照が入力に届く',
     );
     expect(s.events).toEqual([]);
     expect(await selfInitiativeCauseLines(s)).toEqual(['cause=schedule']);
@@ -64,9 +74,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'schedule_catchup',
     });
 
+    // 2026-11: 固定の指示（「次にやることがあるか」…）はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が届く
     await waitFor(
-      () => inputsOf(s)().includes('次にやることがあるか'),
-      '『次にやることがあるか』という問いかけが入力に届く',
+      () => inputsOf(s)().includes(SELF_INITIATIVE_REF),
+      '発意の指示の参照が入力に届く',
     );
     expect(await selfInitiativeCauseLines(s)).toEqual(['cause=schedule_catchup']);
 
@@ -84,9 +95,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
       cause: 'manual',
     });
 
+    // 2026-11: 固定の指示（「次にやることがあるか」…）はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が届く
     await waitFor(
-      () => inputsOf(s)().includes('次にやることがあるか'),
-      '『次にやることがあるか』という問いかけが入力に届く',
+      () => inputsOf(s)().includes(SELF_INITIATIVE_REF),
+      '発意の指示の参照が入力に届く',
     );
     expect(await selfInitiativeCauseLines(s)).toEqual(['cause=manual']);
 
@@ -379,7 +391,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
         '記憶の床: 測れなかった（理由: Error: persona 読み込み失敗（実測を模す））。',
       );
       expect(text).not.toMatch(/記憶の床:[^\n]*\d/);
-      expect(text).toContain('聞かずに動いたなら');
+      // 指示の全文はシステムプロンプトへ移した。入力には参照が出て、全文が「聞かずに動いたなら」を言う
+      expect(text).toContain(SELF_INITIATIVE_REF);
+      expect(SELF_INITIATIVE_INSTRUCTIONS).toContain('聞かずに動いたなら');
 
       await s.clone.stop();
     });
@@ -627,7 +641,9 @@ describe('クローン — 自律（人間以外の起点）', () => {
       '『open issue を見て』という定期実行の入力が届く',
     );
     expect(inputsOf(s)()).toContain('2026-08-11T00:00:00.000Z');
-    expect(inputsOf(s)()).toContain('二重に起こさない');
+    // 固定の指示の全文はシステムプロンプトへ移した。入力には参照が出て、全文が「二重に起こさない」を言う
+    expect(inputsOf(s)()).toContain(readingRef(READING.timerRequest));
+    expect(TIMER_REQUEST_INSTRUCTIONS).toContain('二重に起こさない');
 
     await waitForExpect(
       async () =>
@@ -1155,7 +1171,12 @@ describe('クローン — 自律（人間以外の起点）', () => {
       kind: 'しらない仕込み',
     });
 
-    await waitFor(() => inputsOf(s)().includes('記憶にある'), '記憶の入力が届く');
+    // 「記憶にある…」の固定の指示は「差し込みの読み方」へ移した。入力には参照が届く
+    await waitFor(
+      () => inputsOf(s)().includes(readingRef(READING.timerPlain)),
+      '記憶に照らす指示の参照が入力に届く',
+    );
+    expect(TIMER_PLAIN_INSTRUCTION).toContain('記憶にある');
 
     await s.clone.stop();
   });

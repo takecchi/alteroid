@@ -4,6 +4,7 @@ import {
   isHumanOriginated,
   resolveCloneHumanPriority,
 } from './clone.js';
+import { REPORT_FOLLOW_UP_REF } from './clone-batch-prompts.js';
 import { EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
 import type { InboxEvent, InboxEventType } from './schema.js';
 import type { Stores } from './store.js';
@@ -160,7 +161,8 @@ describe('マネージャーの報告に受け取ってからの経過を添え�
 
     const bodyIndex = delivered.indexOf(text);
     const ageIndex = delivered.indexOf('受け取ってから');
-    const instructionIndex = delivered.indexOf('続きが要るなら `manager_send`');
+    // 2026-11: 指示の全文はシステムプロンプトの「差し込みの読み方」へ移した。末尾には参照が出る（以前: '続きが要るなら `manager_send`'）
+    const instructionIndex = delivered.indexOf(REPORT_FOLLOW_UP_REF);
 
     expect(bodyIndex).toBeGreaterThanOrEqual(0);
     expect(ageIndex).toBeGreaterThan(bodyIndex);

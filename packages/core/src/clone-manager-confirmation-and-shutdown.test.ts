@@ -8,6 +8,8 @@ import type {
   SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fakeManagerPool } from './manager-pool.test-support.js';
+import { REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_REF } from './clone-batch-prompts.js';
+import { CONFIRMATION_GUIDE, READING, readingRef } from './turn-readings.js';
 import { createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -100,9 +102,13 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     );
     const text = inputs().find((input) => input.includes('req-live')) ?? '';
 
-    expect(text).toContain(`返事をするまで ${managerId} のこの1件だけが止まっている`);
-    expect(text).toContain('manager_send');
-    expect(text).toContain('ask_human');
+    // 2026-11: 応じ方の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には宛先と参照が出て、全文（CONFIRMATION_GUIDE）が manager_send / ask_human を言う
+    expect(text).toContain(
+      `宛先: managerId: "${managerId}", requestId: "req-live"${readingRef(READING.confirmation, READING.permission)}`,
+    );
+    expect(CONFIRMATION_GUIDE).toContain('返事をするまで');
+    expect(CONFIRMATION_GUIDE).toContain('manager_send');
+    expect(CONFIRMATION_GUIDE).toContain('ask_human');
     expect(text).not.toContain('もう待たれていない');
 
     await clone.stop();
@@ -261,8 +267,11 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     );
     const text = inputs().find((input) => input.includes('確かめられない')) ?? '';
 
-    expect(text).toContain('返事をするまで mgr-unknown のこの1件だけが止まっている');
-    expect(text).toContain('manager_send');
+    // 2026-11: 応じ方の全文は「差し込みの読み方」へ移した。判定が投げても宛先と参照は同じ形で届く
+    expect(text).toContain(
+      `宛先: managerId: "mgr-unknown", requestId: "req-unknown"${readingRef(READING.confirmation, READING.permission)}`,
+    );
+    expect(CONFIRMATION_GUIDE).toContain('manager_send');
     expect(text).not.toContain('もう待たれていない');
 
     await clone.stop();
@@ -288,7 +297,9 @@ describe('クローン — マネージャーの確認がいまも待たれて�
     const text = inputs().find((input) => input.includes('直しました（報告のみ）')) ?? '';
 
     expect(text).toContain('（報告）');
-    expect(text).toContain('続きが要るなら `manager_send` で指示を出し');
+    // 2026-11: 報告の応じ方の全文は「差し込みの読み方」へ移した（参照だけが届く）。以前の期待値: '続きが要るなら `manager_send` で指示を出し'
+    expect(text).toContain(REPORT_FOLLOW_UP_REF);
+    expect(REPORT_FOLLOW_UP_GUIDE).toContain('続きが要るなら `manager_send` で指示を出し');
     expect(text).not.toContain('止まっている');
     expect(text).not.toContain('もう待たれていない');
 

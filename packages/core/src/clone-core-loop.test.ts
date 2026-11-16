@@ -20,6 +20,7 @@ import {
   resolveClonePermissionMode,
 } from './clone.js';
 import { EXCHANGE_KIND_REPLY_PREFIX } from './exchange-kind.js';
+import { CONFIRMATION_GUIDE, READING, readingRef } from './turn-readings.js';
 import { conversationMessages, readConversationWindow } from './conversation.js';
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import type { CloneHost } from './host.js';
@@ -2706,8 +2707,12 @@ describe('クローン', () => {
     const permission = inputs().find((input) => input.includes('git push')) ?? '';
 
     expect(permission).toContain('mgr-2');
-    expect(permission).toContain('manager_send');
-    expect(permission).toContain('ask_human');
+    // 2026-11: 応じ方の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には宛先と参照が出て、全文（CONFIRMATION_GUIDE）が manager_send / ask_human を言う
+    expect(permission).toContain(
+      `宛先: managerId: "mgr-2", requestId: "req-1"${readingRef(READING.confirmation, READING.permission)}`,
+    );
+    expect(CONFIRMATION_GUIDE).toContain('manager_send');
+    expect(CONFIRMATION_GUIDE).toContain('ask_human');
 
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as { with: string }[];
     expect(exchanges.some((entry) => entry.with === 'manager')).toBe(true);

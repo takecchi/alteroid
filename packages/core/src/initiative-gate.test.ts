@@ -7,6 +7,9 @@ import type { Task } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { turnInputEntry } from './turn-input.js';
+import { READING, readingRef } from './turn-readings.js';
+
+const SELF_INITIATIVE_REF = readingRef(READING.selfInitiative);
 
 // #5469 P6a: 発意 tick を、動ける仕事があるときと1日1回の点検（と手で起こした回）に限る門
 
@@ -345,9 +348,9 @@ describe('クローン — 発意 tick の門', () => {
 
     s.clone.post(tickEvent('evt-open'));
 
+    // 2026-11: 発意の固定の指示（「次にやることがあるか」…）は「差し込みの読み方」へ移した。入力には参照が届く
     await waitForExpect(
-      () =>
-        expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain('次にやることがあるか'),
+      () => expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
       'tick の入力がモデルへ届く',
     );
 
@@ -361,9 +364,9 @@ describe('クローン — 発意 tick の門', () => {
 
     s.clone.post(tickEvent('evt-manual', 'manual'));
 
+    // 2026-11: 発意の固定の指示は「差し込みの読み方」へ移した。入力には参照が届く
     await waitForExpect(
-      () =>
-        expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain('次にやることがあるか'),
+      () => expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
       'tick の入力がモデルへ届く',
     );
 

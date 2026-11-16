@@ -8,6 +8,7 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // 同じ入力の中で同じ意味を2回言っている再掲を外す（意味は落とさない）。
 // 1. 待ち行列の断りの末尾「全文は `task_list`。並べ替えは `task_move`。」は、直前の括弧の案内（先頭が先にやるもの。並べ替えは task_move、…全部は task_list）と同趣旨
@@ -15,8 +16,9 @@ import { createMemoryStores, humanMessage } from './testing.js';
 
 const TIMER_KIND = 'issue-round';
 const TAIL = '全文は `task_list`。並べ替えは `task_move`。';
-const HEAD_GUIDE =
-  '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）';
+// 2026-11: 括弧の案内の全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が1回だけ出る。以前の値:
+//   '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）'
+const HEAD_GUIDE = readingRef(READING.queue);
 const COUNT_LINE = '待ち行列: 開いている 4 件（queued 4 / waiting 0 / needs_decision 0）';
 const SITUATION_MARK = '[system] いまの全体（';
 
