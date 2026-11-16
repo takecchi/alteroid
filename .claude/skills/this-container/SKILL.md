@@ -1,6 +1,6 @@
 ---
 name: this-container
-description: 自分（クローン・マネージャー・作業者）がいま走っている器そのものの事実（置き場・プロセス共有・pids・pnpm test の混雑・python3 が無い 等）と、AGENTS.md がいつ自分の文脈に載るか（ハーネスの読み込み）を確かめる前に読む。
+description: 自分（クローン・マネージャー・作業者）がいま走っている器そのものの事実（置き場・プロセス共有・pids・pnpm test の混雑・python3 と Pillow の有無・pkill/pgrep が無い 等）と、AGENTS.md がいつ自分の文脈に載るか（ハーネスの読み込み）を確かめる前に読む。
 ---
 
 この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
@@ -58,7 +58,7 @@ description: 自分（クローン・マネージャー・作業者）がいま�
 - **`/tmp` へ置く帰結: 器が落ちれば消える。** だから下の「clone して最初の変更を入れたら、その時点で push して draft PR を開く」の理由がそのぶん強くなる。**ただし `/workspace` なら残る、でもない** — 残るのは名前付き volume を当てている compose 構成（`compose.yaml` の `${ALTEROID_WORKSPACE_HOST:-workspace}:/workspace`）だけで、**Railway では volume の宣言が無いので**（`railway/runner.json`）**`/workspace` も `/tmp` も器と一緒に消える**（実測 2026-08-22T15:47Z: `df` で `/workspace` `/tmp` `/data` の3つとも同じ overlay）
 - **この置き場所の規則は、clone する前には読めない。** 規則はこの文書に在り、この文書は clone した後の作業ツリーの中にしか無い（マネージャーのシステムプロンプトは `AGENTS.md` の所在を告げるだけで、置き場所を指定しない — `packages/core/src/prompt.ts` の `buildManagerSystemPrompt`）。**だから置き場所は依頼文が渡すしかない** — 「作業者へ切り出す」の所有権の項目と同じで、**依頼文に書かれていなければ受け手には現れない**
 - **シェルの cwd は `/workspace` へ戻る。** `cd` を1度きりにしない（「静かに失敗する道具」参照）
-- **`python3` は無く、`pkill` / `pgrep` も実体が無い。** 作業用のスクリプトは node で書く
+- **`python3` と Pillow（`python3-pil`）は入っている（版は image の Debian trixie のもの）。`pkill` / `pgrep` は実体が無い。** 画像の大きさの確認などは `python3` で足りる。それ以外の作業用スクリプトは node でも書ける。**⚠️ この変更より前の image には `python3` が無かった**（2026-11-16T17:51Z に担い手が 127 で失敗し続けた観測。入れたのは `Dockerfile` の `runtime` ステージの `apt-get install`）。**古い image の器では今も無い** — 使う前に `command -v python3` で確かめ、無ければ node で書く
 
   - **「渡したら読むだけ」は、素の git では守れない。** `git status --porcelain` は `.git/index` を書く（実測: git 2.47.3。mtime を 2020-01-01 へ落として打つと現在時刻になる。差分の有無に関係なく毎回書く。`--no-optional-locks` を付けると書かない）。⟹ **他人のツリーを覗くときは `GIT_OPTIONAL_LOCKS=0` を環境に置く**（または `git --no-optional-locks …`）。`grep -Fn -- '作業ツリーの所有権は、常にちょうど1人が持つ' AGENTS.md` の規約は、この形でだけ成立する
   - **退避（停止に備えて成果を出す）が要るときに、持ち主でない側が撃ってよい git / 撃ってはいけない git を分ける。**

@@ -170,6 +170,13 @@ FROM public.ecr.aws/docker/library/node:22-trixie-slim@sha256:8eb619e402eaede174
 # （`playwright-core` の `nativeDeps` の `debian13-x64` の `chromium`）をそのまま写した。同じ一覧の
 # `tools`（xvfb・各国語のフォント）は、ヘッドレスでは要らず、フォントは上の行で足りるので入れていない。
 # Playwright を上げて一覧が変わったら、ここを写し直す。下の `ldconfig -p` の確かめが存在確認を兼ねる。
+#
+# **`python3` と `python3-pil`（Pillow）も同じ RUN に足す。** 担い手（Claude の作業者・Codex の peer）が
+# 画像の大きさの確認などで `python3` を探し、器に無いので 127（command not found）で失敗し続けた
+# （2026-11-16T17:51Z の観測）。Railway の `ALTEROID_EXTRA_APT_PACKAGES` ではなく image に入れるのは、
+# どの環境の担い手も同じ道具を持てるようにするため。`--no-install-recommends` で python3 一式と Pillow で
+# 展開後 約 29.7 MB（apt の見積もり、23パッケージ）。どれも Debian trixie の main に在り、別の出所は
+# 足していない。下の `import PIL` が存在確認を兼ねる。
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -187,11 +194,13 @@ RUN set -eux; \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
     libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 \
     libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-    libxkbcommon0 libxrandr2; \
+    libxkbcommon0 libxrandr2 \
+    python3 python3-pil; \
   rm -rf /etc/postgresql /var/lib/postgresql/17/main; \
   rm -rf /var/lib/apt/lists/*; \
   gh --version; \
   tini --version; \
+  python3 -c 'import PIL; print(PIL.__version__)'; \
   /usr/lib/postgresql/17/bin/postgres --version; \
   test -f /etc/fonts/fonts.conf; \
   fc-match sans-serif; \

@@ -718,11 +718,13 @@ jobs:
       - name: マネージャーの道具が揃っているか
         run: |
           docker run --rm -u 1001 alteroid:ci sh -eu -c '
-            for t in git gh jq rg curl node pnpm alteroid; do
+            for t in git gh jq rg curl node pnpm alteroid python3; do
               command -v "$t" >/dev/null || { echo "道具が無い: $t" >&2; exit 1; }
             done
             gh --version
             git --version
+            # python3 と Pillow（担い手が画像の大きさの確認などに使う）。uid 1001 から import できること。
+            python3 -c "import PIL; print(PIL.__version__)"
 
             # git が資格情報を gh から借りる配線。鍵は焼かないが、経路は焼く。
             helper=$(git config --get-urlmatch credential.helper https://github.com/x/y)
