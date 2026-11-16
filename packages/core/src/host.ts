@@ -182,6 +182,9 @@ export interface CloneHost {
   // init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない
   pluginLoad(): ClonePluginLoadObservation | undefined;
 
+  // `self_status` の「Claude Code の版」と同じ観測（init が報告した値）。init 未受信・開き直し直後は `null`（版を埋めない）
+  claudeCodeVersion(): string | null;
+
   // 内部 API（口は PR-2 の読み取り専用の経路）。メモリ上だけ・凍結した値。セッションを起こさず、SDK も呼ばない
   promptSnapshot(): ClonePromptSnapshot;
 

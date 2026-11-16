@@ -7,6 +7,8 @@ import {
   usageSiteSchema,
   exchangeKindOf,
   exchangeSenderOf,
+  resolveBuildRevision,
+  resolveBuildTime,
   writeStderrLine,
   type SecretRedactor,
 } from '@alteroid/core';
@@ -151,7 +153,7 @@ const READ_FAILED_MESSAGE =
 
 export interface ReadToolsDeps {
   ctx: Pick<AppContext, 'clone' | 'stores' | 'clock' | 'resolveTimeZone'>;
-  deps: Pick<AppDeps, 'env' | 'accountUsage'>;
+  deps: Pick<AppDeps, 'env' | 'accountUsage' | 'runners'>;
 }
 
 /** 読み取りの道具を登録する。呼ぶのは `account` / `operator` のときだけ（`integration` には1つも登録しない） */
@@ -496,6 +498,58 @@ export function registerReadTools(
         ];
       });
       return { ok: true, data: { exchanges: rows, next: result.body.next } };
+    },
+  );
+
+  define(
+    'version_read',
+    'alteroid の版を読む',
+    'この alteroid がどの版で動いているか。`daemon`（`revision` = git の commit / short / source、`builtAt` = イメージを焼いた時刻）・' +
+      '`claudeCode`（クローンの SDK 子が init で報告した Claude Code の版）・`runners`（名簿の各 runner が名乗った版。' +
+      '`status` は known / unknown（応答は返ったがその器が版を知らない）/ unheard（名乗りをまだ聞けていない））。' +
+      '値は `self_status` と同じ出所（`resolveBuildRevision` / `resolveBuildTime` / init の観測）で、取れない軸は 0 や空文字でなく null。' +
+      '理由は `notice` に在る。',
+    z.strictObject({}),
+    async () => {
+      const revision = resolveBuildRevision();
+      const { builtAt } = resolveBuildTime();
+      const claudeCodeVersion = clone.claudeCodeVersion();
+      const notice: string[] = [];
+      if (revision.commit === null) {
+        notice.push(
+          'daemon.revision: 取れなかった（焼き込み・実行時の環境変数のどちらにも無い）ので null。',
+        );
+      }
+      if (builtAt === null) {
+        notice.push('daemon.builtAt: 取れなかった（焼き込みが無いか値が空・壊れている）ので null。');
+      }
+      if (claudeCodeVersion === null) {
+        notice.push(
+          'claudeCode.version: まだ観測していない（クローンの SDK の init を受けていない、または開き直した直後）ので null。',
+        );
+      }
+      const registry = deps.runners;
+      if (registry === undefined) {
+        notice.push('runners: この構成には runner の名簿が無いので null（空の一覧ではない）。');
+      }
+      const runners =
+        registry === undefined
+          ? null
+          : registry.entries().map((entry) => ({
+              label: entry.label,
+              ...(entry.runnerId === undefined ? {} : { runnerId: entry.runnerId }),
+              state: entry.state,
+              revision: entry.revision,
+            }));
+      return {
+        ok: true,
+        data: {
+          daemon: { revision, builtAt },
+          claudeCode: { version: claudeCodeVersion },
+          runners,
+          notice,
+        },
+      };
     },
   );
 }

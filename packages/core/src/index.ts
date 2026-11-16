@@ -344,6 +344,7 @@ export {
 export { type SelfFacts } from './self.js';
 export {
   resolveBuildRevision,
+  resolveBuildTime,
   reportRunnerRevision,
   buildRevisionSchema,
   type BuildRevision,

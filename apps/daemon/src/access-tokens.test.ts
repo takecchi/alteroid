@@ -654,6 +654,7 @@ describe('read のトークンの許可表（既定拒否）', () => {
       'usage_read',
       'self_prompt',
       'exchanges',
+      'version_read',
     ]);
   });
 });

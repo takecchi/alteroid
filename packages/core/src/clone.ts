@@ -1308,6 +1308,10 @@ class Clone implements CloneHost {
     return this.#pluginLoadInfo ?? undefined;
   }
 
+  claudeCodeVersion(): string | null {
+    return this.#claudeCodeVersion;
+  }
+
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
   get managers(): ManagerPool {
     return this.#managers;

@@ -33,6 +33,7 @@ export function fakeCloneHost(overrides: Partial<CloneHost> = {}): CloneHost {
     anthropicRoute: () => [],
     toolSearchRoute: () => '',
     pluginLoad: () => undefined,
+    claudeCodeVersion: () => null,
     promptSnapshot: () => ({ session: null, contextUsage: null }),
     stop: () => Promise.resolve(),
     ...overrides,

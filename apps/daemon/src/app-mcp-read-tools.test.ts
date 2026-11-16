@@ -5,9 +5,11 @@ import {
   createMemoryStores,
   createRunnerRegistry,
   fakeCloneHost,
+  resolveBuildRevision,
+  resolveBuildTime,
   sha256Hex,
 } from '@alteroid/core';
-import type { CloneHost, Stores } from '@alteroid/core';
+import type { CloneHost, RunnerRegistry, Stores } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
@@ -33,13 +35,16 @@ const READ_TOOLS = [
   'usage_read',
   'self_prompt',
   'exchanges',
+  'version_read',
 ];
 
 let stores: Stores;
 let sessionExtra: Record<string, unknown> = {};
+let claudeCodeVersion: string | null = null;
 
 function cloneHost(): CloneHost {
   return fakeCloneHost({
+    claudeCodeVersion: () => claudeCodeVersion,
     promptSnapshot: () =>
       snapshotOf(
         sessionOf({
@@ -56,9 +61,13 @@ function cloneHost(): CloneHost {
   } as unknown as Partial<CloneHost>);
 }
 
-function buildApp(env: NodeJS.ProcessEnv = { ALTEROID_TEST_SECRET: ENV_VALUE }) {
+function buildApp(
+  env: NodeJS.ProcessEnv = { ALTEROID_TEST_SECRET: ENV_VALUE },
+  runners?: RunnerRegistry,
+) {
   return createApp({
     clone: cloneHost(),
+    ...(runners === undefined ? {} : { runners }),
     stores,
     token: 'test-token',
     shutdown: () => undefined,
@@ -167,7 +176,55 @@ const sc = (result: Rpc) => result.json.result?.structuredContent ?? {};
 beforeEach(async () => {
   stores = createMemoryStores();
   sessionExtra = {};
+  claudeCodeVersion = null;
   await grantAccount();
+});
+
+describe('読み取りの道具: version_read', () => {
+  it('版の出所は self_status と同じ関数で、取れない軸は null、理由は notice に在る', async () => {
+    const app = buildApp();
+    const result = await callTool(app, OPERATOR, 'version_read');
+    const body = sc(result);
+    expect(body.daemon.revision).toEqual(resolveBuildRevision());
+    expect(body.daemon.builtAt).toEqual(resolveBuildTime().builtAt);
+    expect(body.claudeCode).toEqual({ version: null });
+    expect(body.runners).toBeNull();
+    const notice = (body.notice as string[]).join('\n');
+    expect(notice).toContain('claudeCode.version');
+    expect(notice).toContain('runners');
+    expect(JSON.stringify(body)).not.toContain('"short":0');
+    expect(JSON.stringify(body)).not.toContain('""');
+  });
+
+  it('環境変数で指した commit・init が報告した Claude Code の版・各 runner が名乗った版（3値）を返す', async () => {
+    claudeCodeVersion = '2.1.99';
+    const registry = {
+      entries: () => [
+        {
+          label: 'r1',
+          runnerId: 'runner-1',
+          state: 'connected',
+          revision: { status: 'known', commit: 'b'.repeat(40), short: 'bbbbbbb', source: 'build' },
+        },
+        { label: 'r2', state: 'lost', revision: { status: 'unknown' } },
+        { label: 'r3', state: 'connecting', revision: { status: 'unheard' } },
+      ],
+    } as unknown as RunnerRegistry;
+    const app = buildApp(undefined, registry);
+    const body = sc(await callTool(app, OPERATOR, 'version_read'));
+    expect(body.claudeCode).toEqual({ version: '2.1.99' });
+    expect(body.runners).toEqual([
+      {
+        label: 'r1',
+        runnerId: 'runner-1',
+        state: 'connected',
+        revision: { status: 'known', commit: 'b'.repeat(40), short: 'bbbbbbb', source: 'build' },
+      },
+      { label: 'r2', state: 'lost', revision: { status: 'unknown' } },
+      { label: 'r3', state: 'connecting', revision: { status: 'unheard' } },
+    ]);
+    expect(JSON.stringify(body.notice)).not.toContain('claudeCode.version');
+  });
 });
 
 describe('POST /mcp: 資格ごとの道具の一覧（歯で固定）', () => {
@@ -221,6 +278,7 @@ describe('POST /mcp: 資格ごとの道具の一覧（歯で固定）', () => {
       ['usage_read', {}],
       ['self_prompt', { full: true }],
       ['exchanges', {}],
+      ['version_read', {}],
     ];
     expect(calls.map(([name]) => name)).toEqual(READ_TOOLS);
     for (const [name, args] of calls) {
