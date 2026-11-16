@@ -157,8 +157,8 @@ export const DIGEST_COUNTS_TOOLS_NOTE =
 export const DIGEST_IDLE_MANAGERS_NOTE =
   '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
 
-/** 項の並び。システムプロンプトの節はこの順で組む（入力に出てくる順に近い並び）。 */
-const ENTRIES: readonly { name: ReadingName; where: string; text: string }[] = [
+/** 項の並び。システムプロンプトの節はこの順で組む（入力に出てくる順に近い並び）。試験が「どの全文も毎ターンの入力に出ない」を確かめるので export する。 */
+export const TURN_READING_ENTRIES: readonly { name: ReadingName; where: string; text: string }[] = [
   { name: READING.categories, where: '「いまの全体」の委譲の行', text: READINGS_NOTICE },
   { name: READING.queue, where: '「待ち行列」・要約の「待ち行列の先頭」', text: TASK_QUEUE_HEAD_GUIDE },
   { name: READING.intake, where: '「いま届いたこの一件は task … として積んだ」', text: TASK_INTAKE_GUIDE },
@@ -181,7 +181,7 @@ const ENTRIES: readonly { name: ReadingName; where: string; text: string }[] = [
 
 /** クローンのシステムプロンプトに1度だけ置く節。 */
 export function buildTurnReadingsSection(): string {
-  const items = ENTRIES.map(
+  const items = TURN_READING_ENTRIES.map(
     ({ name, where, text }) => `## 〈${name}〉 ${where}\n\n${text}`,
   ).join('\n\n');
   return `${TURN_READINGS_HEADING}
