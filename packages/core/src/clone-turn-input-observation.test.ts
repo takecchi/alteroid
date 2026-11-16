@@ -9,6 +9,7 @@ import {
   externalBatchUnrenderedIds,
   managerReportBatchRender,
   REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_REF,
   type ExternalEvent,
   type ManagerReportMessage,
 } from './clone-batch-prompts.js';
@@ -114,7 +115,9 @@ describe('turn_input（ターンの入力の内訳）', () => {
     expect(row?.signals).toEqual([
       { kind: 'manager_report', managerId: 'mgr-A', chars: long.length },
     ]);
-    expect(row?.templates?.REPORT_FOLLOW_UP_GUIDE).toBe(REPORT_FOLLOW_UP_GUIDE.length);
+    // 2026-11: 応じ方の全文はシステムプロンプトへ移した。いまの本文に出るのは参照で、定型の名前は REPORT_FOLLOW_UP_REF（全文の名前は移す前の日誌の行のため残る）
+    expect(row?.templates?.REPORT_FOLLOW_UP_REF).toBe(REPORT_FOLLOW_UP_REF.length);
+    expect(row?.templates).not.toHaveProperty('REPORT_FOLLOW_UP_GUIDE');
     expect(row?.bodyChars).toBeLessThan(long.length + 1_000);
     expect(row?.totalChars).toBe(inputsOf(s).at(-1)?.length);
     expectTotalsAddUp(row!);
@@ -134,7 +137,8 @@ describe('turn_input（ターンの入力の内訳）', () => {
       { kind: 'denial_notice', managerId: 'mgr-A', chars: text.length },
     ]);
     expect(row?.templates).not.toHaveProperty('DENIAL_REPLY_ROUTE');
-    expect(row?.templates?.REPORT_FOLLOW_UP_GUIDE).toBe(REPORT_FOLLOW_UP_GUIDE.length);
+    expect(row?.templates?.REPORT_FOLLOW_UP_REF).toBe(REPORT_FOLLOW_UP_REF.length);
+    expect(row?.templates).not.toHaveProperty('REPORT_FOLLOW_UP_GUIDE');
     expect(row!.framingChars).toBeGreaterThan(0);
     // 丸めを経ていない: 合図 + 定型 + 枠組み = 本文
     expect(text.length + sum(row?.templates ?? {}) + row!.framingChars).toBe(row?.bodyChars);
@@ -341,7 +345,7 @@ describe('buildTurnInputEntry', () => {
     const denial = `止められた。${DENIAL_REPLY_ROUTE}`;
     const body = [
       'HEAD',
-      `**(1)**\n${denial}\n${REPORT_FOLLOW_UP_GUIDE}`,
+      `**(1)**\n${denial}\n${REPORT_FOLLOW_UP_REF}`,
       `**(2)**\n${EXTERNAL_EVENT_FRAMING}\n{"a":1}\n${externalEventInstruction()}`,
     ].join('\n---\n');
     const batch = [
@@ -358,9 +362,9 @@ describe('buildTurnInputEntry', () => {
     const entry = buildTurnInputEntry(observation);
 
     expect(entry.templates).toEqual({
-      REPORT_FOLLOW_UP_GUIDE: REPORT_FOLLOW_UP_GUIDE.length,
+      REPORT_FOLLOW_UP_REF: REPORT_FOLLOW_UP_REF.length,
       EXTERNAL_EVENT_FRAMING: EXTERNAL_EVENT_FRAMING.length,
-      EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction().length,
+      EXTERNAL_EVENT_INSTRUCTION_REF: externalEventInstruction().length,
     });
     expectBodyPartition(entry);
     expect(turnInputShortfallChars(observation)).toBe(0);
@@ -399,7 +403,7 @@ describe('buildTurnInputEntry', () => {
       );
       expect(entry.templates).toEqual({
         EXTERNAL_EVENT_FRAMING: EXTERNAL_EVENT_FRAMING.length,
-        EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction().length,
+        EXTERNAL_EVENT_INSTRUCTION_REF: externalEventInstruction().length,
       });
       // 'HEAD\n'（5字）+ framing 直後の '\n'（1字）+ instruction 直前の '\n'（1字）+ '\nTAIL'（5字）
       expect(entry.framingChars).toBe(12);
