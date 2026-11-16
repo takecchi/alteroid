@@ -108,6 +108,60 @@ describe('累積スナップショットを増分へ畳む', () => {
       });
     });
 
+    // 2026-11-14 の本番事象: resume の最初の result が、transcript に保存済みの少し古い累積（2411.69 → 2403.43）から始まり、
+    // 減っただけで reset と読まれて約 2,403 ドル（cache_read 約 80 億）が全量でもう一度積まれた（同日 2 回）
+    describe('resume の遅れ（前回よりわずかに減っただけの読みは数え直しではない）', () => {
+      const BIG = { cacheReadInputTokens: 10_000_000_000, costUsd: 2411.69 };
+      const LAGGED = { cacheReadInputTokens: 9_966_000_000, costUsd: 2403.43 };
+
+      it('わずかに減っても数え直しにならず、増分は空で、基準は高い側のまま', () => {
+        const fold = foldUsageSnapshot(
+          baseline({ opus: totals(BIG) }),
+          { models: { opus: totals(LAGGED) } },
+          LATER,
+        );
+        expect(fold.reset).toBeUndefined();
+        expect(fold.delta).toEqual({});
+        expect(nextBaseline(fold).models).toEqual({ opus: totals(BIG) });
+        expect(nextBaseline(fold).resets).toBe(0);
+      });
+
+      it('遅れた後の累積が前回までを追い越すまで積まず、追い越した分だけ積む（二重にも取りこぼしにもならない）', () => {
+        const lagged = foldUsageSnapshot(
+          baseline({ opus: totals(BIG) }),
+          { models: { opus: totals(LAGGED) } },
+          LATER,
+        );
+        const still = foldUsageSnapshot(
+          nextBaseline(lagged),
+          { models: { opus: totals({ cacheReadInputTokens: 9_990_000_000, costUsd: 2409 }) } },
+          LATER,
+        );
+        expect(still.delta).toEqual({});
+        const past = foldUsageSnapshot(
+          nextBaseline(still),
+          { models: { opus: totals({ cacheReadInputTokens: 10_100_000_000, costUsd: 2420 }) } },
+          LATER,
+        );
+        expect(past.delta).toEqual({
+          opus: totals({ cacheReadInputTokens: 100_000_000, costUsd: 2420 - 2411.69 }),
+        });
+        expect(past.reset).toBeUndefined();
+      });
+
+      it('0 付近から始まる本物の数え直し（2412.65 → 0.51）は従来どおり全量を積む', () => {
+        const fold = foldUsageSnapshot(
+          baseline({ opus: totals(BIG) }),
+          { models: { opus: totals({ cacheReadInputTokens: 200_000, costUsd: 0.51 }) } },
+          LATER,
+        );
+        expect(fold.reset).toBeDefined();
+        expect(fold.delta).toEqual({
+          opus: totals({ cacheReadInputTokens: 200_000, costUsd: 0.51 }),
+        });
+      });
+    });
+
     // 反転した試験: 以前は「基準にあったモデルが消えたことも数え直しである」だった。載るモデルの組は呼び出しごとに食い違いうる（本番 2026-10-26T23:16Z に haiku を含まない累積が来て opus 約 108 億 cache_read が二重に積まれた）ため、消えたモデルは「変化なし」へ改めた
     // Issue #5405 で sonnet の cost を 1 から 6 へ改めた: 元の形（基準 opus 5・今回 sonnet 1）は、欠けた opus（5）が今回の合計（1）より大きく、数え直し直後に主なモデルが載らない形そのもので、数え直しとして扱う（下の #5405 の試験）。ここは欠落ぶんが今回の合計以下の形に限る
     it('基準にあったモデルが今回に無くても、欠落ぶんが今回の合計以下なら数え直しではない（変化なしとして基準へ引き継ぐ）', () => {
@@ -292,7 +346,8 @@ describe('累積スナップショットを増分へ畳む', () => {
     it('増分は負にならない（一部のフィールドだけ減っても台帳を汚さない）', () => {
       const fold = foldUsageSnapshot(
         baseline({ opus: totals({ inputTokens: 10, outputTokens: 100, costUsd: 1 }) }),
-        { models: { opus: totals({ inputTokens: 10, outputTokens: 90, costUsd: 1 }) } },
+        // cost も前回の 9 割を下回らせる: 同じ cost のままの微減は resume の遅れ（上の describe）で、増分が空になる
+        { models: { opus: totals({ inputTokens: 10, outputTokens: 90, costUsd: 0.5 }) } },
         LATER,
       );
       const opus = fold.delta.opus;
