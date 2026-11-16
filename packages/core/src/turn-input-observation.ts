@@ -1,8 +1,12 @@
 import {
   BATCH_REPORT_FOLLOW_UP_GUIDE,
+  BATCH_REPORT_FOLLOW_UP_REF,
   ORIGIN_NO_TASK_GUIDE,
+  ORIGIN_NO_TASK_REF,
   ORIGIN_TASK_GUIDE,
+  ORIGIN_TASK_REF,
   REPORT_FOLLOW_UP_GUIDE,
+  REPORT_FOLLOW_UP_REF,
   payloadText,
 } from './clone-batch-prompts.js';
 import {
@@ -10,7 +14,11 @@ import {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
 } from './classifier-denial-streak.js';
 import { DENIAL_REPLY_ROUTE } from './denial-key.js';
-import { EXTERNAL_EVENT_FRAMING, externalEventInstruction } from './prompt.js';
+import {
+  EXTERNAL_EVENT_FRAMING,
+  EXTERNAL_EVENT_INSTRUCTION,
+  externalEventInstruction,
+} from './prompt.js';
 import { DAILY_REPORT_KIND } from './schedule.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 import type { TurnInputText } from './turn-input.js';
@@ -44,6 +52,7 @@ export const NOTICE_KEYS = [
  * ビルダーの文字列は変えず、組み上がった本文の中の出現を数える（出現回数 × 定数の長さ）。
  */
 export const TEMPLATES: Readonly<Record<string, string>> = {
+  // 全文の側は、いまの本文にはもう出ない（システムプロンプトへ移した）。残すのは、移す前の日誌の行が持つ名前から出現回数を割り戻すため（`diagnostics-conversation-analysis.ts` の `occurrences`）
   REPORT_FOLLOW_UP_GUIDE,
   BATCH_REPORT_FOLLOW_UP_GUIDE,
   ORIGIN_NO_TASK_GUIDE,
@@ -52,7 +61,13 @@ export const TEMPLATES: Readonly<Record<string, string>> = {
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH,
   DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE,
   EXTERNAL_EVENT_FRAMING,
-  EXTERNAL_EVENT_INSTRUCTION: externalEventInstruction(),
+  EXTERNAL_EVENT_INSTRUCTION,
+  // いまの本文に出る参照
+  REPORT_FOLLOW_UP_REF,
+  BATCH_REPORT_FOLLOW_UP_REF,
+  ORIGIN_NO_TASK_REF,
+  ORIGIN_TASK_REF,
+  EXTERNAL_EVENT_INSTRUCTION_REF: externalEventInstruction(),
 };
 
 function occurrencesOf(text: string, template: string): number {

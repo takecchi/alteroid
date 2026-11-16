@@ -8,6 +8,7 @@ import type { ManagerRecord } from './manager.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { JournalEntryInput, TextMarkup } from './schema.js';
+import { READING, readingRef } from './turn-readings.js';
 
 const ASKED_MEMORY_LIMIT = 512;
 
@@ -41,8 +42,22 @@ function isClassifierDenialAsk(summary: string): boolean {
   );
 }
 
-const PERMISSION_ASK_AFTER_ANSWER =
-  '\n答えたあと: allow すれば、この呼び出しがそのまま通る（撃ち直しは要らない）。deny なら担い手へ拒否として返る。';
+// 答えたあとの全文（`PERMISSION_ASK_AFTER_ANSWER`）はシステムプロンプトに1度だけ置く。配る本文には参照だけを足す
+const PERMISSION_ASK_AFTER_ANSWER_REF = `\n${readingRef(READING.permissionAfterAnswer)}`;
+
+/**
+ * 分類器の拒否の確認の、答えたあとの固定の段落を参照に置き換える。runner の文（待ち・日誌の `summary`）は変えず、クローンへ配る本文だけを変える。
+ * runner の側で段落を参照にしない: runner とデーモンは別に配備され、新しい runner の参照を古いデーモンのクローンが読むと、システムプロンプトに指す先が無いため。
+ * ここで置き換える形なら、版がずれても段落が1字でも違えば全文のまま届く（読み方が消える側へは倒れない）。
+ * `split` / `join` で置き換える: `String#replace` の置換文字列は `$` を特別に読むため。
+ */
+function withDenialParagraphsAsRefs(summary: string): string {
+  return summary
+    .split(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE)
+    .join(readingRef(READING.denialAfterAnswerBashRule))
+    .split(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH)
+    .join(readingRef(READING.denialAfterAnswer));
+}
 
 /**
  * 確認（`ask`）をクローンへ配る本文と描き方。届いたときと、再起動の引き取りで配り直すときの両方がここを通る。
@@ -50,8 +65,8 @@ const PERMISSION_ASK_AFTER_ANSWER =
  * - `markup: 'none'` は `permission` のときだけ立てる: `summary` は道具の呼び出し引数の JSON ダンプで、バッククォートや `*` が入っていても Markdown ではなく、`<Markdown>` で描くと `<code>` に食われて字面から消える。
  *   `runner.ts` 側で包まない: `<Markdown>` で描くのは1面だけで、残り5面は素テキストなので記号が増える。`runner` が文面を Markdown に変えたら黙って外れるので `runner-permission-summary-markup.test.ts` が固定している。
  *   `question` でも立てない（モデルが書いた文章）。ただし `describeQuestions()` が `brief(input)` へ落ちた回は `kind` が同じ `'question'` のままで、この層には区別する材料が無く化けが残る。塞ぐなら `ask` イベントへ欄を足す（`runner-protocol.ts` の版ずれの窓が開く別作業）。
- * - 配る本文にだけ答えたあとを足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
- *   分類器の拒否の確認は runner が自分の本文で言っているので足さない。
+ * - 配る本文にだけ答えたあとの参照を足す（待ちと日誌の `summary` は runner の文のまま）: 分類器の拒否の確認（`toolu_…`）とは答えたあとが違うのに、本文から見分けられないため。
+ *   分類器の拒否の確認は runner が自分の本文で言っているので足さず、その固定の段落を参照へ置き換える（全文はシステムプロンプトに1度だけ置く）。
  *
  * `Pool#redeliverWaitingAfterRestore` も使うので export する（定義はここに置く: `manager.ts` から値を import すると循環する）。
  */
@@ -61,9 +76,11 @@ export function askDeliveryOf(
 ): { text: string; markup: TextMarkup | undefined } {
   const markup: TextMarkup | undefined = kind === 'permission' ? 'none' : undefined;
   const text =
-    kind === 'permission' && !isClassifierDenialAsk(summary)
-      ? `${summary}${PERMISSION_ASK_AFTER_ANSWER}`
-      : summary;
+    kind !== 'permission'
+      ? summary
+      : isClassifierDenialAsk(summary)
+        ? withDenialParagraphsAsRefs(summary)
+        : `${summary}${PERMISSION_ASK_AFTER_ANSWER_REF}`;
   return { text, markup };
 }
 

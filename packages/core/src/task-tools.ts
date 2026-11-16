@@ -4,6 +4,7 @@ import { isTaskClosed } from './task.js';
 import type { TaskPlacement } from './task.js';
 import type { JournalEntryInput, Task, TaskStatus } from './schema.js';
 import type { TaskList } from './store.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // task_* 道具の入力の解釈と表示だけを置く（登録と日誌は tools.ts）。規則（遷移・並び）は task.ts が1本だけ持つ。
 
@@ -176,9 +177,8 @@ export function describeTaskQueueHead(
   if (rest > 0) {
     lines.push(`- …ほか ${rest} 件（task_list で全部見える）`);
   }
-  lines.push(
-    '（先頭が先にやるもの。並べ替えは task_move、取りやめ・完了は task_set_status、全部は task_list）',
-  );
+  // 案内の全文はシステムプロンプトに1度だけ置く（turn-readings.ts）。ここは参照だけ
+  lines.push(readingRef(READING.queue));
   return lines;
 }
 

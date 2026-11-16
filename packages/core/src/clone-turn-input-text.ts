@@ -2,6 +2,7 @@ import { excerptLine } from './excerpt.js';
 import { renderMemoryDocuments } from './memory.js';
 import { describeAnsweredVia } from './schema.js';
 import { readAtLabel } from './situation.js';
+import { READING, readingRef } from './turn-readings.js';
 import type { HumanAction, HumanActionKind, JournalEntry, MemoryDocument } from './schema.js';
 
 // `clone.ts` の `Clone` にあった、ターンの入力へ載せる文面と判定のうち、状態を読まず書かない部分を、純関数として出したもの。
@@ -212,7 +213,8 @@ export function describeTaskQueuePlacement(
           (placedIds.length > 1
             ? `いま届いたこの ${placedIds.length} 件は task ${idsOf(placedIds)} として積んだ。`
             : `いま届いたこの一件は task ${idsOf(placedIds)} として積んだ。`) +
-            '返事をしたターンの終わりに自動で done になる。続けるなら `task_keep`、委譲するなら `manager_start` に `taskId`。',
+            // その後の扱いの全文はシステムプロンプトに1度だけ置く（turn-readings.ts の TASK_INTAKE_GUIDE）
+            readingRef(READING.intake),
         ];
   const failed =
     failedIds.length === 0

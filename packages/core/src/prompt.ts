@@ -18,6 +18,15 @@ import type { RenderedMemory } from './memory.js';
 import { MEMORY_TOC_LINE_LIMIT } from './memory.js';
 import { memoryDescriptionContract } from './memory-description-contract.js';
 import { buildSelfKnowledge, type SelfFacts } from './self.js';
+import { buildTurnReadingsSection, READING, readingRef } from './turn-readings.js';
+
+// 指示文の全文は turn-readings.ts に移した（システムプロンプトに1度だけ置く）。試験と要約（digest.ts）が名前で読むので、ここからも出す
+export {
+  EXTERNAL_EVENT_INSTRUCTION,
+  SELF_INITIATIVE_INSTRUCTIONS,
+  TIMER_PLAIN_INSTRUCTION,
+  TIMER_REQUEST_INSTRUCTIONS,
+} from './turn-readings.js';
 
 interface CloneSystemPromptInput {
   memory: RenderedMemory;
@@ -149,6 +158,8 @@ ${buildSelfKnowledge(self)}
 - 記憶に根拠があれば自分で答える。無ければ \`ask_human\` に \`managerId\` と \`requestId\` を**対で**添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返す。宛先を添え損ねると、人間が答えてもその仕事を再開できない。
 - **マネージャーの報告には、成果物のファイルが添付として付いてくることがある。** 本文の前に \`[添付] id=… name=…\` の行が並び（画像はこのターンの入力にも添えてある）、受け取れなかったものは \`[添付を受け取れなかった] name=… 理由=…\` の行で出る。中身は \`attachment_fetch\` で開ける。人間へ見せるなら、書き写さず \`reply_attach\` か \`task_say\` の \`attachments\` に id を渡して添えること。
 - 止めるのは \`manager_stop\`。人間が画面から押す停止と同じもので、その1本だけが止まる（暴走している / 報告を出したのに終わらない / 依頼自体が要らなくなった）。**返ってきた状態まで読むこと** — 「受理した」と「止まった」は別で、止まりきっていなければそう返る。
+
+${buildTurnReadingsSection()}
 
 # 現在の記憶
 
@@ -300,26 +311,10 @@ interface SelfInitiativePromptInput {
   digest: string;
 }
 
-/** 発意 tick の固定の指示文（`reason` を含まない）。 */
-export const SELF_INITIATIVE_INSTRUCTIONS = `記憶にある目的と、いまの状況を見て、次にやることがあるかを決めよ。
-
-- 状況の「待ち行列の先頭」が先にやるもの。動かせるなら先頭から始める。実作業なら \`manager_start\` で委譲し、その task の id を \`taskId\` に渡す（渡さないと task は queued のまま先頭に残り、次の tick で同じ task からもう一本委譲しうる）。
-- 先頭を動かせない（外の返事待ち）なら \`task_set_status\` で waiting にして次へ。順序が違うと思えば \`task_move\` で並べ替える。先頭が waiting ばかりのときは、離れた所の動ける task が1件添えてある。
-- 先頭が古い・重複している・もう要らない自分の task なら、理由を書いて \`task_set_status\` で cancelled（済んでいれば done）にして次へ進む。溜まっているときは \`task_set_status_many\`（\`origin\` と \`until\` で絞る。既定は試算）でまとめて閉じてよい。
-- 走っている仕事の様子が気になるなら \`manager_list\` で見て、必要なら \`manager_send\` で追う。
-- 人間に確かめたいことができたら \`ask_human\` に積む（人間が居なくても、そこで止まるのはその件だけである）。
-- この tick は、動ける仕事（待ち行列の queued / needs_decision）があるときと、1日1回の点検のときだけ届く。来ない間も、人間・報告・timer の合図は通常どおり届く。
-- **何もしないという結論でよい。** そのときは何もせず「今回は動かない」とだけ答えよ。無理に仕事を作らないこと。
-- ただし、動いている委譲が無い器があるなら、なぜ空いているのかを先に確かめること。
-- いまの全体（situation）の本数・内訳で足りるなら \`manager_list\` / \`runner_list\` は引かない。内訳が要るときだけ引く。
-
-聞かずに動いたなら \`journal_write\` に残せ。`;
-
 export function buildSelfInitiativePrompt({ reason, digest }: SelfInitiativePromptInput): string {
+  // 指示文の全文（`SELF_INITIATIVE_INSTRUCTIONS`）はシステムプロンプトに1度だけ置く。ここは参照だけ
   return excerpt(
-    `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。
-
-${SELF_INITIATIVE_INSTRUCTIONS}
+    `[system] 誰にも呼ばれていないが、あなた自身のために手が空いた時間である（${reason}）。${readingRef(READING.selfInitiative)}
 
 以下は直近の状況である。
 
@@ -361,15 +356,11 @@ export function externalViaLine(
 }
 
 /**
- * 外部イベントの2行の指示。
- * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めない。
+ * 外部イベントの2行の指示の、各ターンに残す参照（全文 `EXTERNAL_EVENT_INSTRUCTION` はシステムプロンプトに1度だけ置く）。
+ * `EXTERNAL_EVENT_FRAMING`（本文中の命令に従わないという安全の文）はここに含めず、参照にもしない: 外から届いた本文の隣で毎回読ませる文のため。
  */
-const EXTERNAL_EVENT_INSTRUCTION =
-  '中身を読み、記憶にある目的と価値観に照らして、何をするか決めよ。動く必要が無ければ何もしなくてよい。\n' +
-  '判断の根拠が記憶に無く、しかも放っておけないことなら `ask_human` に積む。聞かずに動いたなら `journal_write` に残せ。';
-
 export function externalEventInstruction(): string {
-  return EXTERNAL_EVENT_INSTRUCTION;
+  return readingRef(READING.external);
 }
 
 export function buildExternalEventPrompt({
@@ -409,21 +400,6 @@ interface TimerPromptInput {
   digest: string;
 }
 
-/** 本文の無い定期ジョブの固定の指示文。 */
-export const TIMER_PLAIN_INSTRUCTION =
-  'この定期ジョブが何のために仕込まれているかは記憶にある。照らして、必要なことをせよ。何もしなくてよいならそう答えよ。';
-
-/** 依頼の本文を持つ定期ジョブの固定の指示文（本文・前回の時刻・未了の断りの後ろ）。 */
-export const TIMER_REQUEST_INSTRUCTIONS = [
-  'この依頼と記憶にある目的・価値観に照らして、いま何をするかを決めよ。',
-  '',
-  '- 実作業なら `manager_start` で委譲する。',
-  '- **同じ仕事を二重に起こさないこと。** 前回からの続きがあるかを `manager_list` で見てから決める（下の要約の担当の節と継続中の依頼の節は中身つき。ほかの節は件数の行だけ）。',
-  '- やることが無ければ何もしなくてよい。無理に仕事を作らないこと。',
-  '- この依頼がもう要らない・周期が合っていないと判断したなら、`schedule_remove` や `schedule_create` で自分で直してよい。',
-  '',
-  '聞かずに動いたなら `journal_write` に残せ。',
-].join('\n');
 
 export function buildTimerPrompt({
   kind,
@@ -435,9 +411,10 @@ export function buildTimerPrompt({
 }: TimerPromptInput): string {
   const head = `[system] 定期ジョブ ${kind} の時刻になった${target === undefined ? '' : `（対象: ${target}）`}。`;
 
+  // 指示文の全文（`TIMER_PLAIN_INSTRUCTION` / `TIMER_REQUEST_INSTRUCTIONS`）はシステムプロンプトに1度だけ置く。ここは値（依頼の本文・前回の時刻・未了の断り）と参照だけ
   const body =
     request === undefined
-      ? TIMER_PLAIN_INSTRUCTION
+      ? readingRef(READING.timerPlain)
       : [
           `これは継続中の依頼である。本文はこうなっている。`,
           '',
@@ -455,7 +432,7 @@ export function buildTimerPrompt({
                   '`manager_list` と日誌でその時刻の前後に何をしたかを確かめてから決めよ（取り消せない操作を二度やらないこと）。',
               ]),
           '',
-          TIMER_REQUEST_INSTRUCTIONS,
+          readingRef(READING.timerRequest),
         ].join('\n');
 
   return excerpt(

@@ -13,6 +13,7 @@ import {
   parseReportProblemPayload,
 } from './report-problem.js';
 import type { InboxEvent } from './schema.js';
+import { READING, readingRef } from './turn-readings.js';
 
 // `clone.ts` の末尾にあった、束ねて読む入力の文面を作る純関数群（状態を持たない）。
 // 切り出した理由: `Clone` クラスの外にあり、`clone-batch-prompts-pin.test.ts` が出力を逐語で固定していて、クラスの private に触れないため。
@@ -80,114 +81,12 @@ export function mixableSignalChars(event: MixableSignal): number {
   }
 }
 
-/** 束の中で、同じ文が複数の件に入るときに1回へまとめる定型。`find` は件の本文のうち、その定型が入っている区間（なければ null）。 */
-interface SharedGuide {
-  readonly text: string;
-  readonly find: (item: string) => readonly [start: number, end: number] | null;
-}
-
-/** 起点の行（`起点の会話: …` + 案内）の中の案内。行の末尾にあるものだけを拾う（本文に同じ文があっても取り違えない）。 */
-function originGuideLocator(guide: string): SharedGuide['find'] {
-  return (item) => {
-    const start = item.lastIndexOf(guide);
-    if (start <= 0) return null;
-    const end = start + guide.length;
-    if (end < item.length && item[end] !== '\n') return null;
-    const lineStart = item.lastIndexOf('\n', start - 1) + 1;
-    return item.startsWith('起点の会話: ', lineStart) ? [start, end] : null;
-  };
-}
-
-// 関数にする: 定数（`ORIGIN_NO_TASK_GUIDE` など）はこのファイルの後ろで宣言されていて、モジュール直下で読むと未初期化になる
-const mixedSharedGuides = (): readonly SharedGuide[] => [
-  { text: ORIGIN_NO_TASK_GUIDE, find: originGuideLocator(ORIGIN_NO_TASK_GUIDE) },
-  { text: ORIGIN_TASK_GUIDE, find: originGuideLocator(ORIGIN_TASK_GUIDE) },
-  {
-    text: REPORT_FOLLOW_UP_GUIDE,
-    // 単発の報告の末尾（`managerPrompt`）だけ
-    find: (item) =>
-      item.startsWith('[system] マネージャー ') && item.endsWith(`\n\n${REPORT_FOLLOW_UP_GUIDE}`)
-        ? [item.length - REPORT_FOLLOW_UP_GUIDE.length, item.length]
-        : null,
-  },
-  {
-    text: externalEventInstruction(),
-    // 外部の出来事の枠（`buildExternalEventPrompt`）の、本文の直前の指示だけ。枠の最初の1つが指示で、本文はその後ろ
-    find: (item) => {
-      if (!item.startsWith('[system] 外部から出来事が届いた')) return null;
-      const instruction = externalEventInstruction();
-      const start = item.indexOf(`\n\n${instruction}\n\n---\n\n`);
-      return start === -1 ? null : [start + 2, start + 2 + instruction.length];
-    },
-  },
-];
-
-/** 束の末尾の見出し（まとめた定型があるときだけ出す）。 */
-const MIXED_SHARED_GUIDES_HEADER =
-  '**共通の案内** 上の各件で `（→末尾の共通の案内N）` とある所は、ここの N 番と同じ文が入る（同じ文を件ごとに繰り返さないため1回にした）。その件の案内として読むこと。';
-
-const sharedGuideMarker = (number: number): string => `（→末尾の共通の案内${String(number)}）`;
-
-/**
- * 内容が完全に同一の定型を、束の末尾の1か所へまとめる。まとめるのは、まとめたほうが短くなるときだけ（置き換えの印と見出しの分を引いても得をするとき）。
- * 件ごとに変わる文（managerId・requestId・起点の会話・task を含む文）は触らない。
- */
-function hoistSharedGuides(texts: readonly string[]): {
-  readonly rewrite: (text: string) => string;
-  readonly tail: string[];
-} {
-  const hoisted: { guide: SharedGuide; number: number }[] = [];
-  const candidates = mixedSharedGuides()
-    .map((guide) => ({
-      guide,
-      count: texts.filter((text) => guide.find(text) !== null).length,
-    }))
-    .filter(({ guide, count }) => {
-      const marker = sharedGuideMarker(1).length;
-      // 得: 件ごとに (定型 − 印) を減らし、末尾に定型1回と番号の行を足す
-      return count >= 2 && count * (guide.text.length - marker) > guide.text.length + 9;
-    });
-  const gain = candidates.reduce(
-    (sum, { guide, count }) =>
-      sum + count * (guide.text.length - sharedGuideMarker(1).length) - guide.text.length - 9,
-    0,
-  );
-  // 見出しと区切りの分（見出し + 改行2 + `---` と改行）を引いて、なお得なときだけ
-  if (gain <= MIXED_SHARED_GUIDES_HEADER.length + 6) return { rewrite: (text) => text, tail: [] };
-  for (const { guide } of candidates) hoisted.push({ guide, number: hoisted.length + 1 });
-  return {
-    rewrite: (text) => {
-      let out = text;
-      for (const { guide, number } of hoisted) {
-        const found = guide.find(out);
-        if (found !== null) {
-          out = out.slice(0, found[0]) + sharedGuideMarker(number) + out.slice(found[1]);
-        }
-      }
-      return out;
-    },
-    tail: [
-      '---',
-      MIXED_SHARED_GUIDES_HEADER,
-      '',
-      ...hoisted.flatMap(({ guide, number }) => [`**${String(number)}.** ${guide.text}`, '']),
-    ],
-  };
-}
-
 /**
  * 起点の違う合図の束の本文。各件は単発のときと同じ本文（`managerPrompt` / `buildExternalEventPrompt`）を並べる（要約しない）。
- * ただし件ごとに変わらない定型（起点の案内・報告への応じ方・外部の出来事の指示）が2件以上に入るときは、束の末尾に1回だけ置き、各件には参照の印を残す。
+ * 件ごとに変わらない定型（起点の案内・報告への応じ方・外部の出来事の指示）を束の末尾へ1回にまとめる仕組み（#6824）は外した:
+ * 定型の全文はシステムプロンプトへ移り、各件に残るのは短い参照（`readingRef`）だけなので、まとめても印と見出しの分だけ長くなるため。
  */
-export function mixedSignalBatchPrompt(rawItems: readonly MixedBatchItem[]): string {
-  const hoist = hoistSharedGuides(
-    rawItems.flatMap((item) => (typeof item === 'string' ? [item] : [...item.parts])),
-  );
-  const items = rawItems.map((item): MixedBatchItem =>
-    typeof item === 'string'
-      ? hoist.rewrite(item)
-      : { managerId: item.managerId, parts: item.parts.map(hoist.rewrite) },
-  );
+export function mixedSignalBatchPrompt(items: readonly MixedBatchItem[]): string {
   const total = items.reduce(
     (sum, item) => sum + (typeof item === 'string' ? 1 : item.parts.length),
     0,
@@ -219,7 +118,6 @@ export function mixedSignalBatchPrompt(rawItems: readonly MixedBatchItem[]): str
     '**最後まで読んでから、1件ずつ要る手を打て。** 質問・確認には、それぞれの宛先（managerId と requestId）で答えること。',
     '',
     ...lines,
-    ...hoist.tail,
   ].join('\n');
 }
 
@@ -329,15 +227,25 @@ function formatElapsed(ms: number): string {
   return `約${days}日`;
 }
 
-/** 報告への応じ方の案内（単発の報告の末尾）。 */
-export const REPORT_FOLLOW_UP_GUIDE =
-  '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。\n' +
-  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+// 応じ方・知らせ方の全文は turn-readings.ts に移した（システムプロンプトに1度だけ置く）。診断が過去の会話の中の全文を数えるので、名前はここからも出す
+export {
+  BATCH_REPORT_FOLLOW_UP_GUIDE,
+  ORIGIN_NO_TASK_GUIDE,
+  ORIGIN_TASK_GUIDE,
+  REPORT_FOLLOW_UP_GUIDE,
+} from './turn-readings.js';
 
-/** 束ねた報告への応じ方の案内。 */
-export const BATCH_REPORT_FOLLOW_UP_GUIDE =
-  '続きが要るなら、それぞれの報告に対して `manager_send` で指示を出せ。要らないなら何もしなくてよい。\n' +
-  '学びや判断の基準になったことがあれば記憶へ移すこと。';
+/** 報告への応じ方の参照（単発の報告の末尾）。全文は `REPORT_FOLLOW_UP_GUIDE`。 */
+export const REPORT_FOLLOW_UP_REF = readingRef(READING.report);
+
+/** 束ねた報告への応じ方の参照。全文は `BATCH_REPORT_FOLLOW_UP_GUIDE`。 */
+export const BATCH_REPORT_FOLLOW_UP_REF = readingRef(READING.reportBatch);
+
+/** 委譲が task に結び付いていないときの、人間への知らせ方の参照。全文は `ORIGIN_NO_TASK_GUIDE`。 */
+export const ORIGIN_NO_TASK_REF = readingRef(READING.originNoTask);
+
+/** 委譲が task に結び付いているときの、人間への知らせ方の参照。全文は `ORIGIN_TASK_GUIDE`。 */
+export const ORIGIN_TASK_REF = readingRef(READING.originTask);
 
 /**
  * マネージャーからの一件をクローンの言葉に直す。
@@ -369,7 +277,7 @@ export function managerPrompt(
       describeReportAge(event.at, now),
       describeManagerOrigin(origin),
       '',
-      REPORT_FOLLOW_UP_GUIDE,
+      REPORT_FOLLOW_UP_REF,
     ].join('\n');
   }
 
@@ -393,16 +301,12 @@ export function managerPrompt(
       ? `managerId: "${event.managerId}"`
       : `managerId: "${event.managerId}", requestId: "${event.requestId}"`;
 
-  const decisionLine = '許可確認なので `decision` に allow / deny を明示すること。';
-  const guide = [
-    `返事をするまで ${event.managerId} のこの1件だけが止まっている（他のマネージャーも、同じマネージャーの別の確認も、それぞれ独立に待っている）。`,
-    `記憶に根拠があるなら自分で決めて \`manager_send\`（${to}）で返し、その判断を \`journal_write\` に残せ。`,
-    event.kind === 'permission' ? decisionLine : '',
-    `根拠が無いなら \`ask_human\` に ${to} を添えて積み、人間の回答が届いてから同じ宛先へ \`manager_send\` で返せ。` +
-      '（宛先を添えないと、人間が答えてもこの仕事を再開できない）',
-  ]
-    .filter((line) => line !== '')
-    .join('\n');
+  // 応じ方の全文（止まっているのはこの1件だけ・根拠の有無での返し方・許可確認の decision）はシステムプロンプトに1度だけ置く。宛先の id は値なので毎回ここに出す
+  const guide =
+    `宛先: ${to}` +
+    (event.kind === 'permission'
+      ? readingRef(READING.confirmation, READING.permission)
+      : readingRef(READING.confirmation));
   return [`${head}（${label}）`, '', event.text, '', describeManagerOrigin(origin), guide]
     .filter((line) => line !== '')
     .join('\n');
@@ -418,18 +322,6 @@ export type ManagerOrigin =
   | { kind: 'missing'; conversationId: null }
   | { kind: 'unreadable'; conversationId: null; reason: string };
 
-/**
- * 委譲が task に結び付いていないときの案内（起点の会話の有無によらず同じ）。
- * 起点の会話が無い委譲に別の手順を書かない: task_add はこのターンの起点の会話へ、無ければ新しい会話へ器が結ぶ（`task_add` の `getWorkConversationId() ?? randomUUID()`）ので、クローンの手順は同じになるため（#5469）。
- */
-export const ORIGIN_NO_TASK_GUIDE =
-  '（人間へ知らせるなら、この委譲の起点の会話の task を task_list で探して `task_say` で書く。無ければ task_add で足す。' +
-  '書いたら、知らせるだけの task は task_set_status で done にする。このターンで続きを委譲・確認すると、この委譲と同じ起点に結び付く）';
-
-/** 委譲が task に結び付いているときの案内（起点の会話の有無によらず同じ。task が宛先を持つ）。 */
-export const ORIGIN_TASK_GUIDE =
-  '（人間へ知らせるなら、結び付いた task へ `task_say` で書く。書いたら、知らせるだけの task は task_set_status で done にする）';
-
 /** 委譲が task に結び付いているときだけ出す1行（#5469 P3）。委譲が終わった task は判断待ち（needs_decision）に戻っているので、結果の扱いはその task の上で決める。 */
 function describeOriginTask(taskId: string | undefined): string {
   return taskId === undefined
@@ -442,7 +334,7 @@ export function describeManagerOrigin(origin: ManagerOrigin): string {
     case 'job':
       return (
         `起点の会話: ${origin.conversationId ?? '無し（会話の外で起こした委譲）'}` +
-        (origin.taskId === undefined ? ORIGIN_NO_TASK_GUIDE : ORIGIN_TASK_GUIDE) +
+        (origin.taskId === undefined ? ORIGIN_NO_TASK_REF : ORIGIN_TASK_REF) +
         describeOriginTask(origin.taskId)
       );
     case 'missing':
@@ -576,7 +468,7 @@ export function managerReportBatchRender(
     '',
     describeManagerOrigin(origin),
     '',
-    BATCH_REPORT_FOLLOW_UP_GUIDE,
+    BATCH_REPORT_FOLLOW_UP_REF,
   ].join('\n');
   return {
     prompt,

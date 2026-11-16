@@ -16,6 +16,7 @@ import {
 } from './store.js';
 import type { Stores, TaskList } from './store.js';
 import { TASK_QUEUE_HEAD_LIMIT, describeTaskQueueHead } from './task-tools.js';
+import { READING, readingRef } from './turn-readings.js';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsageRows,
@@ -173,15 +174,15 @@ interface ActivityDigestOptions {
   trimHistory?: boolean;
 }
 
-/** 件数の形の要約（#4938 の案2）で、件数だけにした節の中身は道具で引けることを名乗る1行。 */
-export const DIGEST_COUNTS_TOOLS_NOTE =
-  '（#4938: 定期の依頼の回なので、担当と継続中の依頼のほかは件数だけにしている。中身は道具で引ける —— ' +
-  '待ち行列は `task_list`、回答待ちは `approvals_list`、' +
-  '決めたこと・エスカレーション・記憶の更新・外部イベントは `journal_read`、使った分は `usage_read`）';
+// 件数の形の要約の断り（`DIGEST_COUNTS_TOOLS_NOTE`）と、手が止まっている担当の行の読み方（`DIGEST_IDLE_MANAGERS_NOTE`）の全文は
+// turn-readings.ts に移した（システムプロンプトに1度だけ置く）。要約には参照だけを残す
+export { DIGEST_COUNTS_TOOLS_NOTE } from './turn-readings.js';
 
-/** 手が止まっている担当の行の次に出す固定の1行（依頼と直近の報告を載せていないことを名乗る）。 */
-const DIGEST_IDLE_MANAGERS_NOTE =
-  '依頼と直近の報告は、ここには載せていない。`manager_list`（`q` で依頼文から探せる）/ `manager_report`（依頼文・報告の全文）で引ける。';
+/** 件数の形の要約（#4938 の案2）で、件数だけにした節の中身は道具で引けることを指す参照。 */
+export const DIGEST_COUNTS_TOOLS_REF = readingRef(READING.digestCounts);
+
+/** 手が止まっている担当の行の次に出す参照（依頼と直近の報告を載せていないこと）。 */
+const DIGEST_IDLE_MANAGERS_REF = readingRef(READING.digestIdleManagers);
 
 /** 継続中の依頼の節の見出しの先頭と、1件の2行目（状態の行）の前置き。 */
 export const STANDING_SECTION_HEADING_HEAD = '## 継続中の依頼';
@@ -606,7 +607,7 @@ export function renderManagersSection(input: ManagersSectionInput): string[] {
     lines.push(
       `- 手が止まっている担当（done・stopped）${foldedManagers.length} 本: ${foldedIds.join(', ')}` +
         (foldedRest === 0 ? '' : ` …ほか ${foldedRest} 件`),
-      DIGEST_IDLE_MANAGERS_NOTE,
+      DIGEST_IDLE_MANAGERS_REF,
     );
   }
   if (oldFailedManagers.length > 0) {
@@ -757,7 +758,7 @@ export function renderCountsDigest(input: CountsDigestInput): string {
     ...(unreadableLine === ''
       ? []
       : [`- 読めない行（壊れた行。上の件数には入っていない）: ${unreadableLine}`]),
-    DIGEST_COUNTS_TOOLS_NOTE,
+    DIGEST_COUNTS_TOOLS_REF,
   ].join('\n');
 }
 

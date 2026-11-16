@@ -12,7 +12,11 @@ import type { ManagerSummary } from './manager.js';
 import type { RunnerLiveness } from './runner-protocol.js';
 import { sectionBlock } from './section-block.js';
 import type { CooldownSource } from './token-pool.js';
+import { READING, readingRef } from './turn-readings.js';
 import { RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN } from './usage-limits.js';
+
+// 区分の読み方の全文は turn-readings.ts に移した（システムプロンプトに1度だけ置く）。診断が過去の会話の中の全文を数えるので、名前はここからも出す
+export { READINGS_NOTICE } from './turn-readings.js';
 
 // 節はターンの入口に置く: プロンプトの組み立ては起点の数だけ散っていて、1か所入れ忘れるとその起点にだけ全体の見えないターンが生まれるため。
 // #taskQueueNoticeFor に混ぜない: 材料の器も読めなかったときの倒れ先も違い、規則が違うものを同じ場所に置かないため。
@@ -495,7 +499,7 @@ export function describeSituationParts(input: SituationInput): SituationPart[] {
       ? []
       : [{ name: 'runnerVanishedNotice', line: RUNNER_VANISHED_NOTICE }]),
     { name: 'runners', line: runnerLine },
-    { name: 'readings', line: READINGS_NOTICE },
+    { name: 'readings', line: READINGS_REF },
     ...(inboxBacklogLine === null ? [] : [{ name: 'inboxBacklog', line: inboxBacklogLine }]),
     // メモリの配達待ち行列は器の行数の直後に置く: 離すと器の行数の1行だけが「受信箱の全部」に見えるため
     ...(inboxQueuedLine === null ? [] : [{ name: 'inboxQueued', line: inboxQueuedLine }]),
@@ -504,20 +508,9 @@ export function describeSituationParts(input: SituationInput): SituationPart[] {
   ];
 }
 
-// 「手が空いている」「走行中」などの区分の読み方。委譲の本数が 0 でも出す（#4269 のオーナー判断 B3）。2ターン目以降も畳まず毎回全文で出す（#4476）
-export const READINGS_NOTICE =
-  // 「手が空いている」の否定は本数が 0 でも出す: 出ていないことが「数えていない」と読める余地が残り、横断する軸には算術で 0 と確定する手が無いため
-  '**区分の読み方** — 「手が空いている」は空き枠でも、終わった／枠が空いたでもない' +
-  '（失敗や利用上限で止まった委譲も `done` のまま座る。セッションが生きているためで、仕様である。' +
-  'その本数は1本以上あるときだけ上の行に出る）。' +
-  '「背景処理待ち」は器が名乗った分だけで、この印を送らない古い器では' +
-  '待っていても「手が空いている」側に数える。' +
-  '「走行中」は進んでいることでも、宛先の runner が名簿に居ることでもなく、背景処理待ちを含まない' +
-  '（名簿から entry ごと消えた宛先の委譲も `running` のまま座る。仕様である。' +
-  'その本数も1本以上あるときだけ上の行に出る）。' +
-  // 「その他」に lost を含めない: 成果の有無を観測していないのは lost だけで、failed / stopped と同じ袋に入れると「終わったもの」として読み飛ばされるため
-  '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
-  '個別の状態は `manager_list` / `runner_list` で見る。';
+// 区分の読み方は全文をシステムプロンプトに置き、ここは参照だけにする（2026-11 のオーナー判断で #4269 の B3「毎ターン全文」を変えた）。
+// 参照は委譲の本数が 0 でも出す: B3 の「0 本でも読み方を落とさない」は、参照が指す全文で保つため
+const READINGS_REF = readingRef(READING.categories);
 
 // 行を消さず、0 でも埋めない: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
 export function describeSituationUnavailable(error: unknown, at: number = Date.now()): string {
