@@ -707,7 +707,8 @@ export {
   managerPeerModelsEnvKey,
   resolvePeerModelsOf,
 } from './agent-provider-peers.js';
-export { EXCHANGE_KIND_FAILURE_PREFIX } from './exchange-kind.js';
+export { EXCHANGE_KIND_FAILURE_PREFIX, exchangeKindOf, exchangeSenderOf } from './exchange-kind.js';
+export type { ExchangeKind, ExchangeSender } from './exchange-kind.js';
 /** 能力の制限ではなく実行環境の設定である（理由は `permission-mode.ts`）。 */
 export { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 

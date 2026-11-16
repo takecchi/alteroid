@@ -5,6 +5,8 @@ import {
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
+  exchangeKindOf,
+  exchangeSenderOf,
   writeStderrLine,
   type SecretRedactor,
 } from '@alteroid/core';
@@ -453,7 +455,9 @@ export function registerReadTools(
     'クローンとマネージャーのやり取りを読む',
     'クローン ↔ マネージャーのやり取り。日誌の `exchange`（`with: manager`）の行を、クローンのやり取りの記録として読む' +
       '（`GET /journal` の `type=exchange` ＋ クローンの道具 `journal_read` の `with: ["manager"]` と同じ範囲）。' +
-      '`role`: `outbound` = クローンからマネージャーへ（依頼・指示）、`inbound` = マネージャーからクローンへ（報告・確認）。' +
+      '`role` は向き: `outbound` = マネージャー（担い手）へ向かう送信、`inbound` = マネージャーからクローンへ向かう記録。書き手は向きでは決まらない — `sender` で見る' +
+      '（`system` = システムが同じ経路で送った `[system] …`（rescue_restore の応答など）、`clone` = クローンの送信、`manager` = マネージャー側の記録。outbound で判定できないものは `clone`）。' +
+      '`kind` は本文の頭の接頭辞から導く記録の種類（`reply` / `decision` / `thinning` / `failure` / `recovery` / `gauge`。どれでもなければ `null`）。' +
       '`managerId` で1つの委譲の往復だけに絞れる（取った頁の中での絞り込み。頁が `limit` 未満・空でも、`next` が `null` でない限り先に行が在るので、`next` を `afterId` / `afterAt` に渡して続ける）。' +
       '`since` / `until` / `q` / `order` / `afterId` + `afterAt` / `limit` は journal_read と同じ' +
       `（limit は既定 ${String(LIMIT_DEFAULT)}・最大 ${String(LIMIT_MAX)}）。本文は textChars 字（既定 ${String(MCP_FIELD_DEFAULT_CHARS)}）で切り、` +
@@ -484,6 +488,9 @@ export function registerReadTools(
             id: entry.id,
             at: entry.at,
             role: entry.role,
+            // 書き手と種類は redact 前の本文で導く（接頭辞の判定を伏せ字が崩さない）。
+            sender: exchangeSenderOf(entry),
+            kind: exchangeKindOf(entry.text),
             ...(entry.managerId === undefined
               ? {}
               : { managerId: redactor.redact(entry.managerId) }),
