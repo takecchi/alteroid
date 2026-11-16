@@ -456,6 +456,117 @@ describe('読み取りの道具: 利用状況・クローンのプロンプト',
     expect(sc(plain).today).toBe(http.today);
   });
 
+  // 1日 × manager 数百件。長い managerId で、既定の集計（byManager）だけで 60000 字を超える大きさにする
+  async function seedManyManagers(count: number) {
+    for (let i = 0; i < count; i += 1) {
+      const managerId = `manager-${String(i).padStart(4, '0')}-${'x'.repeat(40)}`;
+      await stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId,
+        date: '2026-11-15',
+        at: '2026-11-15T10:00:00.000Z',
+        snapshot: {
+          models: {
+            'claude-opus-5': {
+              inputTokens: 100 + i,
+              outputTokens: 10,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: i + 1,
+            },
+          },
+        },
+      });
+    }
+  }
+
+  it('usage_read: 既定のまま上限を超える大きさでも断らず、縮めて返す（縮めた印・元の大きさ・再取得の引数つき）', async () => {
+    const app = buildApp();
+    await seedManyManagers(400);
+    const result = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      layer: 'manager',
+    });
+    expect(result.json.result?.isError).not.toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(60_000);
+    const degraded = sc(result).degraded;
+    expect(degraded.originalChars).toBeGreaterThan(60_000);
+    expect(degraded.applied.top).toBeGreaterThan(0);
+    expect(degraded.retryExamples.length).toBeGreaterThan(0);
+    expect(degraded.howToRetry).toContain('sections');
+    // 黙って欠けない: 総数・返した件数・切った件数が一覧ごとに出る。合計は切る前の全体
+    const lists = sc(result).lists.byManager;
+    expect(lists.total).toBe(400);
+    expect(lists.returned + lists.omitted).toBe(400);
+    expect(lists.omitted).toBeGreaterThan(0);
+    expect(sc(result).breakdown.byManager).toHaveLength(lists.returned);
+    expect(sc(result).breakdown.total.costUsd).toBe((400 * 401) / 2);
+    // 費用の大きい順
+    expect(sc(result).breakdown.byManager[0].totals.costUsd).toBe(400);
+  });
+
+  it('usage_read: sections は返す欄だけを選び、["totals"] なら合計だけ。落とした一覧は lists に総数が残る', async () => {
+    const app = buildApp();
+    await seedManyManagers(400);
+    const totalsOnly = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      sections: ['totals'],
+    });
+    expect(totalsOnly.json.result?.isError).not.toBe(true);
+    expect(sc(totalsOnly).degraded).toBeUndefined();
+    expect(sc(totalsOnly).breakdown.total.costUsd).toBe((400 * 401) / 2);
+    expect(sc(totalsOnly).breakdown.byManager).toBeUndefined();
+    expect(sc(totalsOnly).unrecordedManagers).toBeUndefined();
+    expect(sc(totalsOnly).lists.byManager).toEqual({ total: 400, returned: 0, omitted: 400 });
+
+    const one = await callTool(app, OPERATOR, 'usage_read', {
+      from: '2026-11-15',
+      to: '2026-11-15',
+      sections: ['byLayer'],
+    });
+    expect(sc(one).breakdown.byLayer).toHaveLength(1);
+    expect(sc(one).breakdown.byManager).toBeUndefined();
+  });
+
+  it('usage_read: top は各一覧の上位 N 件を費用の大きい順に返し、切った分を lists に出す', async () => {
+    const app = buildApp();
+    await seedManyManagers(30);
+    const result = await callTool(app, OPERATOR, 'usage_read', { top: 3, sections: ['byManager'] });
+    const costs = (sc(result).breakdown.byManager as { totals: { costUsd: number } }[]).map(
+      (entry) => entry.totals.costUsd,
+    );
+    expect(costs).toEqual([30, 29, 28]);
+    expect(sc(result).lists.byManager).toEqual({ total: 30, returned: 3, omitted: 27 });
+    expect(sc(result).degraded).toBeUndefined();
+  });
+
+  it('usage_read: top も sections も渡さず小さいときは、従来の応答のまま（lists・degraded を足さない）', async () => {
+    const app = buildApp();
+    await seedUsage();
+    const plain = await callTool(app, OPERATOR, 'usage_read', {});
+    expect(sc(plain).lists).toBeUndefined();
+    expect(sc(plain).degraded).toBeUndefined();
+    expect(sc(plain).breakdown.byDate).toHaveLength(3);
+  });
+
+  it('断りの文は、その道具に実在する引数だけを挙げる（memory_list に limit・fieldChars・length は無い）', async () => {
+    const app = buildApp();
+    for (let i = 0; i < 700; i += 1) {
+      await stores.persona.write(`doc-${String(i)}`, 'x'.repeat(10));
+    }
+    const result = await callTool(app, OPERATOR, 'memory_list');
+    const text = result.json.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('大きすぎる');
+    expect(text).not.toContain('limit');
+    expect(text).not.toContain('fieldChars');
+    expect(text).toContain('memory_read');
+  });
+
   it('self_prompt は既定で大きさだけ（本文なし）。full: true は systemPrompt.text を頁送りし、道具は tool で1本ずつ', async () => {
     const app = buildApp();
     const small = await callTool(app, OPERATOR, 'self_prompt', {});
