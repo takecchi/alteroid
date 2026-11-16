@@ -139,7 +139,9 @@ describe('台帳の2行は、同じ会話の2回目以降も骨組みが毎回�
     for (const turn of [first, second, third]) {
       const lines = ledgerLines(turn.input);
       expect(lines).not.toContain(SKELETON);
-      expect(lines).toContain(`いま届いたこの一件は task \`${turn.id}\` として積んだ。${INTAKE_REF}`);
+      expect(lines).toContain(
+        `いま届いたこの一件は task \`${turn.id}\` として積んだ。${INTAKE_REF}`,
+      );
       expect(lines).toContain(HEAD_REF);
       expect(lines).not.toContain(HEAD_GUIDE);
       expect(lines).not.toContain(TAIL_REPEAT);

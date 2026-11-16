@@ -25,7 +25,9 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
 
     // 2026-11: 全文はシステムプロンプトの「差し込みの読み方」へ移した。入力には参照が出て、全文（READINGS_NOTICE）が文言を持つ
     expect(text).toContain(readingRef(READING.categories));
-    expect(READINGS_NOTICE).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
+    expect(READINGS_NOTICE).toContain(
+      '「手が空いている」は空き枠でも、終わった／枠が空いたでもない',
+    );
     expect(READINGS_NOTICE).toContain('背景処理待ちを含まない');
     expect(READINGS_NOTICE).toContain('「手が空いている」');
     for (const body of [text, READINGS_NOTICE]) {

@@ -633,7 +633,9 @@ describe('クローン — 同じマネージャーの連続する report をま
     expect(REPORT_FOLLOW_UP_GUIDE).toContain(
       '続きが要るなら `manager_send` で指示を出し、要らないなら何もしなくてよい。',
     );
-    expect(REPORT_FOLLOW_UP_GUIDE).toContain('学びや判断の基準になったことがあれば記憶へ移すこと。');
+    expect(REPORT_FOLLOW_UP_GUIDE).toContain(
+      '学びや判断の基準になったことがあれば記憶へ移すこと。',
+    );
     expect(solo).not.toContain('続けて');
     expect(solo).not.toContain('まとめて読んでから');
     expect(solo).not.toContain('**(1)**');

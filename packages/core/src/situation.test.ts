@@ -638,7 +638,9 @@ describe('describeSituation', () => {
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('直近のターンが失敗で終わっている');
     expect(text).toContain(READINGS_REF);
-    expect(READINGS_NOTICE).toContain('「手が空いている」は空き枠でも、終わった／枠が空いたでもない');
+    expect(READINGS_NOTICE).toContain(
+      '「手が空いている」は空き枠でも、終わった／枠が空いたでもない',
+    );
     expect(READINGS_NOTICE).toContain('その本数は1本以上あるときだけ上の行に出る');
   });
 
@@ -757,7 +759,9 @@ describe('describeSituation', () => {
     });
     // 説明文の全文は READINGS_NOTICE（システムプロンプトの〈区分〉の項）。入力には参照が出る
     expect(text).toContain(READINGS_REF);
-    const note = READINGS_NOTICE.split('。').find((part) => part.includes('「その他」は終端したもの'));
+    const note = READINGS_NOTICE.split('。').find((part) =>
+      part.includes('「その他」は終端したもの'),
+    );
     expect(note, '「その他」の説明文が見つからない').toBeDefined();
     expect(note).toContain('（failed / stopped）');
     expect(note).not.toContain('lost');

@@ -350,7 +350,8 @@ describe('クローン — 発意 tick の門', () => {
 
     // 2026-11: 発意の固定の指示（「次にやることがあるか」…）は「差し込みの読み方」へ移した。入力には参照が届く
     await waitForExpect(
-      () => expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
+      () =>
+        expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
       'tick の入力がモデルへ届く',
     );
 
@@ -366,7 +367,8 @@ describe('クローン — 発意 tick の門', () => {
 
     // 2026-11: 発意の固定の指示は「差し込みの読み方」へ移した。入力には参照が届く
     await waitForExpect(
-      () => expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
+      () =>
+        expect(s.calls.flatMap((call) => call.inputs).join('\n')).toContain(SELF_INITIATIVE_REF),
       'tick の入力がモデルへ届く',
     );
 
