@@ -521,7 +521,9 @@ export function registerReadTools(
         );
       }
       if (builtAt === null) {
-        notice.push('daemon.builtAt: 取れなかった（焼き込みが無いか値が空・壊れている）ので null。');
+        notice.push(
+          'daemon.builtAt: 取れなかった（焼き込みが無いか値が空・壊れている）ので null。',
+        );
       }
       if (claudeCodeVersion === null) {
         notice.push(
