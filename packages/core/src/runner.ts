@@ -126,7 +126,6 @@ import {
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { compareCodeUnits } from './code-unit-order.js';
 import { subreapedProcess, underSubreaper } from './delegation-subreaper.js';
-import { excerptLine } from './excerpt.js';
 import { toolFailureErrorText } from './tool-failure-error.js';
 import { relocateMcpConfigArgs } from './mcp-config-arg.js';
 import {
