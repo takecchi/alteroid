@@ -113,6 +113,7 @@ export function classifyExchangeText(
     case 'failure':
     case 'thinning':
     case 'gauge':
+    case 'record':
       return { kind: 'other', tagId, body, otherKey: `${hit.kind} の接頭辞` };
     case 'reply':
       break;

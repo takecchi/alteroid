@@ -244,14 +244,14 @@ const STALL = {
 } as const;
 
 describe('note の日誌（#journalNote）', () => {
-  it('stall 無し: reply の exchange（manager / inbound）。本文は `[managerId] text` で、escalate・notifyClone の有無で変えない', async () => {
+  it('stall 無し: record（`[記録]`）の exchange（manager / inbound）。担当の返事の `[応答]` にはしない。本文は `[managerId] text` で、escalate・notifyClone の有無で変えない', async () => {
     const s = await open();
     const plain = await s.note({ text: '旧 runner の note' });
     expect(plain.lines).toMatchInlineSnapshot(`
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 旧 runner の note",
+          "text": "[記録] [mgr-note-pin]旧 runner の note",
           "type": "exchange",
           "with": "manager",
         },
@@ -262,13 +262,13 @@ describe('note の日誌（#journalNote）', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 旧 runner の note",
+          "text": "[記録] [mgr-note-pin]旧 runner の note",
           "type": "exchange",
           "with": "manager",
         },
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 両方立てた note",
+          "text": "[記録] [mgr-note-pin]両方立てた note",
           "type": "exchange",
           "with": "manager",
         },
@@ -375,7 +375,7 @@ describe('note の知らせ（#emitNoteNotices）', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 上限（2回）に達したため、起こし直さなかった",
+          "text": "[記録] [mgr-note-pin]上限（2回）に達したため、起こし直さなかった",
           "type": "exchange",
           "with": "manager",
         },
@@ -521,7 +521,7 @@ describe('作業者の落ち（workerLimit）', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 作業者（tool_use toolu-1）だけが利用上限で落ちた。
+          "text": "[記録] [mgr-note-pin]作業者（tool_use toolu-1）だけが利用上限で落ちた。
       鍵の突き合わせ: 原文の resets（2026-11-02T15:20:00.000Z）に一致する鍵の枠は、プールの記録に無い。どの鍵のものかは言えない。",
           "type": "exchange",
           "with": "manager",
@@ -573,7 +573,7 @@ describe('作業者の落ち（workerLimit）', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 作業者が落ちた
+          "text": "[記録] [mgr-note-pin]作業者が落ちた
       鍵の突き合わせ: 原文の resets（2026-11-02T15:20:00.000Z）に一致する鍵の枠は、プールの記録に無い。どの鍵のものかは言えない。",
           "type": "exchange",
           "with": "manager",
@@ -605,7 +605,7 @@ describe('作業者の落ち（workerLimit）', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 落ちではない note",
+          "text": "[記録] [mgr-note-pin]落ちではない note",
           "type": "exchange",
           "with": "manager",
         },
@@ -747,13 +747,13 @@ describe('世代の添え方と tokenRotation', () => {
       [
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 偽",
+          "text": "[記録] [mgr-note-pin]偽",
           "type": "exchange",
           "with": "manager",
         },
         {
           "role": "inbound",
-          "text": "[応答] [mgr-note-pin] 開き直した",
+          "text": "[記録] [mgr-note-pin]開き直した",
           "type": "exchange",
           "with": "manager",
         },

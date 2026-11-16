@@ -1,4 +1,4 @@
-import { EXCHANGE_KIND_REPLY_PREFIX } from './exchange-kind.js';
+import { EXCHANGE_KIND_RECORD_PREFIX } from './exchange-kind.js';
 import type { ManagerRecord } from './manager.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
@@ -72,10 +72,11 @@ export class ManagerNoteReceiver {
   async journalNote(event: NoteEvent, noteText: string): Promise<void> {
     // 受信箱へは出さず日誌にだけ残す（マネージャーの発言ではない）。`escalate` の有無で変えない（下で足すだけ）。
     // `event.stall` の欄で判定し、本文の文字列で嗅がない。旧 runner の note は `stall` を知らず `exchange` に落ちる。
+    // `[応答]` ではなく `[記録]` で残す: 担当の返事ではなく runner の記録なので、`journal_read` / `exchanges` で返事に見せないため。
     if (event.stall === undefined) {
       await this.#journalExchange(
         'inbound',
-        `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}] ${noteText}`,
+        `${EXCHANGE_KIND_RECORD_PREFIX}[${event.managerId}] ${noteText}`,
       );
     } else {
       await this.#journal({

@@ -27,6 +27,7 @@ import {
   renderConversationCoverage,
 } from './diagnostics-conversation-format.js';
 import { DENIAL_REPLY_ROUTE } from './denial-key.js';
+import { EXCHANGE_KIND_RECORD_PREFIX } from './exchange-kind.js';
 import type { InboxEvent } from './schema.js';
 import { createSecretRedactor } from './secret-redaction.js';
 import { READINGS_NOTICE, SITUATION_HEAD } from './situation.js';
@@ -712,6 +713,19 @@ describe('会話の分析: 分類の鍵と書き手の突き合わせ', () => {
     const c = classifyExchangeText(`[応答] [m1/report] ${text}`, 'inbound');
     expect(c.kind).toBe('report');
     expect(text).toContain(REPORT_FULL_TEXT_NOTE_MARK);
+  });
+
+  it('担当の note の行（`[記録] [id] …`）は Pool の全文行に数えず、その他（record の接頭辞）へ分ける', () => {
+    const c = classifyExchangeText(
+      `${EXCHANGE_KIND_RECORD_PREFIX}[m1] tool_use_failure: 道具=commandExecution`,
+      'inbound',
+    );
+    expect(c).toEqual({
+      kind: 'other',
+      tagId: 'm1',
+      body: 'tool_use_failure: 道具=commandExecution',
+      otherKey: 'record の接頭辞',
+    });
   });
 
   it('conversationDistOf: 1件も無ければ合計も null（0 にしない）。p90 は最近順位法', () => {

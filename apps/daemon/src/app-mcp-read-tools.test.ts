@@ -592,6 +592,11 @@ describe('読み取りの道具: 日誌・やり取り', () => {
     });
     await stores.journal.append({ ...base, role: 'inbound', text: '[判断] 承認した' });
     await stores.journal.append({ ...base, role: 'inbound', text: '素の報告' });
+    await stores.journal.append({
+      ...base,
+      role: 'inbound',
+      text: '[記録] [mgr-x] tool_use_failure: 道具=commandExecution',
+    });
     const result = await callTool(app, OPERATOR, 'exchanges', { order: 'asc' });
     const rows = sc(result).exchanges as { role: string; sender: string; kind: string | null }[];
     expect(rows.map(({ role, sender, kind }) => ({ role, sender, kind }))).toEqual([
@@ -599,6 +604,7 @@ describe('読み取りの道具: 日誌・やり取り', () => {
       { role: 'outbound', sender: 'clone', kind: 'reply' },
       { role: 'inbound', sender: 'manager', kind: 'decision' },
       { role: 'inbound', sender: 'manager', kind: null },
+      { role: 'inbound', sender: 'manager', kind: 'record' },
     ]);
   });
 

@@ -455,7 +455,7 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
   },
   // 担当の `note` の日誌への書き込みを持つ協力者（旧 `Pool#journalNote`）。同じ検査をここへ移した。公開メソッド `journalNote` は `#` の付かない名前の行
   'manager-note.ts': {
-    journalNote: 'reply',
+    journalNote: 'record',
   },
   // reattach の梯子・移送（旧 `Pool#notifyResumeFallback` / `#notifyUnresumable` / `#settleResumedReattach`）。同じ検査をここへ移した。公開メソッドは `#` の付かない名前の行
   'manager-reattach.ts': {
@@ -709,7 +709,7 @@ describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（i
       expect(kindsByEnclosing(sites)).toEqual(KINDS_BY_ENCLOSING[file]);
     });
 
-    describe(`${file}: 各箇所が「with: 'human'（構造で応答と分かる）」か「6接頭辞のどれかを text に持つ」のどちらか`, () => {
+    describe(`${file}: 各箇所が「with: 'human'（構造で応答と分かる）」か「EXCHANGE_KIND_PREFIXES の接頭辞のどれかを text に持つ」のどちらか`, () => {
       for (const site of sites) {
         it(`${file}:${String(site.line)}（${site.enclosing}）`, () => {
           if (isLiteralHumanWith(site.objectText)) {
