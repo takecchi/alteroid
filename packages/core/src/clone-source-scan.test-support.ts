@@ -259,7 +259,7 @@ export const INLINED_BY_FILE: Readonly<
     buildActivityDigest: [
       {
         name: 'appendDecisionsSection',
-        call: 'appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount);',
+        call: 'appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount, historyLimit);',
         trailing: '',
       },
       {
@@ -269,12 +269,12 @@ export const INLINED_BY_FILE: Readonly<
       },
       {
         name: 'appendMemoryUpdatesSection',
-        call: 'appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount);',
+        call: 'appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount, historyLimit);',
         trailing: '',
       },
       {
         name: 'appendExternalsSection',
-        call: 'appendExternalsSection(sections, externals, externalsCount, externalSourceTally, options);',
+        call: 'appendExternalsSection(sections, externals, externalsCount, externalSourceTally, options, historyLimit);',
         trailing: '',
       },
     ],

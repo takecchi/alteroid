@@ -1017,11 +1017,11 @@ function appendDecisionsSection(
   decisions: readonly Extract<JournalEntry, { type: 'decision' }>[],
   decisionsCount: number,
   routineDecisionsCount: number,
-  limit: number,
+  historyLimit: number,
 ): void {
   if (decisionsCount > 0 || routineDecisionsCount > 0) {
     sections.push('', '## 聞かずに決めたこと');
-    const shownDecisions = decisions.slice(0, limit);
+    const shownDecisions = decisions.slice(0, historyLimit);
     for (const entry of shownDecisions) {
       sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
     }
@@ -1065,11 +1065,11 @@ function appendMemoryUpdatesSection(
   sections: string[],
   memoryUpdates: readonly Extract<JournalEntry, { type: 'memory_update' }>[],
   memoryUpdatesCount: number,
-  limit: number,
+  historyLimit: number,
 ): void {
   if (memoryUpdatesCount > 0) {
     sections.push('', '## 記憶の更新');
-    const shownMemoryUpdates = memoryUpdates.slice(0, limit);
+    const shownMemoryUpdates = memoryUpdates.slice(0, historyLimit);
     for (const entry of shownMemoryUpdates) {
       // 無いバイト数を `0` として出さない: 「変化が無かった」と読めてしまうため
       const action = entry.action === undefined ? '' : `/${entry.action}`;
@@ -1092,13 +1092,13 @@ function appendExternalsSection(
   externalsCount: number,
   externalSourceTally: ReturnType<typeof createSourceTally>,
   options: ActivityDigestOptions,
-  listLimit: number,
+  historyLimit: number,
 ): void {
   if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
     sections.push(EXTERNAL_EVENT_NOTE);
     // 発行元別の件数の表（正確な総数）は縮めない: 一覧を縮めても総数は残すため
-    const shownExternals = externals.slice(0, listLimit);
+    const shownExternals = externals.slice(0, historyLimit);
     for (const entry of shownExternals) {
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
     }
