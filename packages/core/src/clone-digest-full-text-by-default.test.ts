@@ -431,7 +431,10 @@ describe('tick・報告の包みの固定文は、2回目以降も毎回同じ�
         expect(text).not.toContain(INSTRUCTION_REF);
         expectCompleteFull(text);
         expect(text).toContain('担当 7 の途中経過');
-        expect(text).toContain('聞かずに決めたこと 0');
+        // 決めたことは新しい側から DIGEST_BODY_SHAPE_LIMIT（5）件まで: 6 件のうち古い 0 番は省略の行へ回る
+        expect(text).toContain('聞かずに決めたこと 1');
+        expect(text).not.toContain('聞かずに決めたこと 0');
+        expect(text).toContain('…ほか 1 件');
         expect(text).not.toContain(UNCHANGED_SECTION);
         expect(text).not.toMatch(/変わらない節:/u);
         expect(text).toContain('この件数は届いた合図の実数ではない');

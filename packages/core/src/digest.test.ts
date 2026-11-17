@@ -988,21 +988,34 @@ describe('上限で切ったことを黙らない', () => {
     },
   ];
 
-  it.each(journalSections)('$name 節', async ({ entry, types, label }) => {
-    const stores = createMemoryStores();
-    const total = MAX_ITEMS + 2;
-    for (let i = 0; i < total; i += 1) await stores.journal.append(entry(i));
+  // 節約が切（`trimHistory: false`）なら全部の節が MAX_ITEMS 件。有効（既定）なら履歴の3節だけ DIGEST_BODY_SHAPE_LIMIT 件に縮み、エスカレーションは MAX_ITEMS のまま
+  it.each(journalSections.flatMap((section) => [
+    { ...section, trimHistory: false, shownLimit: MAX_ITEMS },
+    {
+      ...section,
+      trimHistory: undefined,
+      shownLimit: section.name === 'エスカレーション' ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT,
+    },
+  ]))(
+    '$name 節（trimHistory: $trimHistory）',
+    async ({ entry, types, label, trimHistory, shownLimit }) => {
+      const stores = createMemoryStores();
+      const total = MAX_ITEMS + 2;
+      for (let i = 0; i < total; i += 1) await stores.journal.append(entry(i));
 
-    const digest = await buildActivityDigest(stores, { since: since() });
+      const digest = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
+        trimHistory,
+      });
 
-    expect(digest).toContain('…ほか 2 件');
-    expect(digest).toContain(types);
-    const shown = Array.from({ length: total }, (_, i) => i).filter((i) =>
-      digest.includes(label(i)),
-    );
-    expect(shown).toHaveLength(MAX_ITEMS);
-    expect(shown.length + 2).toBe(total);
-  });
+      expect(digest).toContain(`…ほか ${total - shownLimit} 件`);
+      expect(digest).toContain(types);
+      const shown = Array.from({ length: total }, (_, i) => i).filter((i) =>
+        digest.includes(label(i)),
+      );
+      expect(shown).toHaveLength(shownLimit);
+      expect(shown.length + (total - shownLimit)).toBe(total);
+    },
+  );
 });
 
 describe('届いた外部イベント — 発行元（source）別の内訳（#783）', () => {
@@ -1037,12 +1050,19 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
       });
     }
 
-    const digest = await buildActivityDigest(stores, { since: since() });
+    // 個別行と「本文の形」は、節約が有効でも切でも同じ上限になる（有効: DIGEST_BODY_SHAPE_LIMIT / 切: MAX_ITEMS）ので、省略の行は2つ（個別行・本文の形）が同じ件数で出る。
+    // 発行元別の件数の表（上限 MAX_ITEMS）は節約に関わらず縮まない
+    for (const [trimHistory, shownLimit] of [
+      [undefined, DIGEST_BODY_SHAPE_LIMIT],
+      [false, MAX_ITEMS],
+    ] as const) {
+      const digest = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
+        trimHistory,
+      });
 
-    // 個別行（MAX_ITEMS 件まで）の省略は 3 件、「本文の形」（DIGEST_BODY_SHAPE_LIMIT 行まで）の省略は total - 上限 件
-    expect(digest.split('…ほか 3 件').length - 1).toBe(1);
-    expect(digest).toContain(`…ほか ${total - DIGEST_BODY_SHAPE_LIMIT} 件`);
-    expect(digest).toContain('- その他: 3 件（3 の発行元）');
+      expect(digest.split(`…ほか ${total - shownLimit} 件`).length - 1).toBe(2);
+      expect(digest).toContain('- その他: 3 件（3 の発行元）');
+    }
   });
 
   it('本文の形は DIGEST_BODY_SHAPE_LIMIT 行までで、省略の行が件数と引き方を名乗る。5 行以下なら省略は出ない', async () => {
@@ -1090,12 +1110,20 @@ describe('届いた外部イベント — 発行元（source）別の内訳（#7
       });
     }
 
-    const digest = await buildActivityDigest(stores, { since: since() });
+    const digest = await buildActivityDigest(stores, { since: since() }, undefined, undefined, {
+      trimHistory: false,
+    });
 
     expect(digest).toContain('## 届いた外部イベント');
     expect(digest).toContain(`- ci: 届いた ${total - 1}`);
     expect(digest).toContain('…ほか 2 件');
     expect(digest).toContain('発行元（source）別の件数');
+
+    // 節約が有効（既定）なら個別行は DIGEST_BODY_SHAPE_LIMIT 件まで。省略の行は残る
+    const trimmed = await buildActivityDigest(stores, { since: since() });
+    expect(trimmed).toContain(`- ci: 届いた ${total - 1}`);
+    expect(trimmed).toContain(`…ほか ${total - DIGEST_BODY_SHAPE_LIMIT} 件`);
+    expect(trimmed).toContain('発行元（source）別の件数');
   });
 
   it('内訳（source tally）の合計が、外部イベントの正確な総数（externalsCount）と一致する（上限に当たらない場合）', async () => {
@@ -1598,7 +1626,14 @@ describe('digest 全体の大きさを測る歯（#414）', () => {
         snapshot: { models: { [`q-model-${i}`]: totals(10 - i / 100) } },
       });
     }
-    const digest = await buildActivityDigest(stores, { since: new Date(Date.now() - 60_000) });
+    // `trimHistory: false` で測る: 節約が有効なら履歴の3節（決めたこと・記憶の更新・外部イベント）は DIGEST_BODY_SHAPE_LIMIT 件を超えると合図が出る（digest-trim.test.ts が持つ）。MAX_ITEMS 件の境目はこの形でしか測れない
+    const digest = await buildActivityDigest(
+      stores,
+      { since: new Date(Date.now() - 60_000) },
+      undefined,
+      undefined,
+      { trimHistory: false },
+    );
 
     for (const heading of DECLARED_SECTIONS) expect(digest).toContain(heading);
     expect(digest).not.toContain('…ほか');
@@ -1931,15 +1966,25 @@ describe('OOM の本体を直す（issue #1283）— 日誌走査をページ単
       entryAt: (index) => ({ type: 'decision', decision: `decision-${index}`, grounds: 'g' }),
     });
 
-    const digest = await buildActivityDigest(storesWithSyntheticJournal(fake.store), {
-      since: new Date(0),
-    });
+    // 出す件数は節約の入り切りで変わる（有効: DIGEST_BODY_SHAPE_LIMIT / 切: MAX_ITEMS）。件数のカウンタが正確なことは両方で同じ
+    for (const [trimHistory, shownLimit] of [
+      [false, MAX_ITEMS],
+      [undefined, DIGEST_BODY_SHAPE_LIMIT],
+    ] as const) {
+      const digest = await buildActivityDigest(
+        storesWithSyntheticJournal(fake.store),
+        { since: new Date(0) },
+        undefined,
+        undefined,
+        { trimHistory },
+      );
 
-    expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
-    expect(digest).toContain(`自分で決めたこと ${total} /`);
-    const shown = digest.split('\n').filter((row) => row.includes('decision-')).length;
-    expect(shown).toBe(MAX_ITEMS);
-    expect(digest).toContain(`…ほか ${total - MAX_ITEMS} 件`);
+      expect(digest).not.toContain('DIGEST_JOURNAL_SCAN_LIMIT');
+      expect(digest).toContain(`自分で決めたこと ${total} /`);
+      const shown = digest.split('\n').filter((row) => row.includes('decision-')).length;
+      expect(shown).toBe(shownLimit);
+      expect(digest).toContain(`…ほか ${total - shownLimit} 件`);
+    }
   });
 
   it('exchange の走査は with: ["human"] をストア側へ渡す（人間以外の往復が limit の予算を食わない。issue #418 と同じ形の再発を防ぐ歯）', async () => {

@@ -36,7 +36,13 @@ interface DigestWindow {
 export const MAX_ITEMS = 15;
 
 // 履歴の性格の節は `MAX_ITEMS` より短くする: 次の判断の材料ではなく、毎回全文で出すと入力が嵩むため（省略の行から辿れる）
+// 使う節: 外部イベントの本文の形・聞かずに決めたこと・記憶の更新・届いた外部イベントの一覧（いずれも `trimHistory` が有効なときだけ）。
+// エスカレーションと人間の回答待ちには使わない: 前者は窓の外のキューに載らないマネージャー発の未回答がこの節にしか出ず、後者は次の行動の材料のため
 export const DIGEST_BODY_SHAPE_LIMIT = 5;
+
+// マネージャー節の1本ごとの抜粋（依頼・直近の報告）の上限。`trimHistory` が有効なときだけ使い、無効なら従来の 200 字
+// 短くする: 毎回の tick で最大 15 本ぶんの全文が積もるため。全文は `manager_list` / `manager_report` で引ける
+export const DIGEST_MANAGER_EXCERPT_LIMIT = 80;
 
 // `MAX_ITEMS` を保持の上限にしない: `omitted()` へ渡す「実際に保持できた件数」との差を確かめる余地が無くなるため
 export const DIGEST_RETAIN_LIMIT = 200;
@@ -564,12 +570,21 @@ export interface ManagersSectionInput {
   since: Date;
   /** 窓より前に終端した担当を畳むか（`ActivityDigestOptions.trimHistory` が `false` でないとき）。 */
   foldOldTerminated: boolean;
+  /** 1本ごとの依頼と直近の報告の抜粋の上限（字）。 */
+  excerptLimit: number;
 }
 
 /** マネージャーの節。出ないときは `[]`。全体の形と定期の依頼の形（`counts`）で同じものを使う。 */
 export function renderManagersSection(input: ManagersSectionInput): string[] {
-  const { managers, unreadableJobNote, liveness, awaitingBackground, since, foldOldTerminated } =
-    input;
+  const {
+    managers,
+    unreadableJobNote,
+    liveness,
+    awaitingBackground,
+    since,
+    foldOldTerminated,
+    excerptLimit,
+  } = input;
   if (managers.length === 0 && unreadableJobNote === null) return [];
   const lines = ['', '## マネージャー（走行中・返事待ちから先に出す）'];
   // #4938 の案1: 手が止まっている担当（done・stopped）は1本ずつ出さず、本数と id だけの1行に畳む
@@ -586,8 +601,10 @@ export function renderManagersSection(input: ManagersSectionInput): string[] {
   const shownManagers = listedManagers.slice(0, MAX_ITEMS);
   for (const job of shownManagers) {
     lines.push(
-      `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${brief(job.request ?? job.summary)}` +
-        (job.lastReport === undefined ? '' : `\n  直近の報告: ${brief(job.lastReport)}`) +
+      `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${brief(job.request ?? job.summary, excerptLimit)}` +
+        (job.lastReport === undefined
+          ? ''
+          : `\n  直近の報告: ${brief(job.lastReport, excerptLimit)}`) +
         describeLastFailureLine(job.lastFailure),
     );
   }
@@ -904,6 +921,7 @@ export async function buildActivityDigest(
       awaitingBackground,
       since: window.since,
       foldOldTerminated: options.trimHistory !== false,
+      excerptLimit: options.trimHistory === false ? 200 : DIGEST_MANAGER_EXCERPT_LIMIT,
     });
 
   // #4938 の案2: 定期の依頼の tick には、担当の節と継続中の依頼の節だけを中身ごと出し、他の節は件数の行にまとめる。
@@ -959,7 +977,11 @@ export async function buildActivityDigest(
 
   sections.push(...managersSection());
 
-  appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount);
+  // 履歴の3節（決めたこと・記憶の更新・外部イベント）の件数は `trimHistory` が有効なときだけ縮める: 節約の入り切りに従わせるため。
+  // エスカレーションは縮めない: 窓の外のキューに載らないマネージャー発の未回答は、この節にしか出ないため
+  const historyLimit = options.trimHistory === false ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT;
+
+  appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount, historyLimit);
 
   // 切った後の分だけ `getApproval` を引く: 切る前の全件に行うと、呼び出し回数が問いの総数に比例するため
   const shownEscalations: EscalationRow[] = [];
@@ -973,9 +995,16 @@ export async function buildActivityDigest(
 
   appendPendingSection(sections, pending, unreadableApprovalNote);
 
-  appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount);
+  appendMemoryUpdatesSection(sections, memoryUpdates, memoryUpdatesCount, historyLimit);
 
-  appendExternalsSection(sections, externals, externalsCount, externalSourceTally, options);
+  appendExternalsSection(
+    sections,
+    externals,
+    externalsCount,
+    externalSourceTally,
+    options,
+    historyLimit,
+  );
 
   sections.push('', ...(await usageSection(stores, window.since, until)));
 
@@ -988,10 +1017,11 @@ function appendDecisionsSection(
   decisions: readonly Extract<JournalEntry, { type: 'decision' }>[],
   decisionsCount: number,
   routineDecisionsCount: number,
+  limit: number,
 ): void {
   if (decisionsCount > 0 || routineDecisionsCount > 0) {
     sections.push('', '## 聞かずに決めたこと');
-    const shownDecisions = decisions.slice(0, MAX_ITEMS);
+    const shownDecisions = decisions.slice(0, limit);
     for (const entry of shownDecisions) {
       sections.push(`- ${entry.at} ${brief(entry.decision)}（根拠: ${brief(entry.grounds, 80)}）`);
     }
@@ -1035,10 +1065,11 @@ function appendMemoryUpdatesSection(
   sections: string[],
   memoryUpdates: readonly Extract<JournalEntry, { type: 'memory_update' }>[],
   memoryUpdatesCount: number,
+  limit: number,
 ): void {
   if (memoryUpdatesCount > 0) {
     sections.push('', '## 記憶の更新');
-    const shownMemoryUpdates = memoryUpdates.slice(0, MAX_ITEMS);
+    const shownMemoryUpdates = memoryUpdates.slice(0, limit);
     for (const entry of shownMemoryUpdates) {
       // 無いバイト数を `0` として出さない: 「変化が無かった」と読めてしまうため
       const action = entry.action === undefined ? '' : `/${entry.action}`;
@@ -1061,11 +1092,13 @@ function appendExternalsSection(
   externalsCount: number,
   externalSourceTally: ReturnType<typeof createSourceTally>,
   options: ActivityDigestOptions,
+  listLimit: number,
 ): void {
   if (externalsCount > 0) {
     sections.push('', '## 届いた外部イベント');
     sections.push(EXTERNAL_EVENT_NOTE);
-    const shownExternals = externals.slice(0, MAX_ITEMS);
+    // 発行元別の件数の表（正確な総数）は縮めない: 一覧を縮めても総数は残すため
+    const shownExternals = externals.slice(0, listLimit);
     for (const entry of shownExternals) {
       sections.push(`- ${entry.source}: ${brief(entry.summary, 120)}`);
     }

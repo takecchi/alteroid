@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildActivityDigest,
   DIGEST_COUNTS_TOOLS_NOTE,
+  DIGEST_BODY_SHAPE_LIMIT,
   DIGEST_COUNTS_TOOLS_REF,
+  DIGEST_MANAGER_EXCERPT_LIMIT,
+  MAX_ITEMS,
 } from './digest.js';
 import { buildSelfInitiativePrompt, buildTimerPrompt } from './prompt.js';
 import type { Stores } from './store.js';
@@ -262,6 +265,161 @@ describe('件数の形の要約（#4938 の案2）', () => {
     // 委譲の読めない行は担当の節が自分の断りで言うので、件数の行には載せない。承認待ちは載せる
     expect(sectionOf(counts, '## マネージャー')).toContain('broken-job');
     expect(counts).toContain('- 読めない行（壊れた行。上の件数には入っていない）: 承認待ち 1');
+  });
+});
+
+// 節約の入り切り（`trimHistory`）で、マネージャー節の抜粋の長さと履歴の節の件数が変わる。切（false）の出力は節約の前のまま
+describe('マネージャー節の抜粋は、節約が有効なとき DIGEST_MANAGER_EXCERPT_LIMIT 字に収まる', () => {
+  const LONG = 300;
+
+  async function seedLongManagers(stores: Stores): Promise<void> {
+    const now = new Date().toISOString();
+    for (let i = 0; i < 3; i += 1) {
+      await stores.jobs.putJob({
+        id: `mgr-long-${i}`,
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: `担当 ${i}`,
+        request: 'あ'.repeat(LONG),
+        lastReport: 'い'.repeat(LONG),
+      });
+    }
+  }
+
+  // 抜粋の本体（省略の印「…（N 文字省略。全 M 文字）」の前）の長さを、行ごとに取る
+  const bodyLengths = (section: string, pattern: RegExp): number[] =>
+    [...section.matchAll(pattern)].map((match) => (match[1] ?? '').length);
+
+  it.each([
+    ['全体の形', undefined],
+    ['件数の形', 'counts' as const],
+  ])('%s: 有効（既定）なら依頼も直近の報告も 80 字、切なら 200 字', async (_name, shape) => {
+    const stores = createMemoryStores();
+    await seedLongManagers(stores);
+    const build = (trimHistory: boolean | undefined) =>
+      buildActivityDigest(stores, window(), undefined, undefined, { shape, trimHistory });
+    const requestRow = /\] (あ+)…（/gu;
+    const reportRow = /直近の報告: (い+)…（/gu;
+
+    const trimmed = sectionOf(await build(undefined), '## マネージャー');
+    expect(DIGEST_MANAGER_EXCERPT_LIMIT).toBe(80);
+    expect(bodyLengths(trimmed, requestRow)).toEqual([80, 80, 80]);
+    expect(bodyLengths(trimmed, reportRow)).toEqual([80, 80, 80]);
+    expect(trimmed).toContain(`…（${LONG - 80} 文字省略。全 ${LONG} 文字）`);
+
+    const untrimmed = sectionOf(await build(false), '## マネージャー');
+    expect(bodyLengths(untrimmed, requestRow)).toEqual([200, 200, 200]);
+    expect(bodyLengths(untrimmed, reportRow)).toEqual([200, 200, 200]);
+    expect(untrimmed).toContain(`…（${LONG - 200} 文字省略。全 ${LONG} 文字）`);
+  });
+
+  it('上限より短い依頼と報告は、有効でも切れない', async () => {
+    const stores = createMemoryStores();
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-short',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '短い',
+      request: 'あ'.repeat(DIGEST_MANAGER_EXCERPT_LIMIT),
+      lastReport: 'い'.repeat(DIGEST_MANAGER_EXCERPT_LIMIT),
+    });
+    const section = sectionOf(await buildActivityDigest(stores, window()), '## マネージャー');
+    expect(section).toContain('あ'.repeat(DIGEST_MANAGER_EXCERPT_LIMIT));
+    expect(section).toContain('い'.repeat(DIGEST_MANAGER_EXCERPT_LIMIT));
+    expect(section).not.toContain('文字省略');
+  });
+});
+
+describe('履歴の節の件数は、節約が有効なとき DIGEST_BODY_SHAPE_LIMIT 件に縮み、切なら MAX_ITEMS 件のまま', () => {
+  const TOTAL = 20;
+
+  async function seedHistory(stores: Stores): Promise<void> {
+    const now = new Date().toISOString();
+    for (let i = 0; i < TOTAL; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `決めた ${i}`,
+        grounds: '記憶',
+      });
+      await stores.journal.append({
+        type: 'memory_update',
+        slug: `fact-${i}`,
+        cause: 'clone',
+        action: 'write',
+        bytesBefore: i,
+        bytesAfter: i + 1,
+        summary: `直した ${i}`,
+      });
+      await stores.journal.append({
+        type: 'external_event',
+        source: 'ci',
+        summary: `届いた ${i}`,
+      });
+      await stores.journal.append({
+        type: 'escalation',
+        question: `聞いた ${i}`,
+        approvalId: `esc-${i}`,
+        answer: `答え ${i}`,
+      });
+      await stores.jobs.putApproval({
+        id: `ap-${i}`,
+        createdAt: now,
+        question: `人間への問い ${i}`,
+      });
+    }
+  }
+
+  const rowsOf = (digest: string, heading: string): string[] =>
+    sectionOf(digest, heading)
+      .split('\n')
+      .filter((line) => line.startsWith('- ') && !line.startsWith('- …ほか'));
+
+  const omittedOf = (digest: string, heading: string): string[] =>
+    sectionOf(digest, heading)
+      .split('\n')
+      .filter((line) => line.startsWith('- …ほか'));
+
+  it.each([
+    ['聞かずに決めたこと', '## 聞かずに決めたこと'],
+    ['記憶の更新', '## 記憶の更新'],
+    ['届いた外部イベント', '## 届いた外部イベント'],
+  ])('%s: 有効なら 5 件と「…ほか 15 件」、切なら 15 件と「…ほか 5 件」', async (_name, heading) => {
+    const stores = createMemoryStores();
+    await seedHistory(stores);
+
+    const trimmed = await buildActivityDigest(stores, window());
+    expect(rowsOf(trimmed, heading)).toHaveLength(DIGEST_BODY_SHAPE_LIMIT);
+    expect(omittedOf(trimmed, heading)).toEqual([
+      expect.stringContaining(`…ほか ${TOTAL - DIGEST_BODY_SHAPE_LIMIT} 件`),
+    ]);
+
+    const untrimmed = await buildActivityDigest(stores, window(), undefined, undefined, {
+      trimHistory: false,
+    });
+    expect(rowsOf(untrimmed, heading)).toHaveLength(MAX_ITEMS);
+    expect(omittedOf(untrimmed, heading)).toEqual([
+      expect.stringContaining(`…ほか ${TOTAL - MAX_ITEMS} 件`),
+    ]);
+  });
+
+  it('有効でも、エスカレーションと人間の回答待ちは MAX_ITEMS 件のまま出る（発行元別の件数の表も縮まない）', async () => {
+    const stores = createMemoryStores();
+    await seedHistory(stores);
+
+    const trimmed = await buildActivityDigest(stores, window());
+
+    expect(rowsOf(trimmed, '## エスカレーション')).toHaveLength(MAX_ITEMS);
+    expect(omittedOf(trimmed, '## エスカレーション')).toEqual([
+      expect.stringContaining(`…ほか ${TOTAL - MAX_ITEMS} 件`),
+    ]);
+    expect(rowsOf(trimmed, '## 人間の回答待ち')).toHaveLength(MAX_ITEMS);
+    expect(omittedOf(trimmed, '## 人間の回答待ち')).toEqual([
+      expect.stringContaining(`…ほか ${TOTAL - MAX_ITEMS} 件`),
+    ]);
+    expect(trimmed).toContain(`- ci: ${TOTAL} 件`);
   });
 });
 

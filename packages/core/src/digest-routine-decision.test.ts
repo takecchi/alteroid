@@ -114,7 +114,11 @@ describe('字数の前後（旧い形の行 = routine 無し と 新しい形の
       for (let i = 0; i < 5; i += 1) {
         await stores.journal.append({ type: 'decision', decision: `判断 ${i}`, grounds: '記憶' });
       }
-      return sectionOf(await buildActivityDigest(stores, window()), '## 聞かずに決めたこと');
+      // `trimHistory: false` で測る: 節約が有効だと旧い形の定型 15 件も 5 件に縮み、定型を除いた効果が見えなくなるため
+      return sectionOf(
+        await buildActivityDigest(stores, window(), undefined, undefined, { trimHistory: false }),
+        '## 聞かずに決めたこと',
+      );
     };
     const before = await build(false);
     const after = await build(true);
