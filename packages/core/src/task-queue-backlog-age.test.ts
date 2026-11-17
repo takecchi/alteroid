@@ -237,7 +237,7 @@ describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () 
     expect(input.indexOf(BACKLOG_LINE)).toBeLessThan(input.indexOf('- q-1（'));
   });
 
-  it('報告だけのターン: 滞留の行は断り書きの待ち行列の節に 1 回だけ出る（先頭の行は出ない。2026-11-17 のオーナー判断）', async () => {
+  it('報告だけのターン: 滞留の行は断り書きの待ち行列の節に 1 回だけ出る（先頭の行は出ない。2026-11-17 のレビューでの判断。オーナーには未確認）', async () => {
     const stores = createMemoryStores();
     await seed(stores);
     const s = setup(undefined, stores);

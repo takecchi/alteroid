@@ -182,7 +182,7 @@ export class CloneTaskIntake {
     if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
     const nowMs = Date.now();
     // 報告だけの束は先頭の task を出さない（件数・needs_decision・最も古い滞留は残す）: 報告は毎時十数回あり、先頭3件の題がそのたびに会話履歴へ積もるため。
-    // 次の1件を選ぶのは発意の tick と人間の発言のターンで、そこでは先頭を出す。詰まりは件数の行と滞留の行で報告のターンでも見える（2026-11-17 のオーナー判断）。
+    // 次の1件を選ぶのは発意の tick と人間の発言のターンで、そこでは先頭を出す。詰まりは件数の行と滞留の行で報告のターンでも見える（2026-11-17 のレビューでの判断。オーナーには未確認）。
     // 参照（〈待ち行列〉）は先頭の行の読み方なので、行が無いなら出さない
     const rows = reportsOnly
       ? describeTaskQueueSummary(taskList, nowMs)

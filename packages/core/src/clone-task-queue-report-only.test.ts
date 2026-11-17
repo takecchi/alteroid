@@ -5,7 +5,7 @@ import type { InboxEvent, Task } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { READING, readingRef } from './turn-readings.js';
 
-// 待ち行列の節（断り書き `[system] 待ち行列（…`）は、束の全件がマネージャーの報告のときだけ、先頭の task を出さず件数と滞留の行だけにする（2026-11-17 のオーナー判断）。
+// 待ち行列の節（断り書き `[system] 待ち行列（…`）は、束の全件がマネージャーの報告のときだけ、先頭の task を出さず件数と滞留の行だけにする（2026-11-17 のレビューでの判断。オーナーには未確認）。
 // 報告は毎時十数回あり、先頭3件の題がそのたびに会話履歴へ積もる。次の1件を選ぶのは発意の tick と人間の発言のターンで、そこでは先頭を出す。
 // 件数・needs_decision・最も古い滞留は報告のターンにも残るので、詰まりは見える。
 

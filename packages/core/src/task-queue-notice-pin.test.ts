@@ -75,7 +75,7 @@ const noticeForReportTurn = (stores: Stores): Promise<string> =>
     text: '本文',
   });
 
-// 先頭の3件を出すターン。報告だけのターンは先頭を出さない（2026-11-17 のオーナー判断。clone-task-intake.ts の `#taskQueueNotice`）ので、先頭の描き方の pin はこちらで取る
+// 先頭の3件を出すターン。報告だけのターンは先頭を出さない（2026-11-17 のレビューでの判断。オーナーには未確認。clone-task-intake.ts の `#taskQueueNotice`）ので、先頭の描き方の pin はこちらで取る
 const noticeForQuestionTurn = (stores: Stores): Promise<string> =>
   noticeForTurn(stores, {
     type: 'manager_message',
@@ -94,7 +94,7 @@ function digestSectionOf(digest: string): string {
 }
 
 describe('待ち行列の節の今の出力（pin。今の作りで通る）', () => {
-  it('断り書き（報告だけのターン）: 件数の内訳と滞留の行だけ。先頭の行と案内の参照は出ない（2026-11-17 のオーナー判断）', async () => {
+  it('断り書き（報告だけのターン）: 件数の内訳と滞留の行だけ。先頭の行と案内の参照は出ない（2026-11-17 のレビューでの判断。オーナーには未確認）', async () => {
     const stores = createMemoryStores();
     await seedMixed(stores);
     const notice = await noticeForReportTurn(stores);
