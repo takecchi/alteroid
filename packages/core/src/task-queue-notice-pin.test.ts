@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setup, waitFor } from './clone-test-harness.js';
 import { buildActivityDigest } from './digest.js';
-import type { Task } from './schema.js';
+import type { InboxEvent, Task } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
@@ -56,9 +56,17 @@ function noticeOf(input: string): string {
   return input.slice(start, input.indexOf(NOTICE_END, start) + NOTICE_END.length);
 }
 
-async function noticeForReportTurn(stores: Stores): Promise<string> {
+async function noticeForTurn(stores: Stores, event: InboxEvent): Promise<string> {
   const s = setup(undefined, stores);
-  s.clone.post({
+  s.clone.post(event);
+  await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, 'ターン');
+  const input = s.calls[0]?.inputs[0] ?? '';
+  await s.clone.stop();
+  return noticeOf(input);
+}
+
+const noticeForReportTurn = (stores: Stores): Promise<string> =>
+  noticeForTurn(stores, {
     type: 'manager_message',
     id: 'evt-report',
     at: new Date().toISOString(),
@@ -66,11 +74,17 @@ async function noticeForReportTurn(stores: Stores): Promise<string> {
     kind: 'report',
     text: '本文',
   });
-  await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '報告のターン');
-  const input = s.calls[0]?.inputs[0] ?? '';
-  await s.clone.stop();
-  return noticeOf(input);
-}
+
+// 先頭の3件を出すターン。報告だけのターンは先頭を出さない（2026-11-17 のオーナー判断。clone-task-intake.ts の `#taskQueueNotice`）ので、先頭の描き方の pin はこちらで取る
+const noticeForQuestionTurn = (stores: Stores): Promise<string> =>
+  noticeForTurn(stores, {
+    type: 'manager_message',
+    id: 'evt-question',
+    at: new Date().toISOString(),
+    managerId: 'mgr-T',
+    kind: 'question',
+    text: '本文',
+  });
 
 function digestSectionOf(digest: string): string {
   const start = digest.indexOf('## 待ち行列の先頭');
@@ -80,10 +94,24 @@ function digestSectionOf(digest: string): string {
 }
 
 describe('待ち行列の節の今の出力（pin。今の作りで通る）', () => {
-  it('断り書き: queued / waiting / needs_decision が混ざるとき、件数の内訳・先頭の行・案内の1文だけ（古さは出ない）', async () => {
+  it('断り書き（報告だけのターン）: 件数の内訳と滞留の行だけ。先頭の行と案内の参照は出ない（2026-11-17 のオーナー判断）', async () => {
     const stores = createMemoryStores();
     await seedMixed(stores);
     const notice = await noticeForReportTurn(stores);
+    expect(notice).toMatchInlineSnapshot(`
+      "[system] 待ち行列（09:00:00Z に数えた材料）
+      - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）
+      - 滞留: needs_decision 1 件（最も古いのは 5日3時間前）
+
+      ---
+      "
+    `);
+  });
+
+  it('断り書き（質問のターン）: queued / waiting / needs_decision が混ざるとき、件数の内訳・先頭の行・案内の1文だけ（古さは出ない）', async () => {
+    const stores = createMemoryStores();
+    await seedMixed(stores);
+    const notice = await noticeForQuestionTurn(stores);
     expect(notice).toMatchInlineSnapshot(`
       "[system] 待ち行列（09:00:00Z に数えた材料）
       - 待ち行列: 開いている 3 件（queued 1 / waiting 1 / needs_decision 1）

@@ -23,6 +23,10 @@ export const TURN_READINGS_HEADING = '# 差し込みの読み方';
 /** 読み方の項の名前。各ターンの参照とシステムプロンプトの見出しが同じ値を使う。 */
 export const READING = {
   categories: '区分',
+  lost: 'lost',
+  lastFailure: '直近の失敗',
+  usageStopped: '枠で止まった委譲',
+  runnerVanished: '宛先の消えた委譲',
   queue: '待ち行列',
   intake: '取り込み',
   report: '報告',
@@ -65,6 +69,45 @@ export const READINGS_NOTICE =
   // 「その他」に lost を含めない: 成果の有無を観測していないのは lost だけで、failed / stopped と同じ袋に入れると「終わったもの」として読み飛ばされるため
   '「その他」は終端したもの（failed / stopped）と、done だが話しかけられないものである。' +
   '個別の状態は `manager_list` / `runner_list` で見る。';
+
+// ── 「いまの全体」の4つの断りのうち、引き方の説明だけをここへ移した（2026-11-17 のオーナー判断）。
+// 事故対策として判断の場面の隣に置いた文は `situation.ts` に毎ターン残る。ここの文言は移す前の現行の文から1文字も縮めていない。
+// 「直近のターンが失敗で終わっている」は situation.ts の `LAST_FAILURE_LABEL` の展開後の文字列を逐語で書く: このモジュールは葉で、situation.ts を読めないため。
+
+/** lost の断りのうち、引き方。 */
+export const LOST_READING =
+  '名指しで引くなら `manager_list` に status: ["lost"] を渡す（絞りは文字数の予算より前に効くので、' +
+  '古いものも本文に出る）。中身は `manager_report <managerId>` で読める。';
+
+/** 直近の失敗の断りのうち、仕様の説明と引き方。 */
+export const LAST_FAILURE_READING =
+  '失敗（枠(429)など）で畳まれた回も、セッションが生きているので `status` は動かさず `done` に座る（仕様である）。' +
+  '名指しで引くなら `manager_list` の各行に付く ⚠（`直近のターンは報告ではなく失敗で終わっている`）を見る' +
+  '——**この軸で絞る綴りは無い**（`status` の値ではない）。' +
+  '中身は `manager_report <managerId>` で読める。';
+
+/** 枠で止まった委譲の断りのうち、座り方と引き方。 */
+export const USAGE_STOPPED_READING =
+  '通常は鍵が回ってこの委譲が起こし直されるまで、`done`（手が空いている）または' +
+  '`running` のまま座る——セッションが生きている間は `status` を動かさない（仕様である）。' +
+  '**ただし、印が下りる前にセッションそのものが `failed` / `lost` / `stopped` として' +
+  '畳まれることがある**（Issue #1796）——その回は `status` がそちらへ確定している。' +
+  '直近のターンが失敗で終わっている委譲（上）と重なることが多いが同じ軸ではない' +
+  '（あちらは失敗の理由を問わない全体、こちらは利用上限に当たった委譲だけ）。' +
+  '名指しで引くなら `manager_list` の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見る' +
+  '（`status` も一緒に読めば、生きているか否かはその行だけで判定できる）。' +
+  '絞りでは切り出せない（`status` の値ではない）。' +
+  '中身は `manager_report <managerId>` で読める。';
+
+/** 宛先の消えた委譲の断りのうち、lost との違いと引き方。 */
+export const RUNNER_VANISHED_READING =
+  '`lost` が数えているのは「resume を試して前のセッションへ戻れなかった」と確かめた事実だけで、' +
+  'これは器（runner）が黙って名簿から entry ごと消えたのに `status` は `running` のまま残っているものである' +
+  '（`isLive()` は動かしていない。宛先を失っていても `sessionId` が残っていれば' +
+  '`manager_send` で resume を試せることがある）。' +
+  '名指しで引くなら `manager_list` の各行に付く注記（⚠ 宛先の runner が名簿から消えている）を見る' +
+  '——絞りでは切り出せない（`status` の値ではない）。' +
+  '中身は `manager_report <managerId>` で読める。';
 
 /** 待ち行列の先頭の行の読み方。 */
 export const TASK_QUEUE_HEAD_GUIDE =
@@ -161,6 +204,22 @@ export const DIGEST_IDLE_MANAGERS_NOTE =
 /** 項の並び。システムプロンプトの節はこの順で組む（入力に出てくる順に近い並び）。試験が「どの全文も毎ターンの入力に出ない」を確かめるので export する。 */
 export const TURN_READING_ENTRIES: readonly { name: ReadingName; where: string; text: string }[] = [
   { name: READING.categories, where: '「いまの全体」の委譲の行', text: READINGS_NOTICE },
+  { name: READING.lost, where: '「いまの全体」の lost の断り', text: LOST_READING },
+  {
+    name: READING.lastFailure,
+    where: '「いまの全体」の、直近のターンが失敗で終わっている委譲の断り',
+    text: LAST_FAILURE_READING,
+  },
+  {
+    name: READING.usageStopped,
+    where: '「いまの全体」の、枠(利用上限)で止まっている委譲の断り',
+    text: USAGE_STOPPED_READING,
+  },
+  {
+    name: READING.runnerVanished,
+    where: '「いまの全体」の、宛先の runner が名簿から消えている委譲の断り',
+    text: RUNNER_VANISHED_READING,
+  },
   {
     name: READING.queue,
     where: '「待ち行列」・要約の「待ち行列の先頭」',

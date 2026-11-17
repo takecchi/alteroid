@@ -18,7 +18,15 @@ import {
   latestManagerStartAt,
   RECENT_MANAGER_START_WINDOW_MS,
 } from './situation.js';
-import { READING, READINGS_NOTICE, readingRef } from './turn-readings.js';
+import {
+  LAST_FAILURE_READING,
+  LOST_READING,
+  READING,
+  READINGS_NOTICE,
+  RUNNER_VANISHED_READING,
+  USAGE_STOPPED_READING,
+  readingRef,
+} from './turn-readings.js';
 
 // 2026-11: 「区分の読み方」の全文はシステムプロンプトの「差し込みの読み方」へ移した（turn-readings.ts）。
 // 毎回の出力には参照が出る（READINGS_REF）。以前 text に直接かけていた文言の検査は、参照が出ること + 全文（READINGS_NOTICE）がその文言を持つことの2つへ分けて縛る。
@@ -446,7 +454,9 @@ describe('describeSituation', () => {
     });
     expect(text).toContain('戻れなかった(lost) 1');
     expect(text).toContain('成果の有無は1度も観測していない');
-    expect(text).toContain('status: ["lost"]');
+    // 2026-11-17: 名指しの引き方は参照の先（システムプロンプトの〈lost〉の項）へ移した。入力には参照が出る
+    expect(text).toContain(readingRef(READING.lost));
+    expect(LOST_READING).toContain('status: ["lost"]');
     expect(text).toContain('`manager_start` で起こし直さないこと');
   });
 
@@ -606,8 +616,10 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
     expect(countsLine).toContain('上の区分とは足し合わせない');
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
-    expect(text).toContain('この軸で絞る綴りは無い');
-    expect(text).toContain('`manager_report <managerId>`');
+    // 2026-11-17: 引き方は参照の先（〈直近の失敗〉の項）へ移した。入力には参照が出る
+    expect(text).toContain(readingRef(READING.lastFailure));
+    expect(LAST_FAILURE_READING).toContain('この軸で絞る綴りは無い');
+    expect(LAST_FAILURE_READING).toContain('`manager_report <managerId>`');
   });
 
   it('⭐ （陰性対照）lastFailure が無ければ本数も断り書きも1文字も出ない', () => {
@@ -661,10 +673,12 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
     expect(countsLine).toContain('上の区分とは足し合わせない');
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
-    expect(text).toContain('manager_list');
-    expect(text).toContain('の各行に付く注記');
-    expect(text).toContain('名指しで引くなら');
-    expect(text).toContain('`manager_report <managerId>`');
+    // 2026-11-17: 引き方は参照の先（〈枠で止まった委譲〉の項）へ移した。入力には参照が出る
+    expect(text).toContain(readingRef(READING.usageStopped));
+    expect(USAGE_STOPPED_READING).toContain('manager_list');
+    expect(USAGE_STOPPED_READING).toContain('の各行に付く注記');
+    expect(USAGE_STOPPED_READING).toContain('名指しで引くなら');
+    expect(USAGE_STOPPED_READING).toContain('`manager_report <managerId>`');
   });
 
   it('⭐ （陰性対照）usageStoppedAt が無ければ本数も断り書きも1文字も出ない', () => {
@@ -713,10 +727,12 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('宛先の runner が名簿から entry ごと消えているのは 2 本');
     expect(countsLine).toContain('必ず「走行中」の内側');
     expect(countsLine).toContain('上の区分とは足し合わせない');
+    // `manager_list status: ["lost"]` の絞りでは見えない、という残す文は毎ターン出る。lost との違いと引き方は参照の先（〈宛先の消えた委譲〉の項）へ移した（2026-11-17）
     expect(text).toContain('manager_list status: ["lost"]');
-    expect(text).toContain('isLive()');
-    expect(text).toContain('`manager_report <managerId>`');
-    expect(text).toContain('絞りでは切り出せない');
+    expect(text).toContain(readingRef(READING.runnerVanished));
+    expect(RUNNER_VANISHED_READING).toContain('isLive()');
+    expect(RUNNER_VANISHED_READING).toContain('`manager_report <managerId>`');
+    expect(RUNNER_VANISHED_READING).toContain('絞りでは切り出せない');
   });
 
   it('⭐ （陰性対照）runnerVanished が無ければ本数も断り書きも1文字も出ない', () => {

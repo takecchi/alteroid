@@ -215,7 +215,29 @@ function count(text: string, needle: string): number {
 }
 
 describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () => {
-  it('人間以外の報告のターン: 断り書きの待ち行列の節に 1 回だけ出る', async () => {
+  it('人間以外の質問のターン: 断り書きの待ち行列の節に 1 回だけ出る（先頭の行は滞留の行の後）', async () => {
+    const stores = createMemoryStores();
+    await seed(stores);
+    const s = setup(undefined, stores);
+    s.clone.post({
+      type: 'manager_message',
+      id: 'evt-question',
+      at: new Date().toISOString(),
+      managerId: 'mgr-T',
+      kind: 'question',
+      text: '本文',
+    });
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 1, '質問のターン');
+    const input = s.calls[0]?.inputs[0] ?? '';
+    await s.clone.stop();
+
+    expect(count(input, BACKLOG_LINE)).toBe(1);
+    const start = input.indexOf('[system] 待ち行列（');
+    expect(input.indexOf(BACKLOG_LINE)).toBeGreaterThan(start);
+    expect(input.indexOf(BACKLOG_LINE)).toBeLessThan(input.indexOf('- q-1（'));
+  });
+
+  it('報告だけのターン: 滞留の行は断り書きの待ち行列の節に 1 回だけ出る（先頭の行は出ない。2026-11-17 のオーナー判断）', async () => {
     const stores = createMemoryStores();
     await seed(stores);
     const s = setup(undefined, stores);
@@ -234,7 +256,7 @@ describe('(f) 呼び元ごとの出方（既存の振る舞いを保つ）', () 
     expect(count(input, BACKLOG_LINE)).toBe(1);
     const start = input.indexOf('[system] 待ち行列（');
     expect(input.indexOf(BACKLOG_LINE)).toBeGreaterThan(start);
-    expect(input.indexOf(BACKLOG_LINE)).toBeLessThan(input.indexOf('- q-1（'));
+    expect(input).not.toContain('- q-1（');
   });
 
   it('発意の tick: 先頭を要約に任せる回。滞留の行も要約の節に 1 回だけで、断り書き側には出ない', async () => {

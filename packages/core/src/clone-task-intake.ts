@@ -1,13 +1,18 @@
 import { noteDroppedRecord, inboxEventShape, reasonOf } from './dropped-record.js';
 import { EXCHANGE_KIND_FAILURE_PREFIX } from './exchange-kind.js';
 import { describeTaskQueuePlacement } from './clone-turn-input-text.js';
+import { isManagerReport } from './clone-batch-prompts.js';
 import type { HumanMessage } from './clone-batch-prompts.js';
 import { DAILY_REPORT_KIND } from './schedule.js';
 import type { InboxEvent, JournalEntryInput } from './schema.js';
 import { readAtLabel } from './situation.js';
 import type { Stores } from './store.js';
 import { opensHumanTask, taskFromHumanIntake } from './task-auto-done.js';
-import { describeTaskQueueHead, TASK_QUEUE_HEAD_LIMIT } from './task-tools.js';
+import {
+  describeTaskQueueHead,
+  describeTaskQueueSummary,
+  TASK_QUEUE_HEAD_LIMIT,
+} from './task-tools.js';
 import { describeWaitingReplyLines, selectWaitingReplyTasks } from './waiting-task-reply-notice.js';
 
 /**
@@ -98,6 +103,7 @@ export class CloneTaskIntake {
       placedTaskEvents,
       failedTaskEvents,
       tickDigestCarriesTaskQueueHead(events),
+      events.every(isManagerReport),
     );
 
     // 待ち行列の先頭を要約に任せた回（`head` が空）は、固定の1文も出さない: 1文が指す先頭の行が、この断り書きには無いため。
@@ -151,6 +157,8 @@ export class CloneTaskIntake {
     failed: readonly HumanMessage[],
     // 要約が同じ待ち行列の先頭を載せる回は、読めたときの先頭を出さない（読めなかった断りは要約に無いので残す）
     leaveHeadToDigest: boolean,
+    // 束の全件がマネージャーの報告（質問・許可確認・拒否の確認ではない）
+    reportsOnly: boolean,
   ): Promise<{ head: string[]; placed: string[]; failed: string[] }> {
     const { placed: placedLines, failed: failedLines } = describeTaskQueuePlacement(
       placed.map((pending) => pending.id),
@@ -173,7 +181,12 @@ export class CloneTaskIntake {
     }
     if (leaveHeadToDigest) return { head: [], placed: placedLines, failed: failedLines };
     const nowMs = Date.now();
-    const rows = describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT, nowMs });
+    // 報告だけの束は先頭の task を出さない（件数・needs_decision・最も古い滞留は残す）: 報告は毎時十数回あり、先頭3件の題がそのたびに会話履歴へ積もるため。
+    // 次の1件を選ぶのは発意の tick と人間の発言のターンで、そこでは先頭を出す。詰まりは件数の行と滞留の行で報告のターンでも見える（2026-11-17 のオーナー判断）。
+    // 参照（〈待ち行列〉）は先頭の行の読み方なので、行が無いなら出さない
+    const rows = reportsOnly
+      ? describeTaskQueueSummary(taskList, nowMs)
+      : describeTaskQueueHead(taskList, { limit: TASK_QUEUE_HEAD_LIMIT, nowMs });
     return {
       head: [`[system] 待ち行列（${readAtLabel(nowMs)} に数えた材料）`, ...rows],
       placed: placedLines,

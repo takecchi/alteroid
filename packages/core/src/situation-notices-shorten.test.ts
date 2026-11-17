@@ -4,7 +4,15 @@ import { ORIGIN_NO_TASK_GUIDE } from './clone-batch-prompts.js';
 import type { ManagerSummary } from './manager.js';
 import type { JobStatus } from './schema.js';
 import { describeSituation } from './situation.js';
-import { READING, READINGS_NOTICE, readingRef } from './turn-readings.js';
+import {
+  LAST_FAILURE_READING,
+  LOST_READING,
+  READING,
+  READINGS_NOTICE,
+  RUNNER_VANISHED_READING,
+  USAGE_STOPPED_READING,
+  readingRef,
+} from './turn-readings.js';
 
 function summary(id: string, status: JobStatus): ManagerSummary {
   return {
@@ -43,7 +51,9 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
 
     expect(text).toContain('**戻れなかった(lost) は「終わった」ではない。**');
     expect(text).toContain('**成果の有無は1度も観測していない**');
-    expect(text).toContain('名指しで引くなら `manager_list` に status: ["lost"] を渡す');
+    // 2026-11-17: 名指しの引き方は参照の先（〈lost〉の項）へ移した
+    expect(text).toContain(readingRef(READING.lost));
+    expect(LOST_READING).toContain('名指しで引くなら `manager_list` に status: ["lost"] を渡す');
   });
 
   it('直近のターンが失敗で終わっている注意に、残すべき語がある', () => {
@@ -60,7 +70,8 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
     expect(text).toContain(
       'この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。',
     );
-    expect(text).toContain('**この軸で絞る綴りは無い**');
+    expect(text).toContain(readingRef(READING.lastFailure));
+    expect(LAST_FAILURE_READING).toContain('**この軸で絞る綴りは無い**');
   });
 
   it('枠(利用上限)で止まっている注意に、残すべき語がある', () => {
@@ -71,8 +82,9 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
     expect(text).toContain(
       'この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。',
     );
-    expect(text).toContain('Issue #1796');
-    expect(text).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(text).toContain(readingRef(READING.usageStopped));
+    expect(USAGE_STOPPED_READING).toContain('Issue #1796');
+    expect(USAGE_STOPPED_READING).toContain('⚠ 枠(利用上限)で止まっている');
   });
 
   it('宛先の runner が消えている注意に、残すべき語がある', () => {
@@ -80,7 +92,8 @@ describe('『いまの全体』の注意書きの短縮（意味を落とさな�
 
     const text = describeSituation({ managers: [manager], runners: [] });
 
-    expect(text).toContain('⚠ 宛先の runner が名簿から消えている');
+    expect(text).toContain(readingRef(READING.runnerVanished));
+    expect(RUNNER_VANISHED_READING).toContain('⚠ 宛先の runner が名簿から消えている');
     expect(text).toContain('必ず「走行中」の内側に座る');
   });
 

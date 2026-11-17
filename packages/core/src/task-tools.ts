@@ -138,6 +138,21 @@ export function describeTaskBacklogAge(list: Pick<TaskList, 'entries'>, nowMs: n
 }
 
 /**
+ * 待ち行列の件数の1行・読めない行の断り・滞留の1行（あれば）。先頭の task の行は含まない。
+ * `describeTaskQueueHead` の前半と、報告だけのターンの断り書き（先頭を出さない形。`clone-task-intake.ts`）が同じ行を使うために切り出した（出力は切り出す前と1文字も変わらない）。
+ */
+export function describeTaskQueueSummary(list: TaskList, nowMs: number): string[] {
+  const lines = [`- ${describeTaskQueueCount(list)}`];
+  if (list.unreadable.length > 0) {
+    lines.push(
+      `- 読めない task の行が ${list.unreadable.length} 件ある（上の件数には入っていない。終わったのではない）`,
+    );
+  }
+  lines.push(...describeTaskBacklogAge(list, nowMs));
+  return lines;
+}
+
+/**
  * 発意 tick の入力の「待ち行列の先頭」の行。件数の1行・読めない行の断り・滞留の1行（あれば）・先頭 `limit` 件・1行の案内。
  * 並びは `list.entries` のまま（器は並べ直さない。先頭が先にやるもの）。読めない行は 0 に丸めず件数で断る（終わったのではない）。
  * 開いている件が無ければ件数の行（と読めない行の断り）だけで、案内は出さない。
@@ -147,13 +162,7 @@ export function describeTaskQueueHead(
   options: { limit: number; nowMs: number },
 ): string[] {
   const open = list.entries.filter((task) => !isTaskClosed(task.status));
-  const lines = [`- ${describeTaskQueueCount(list)}`];
-  if (list.unreadable.length > 0) {
-    lines.push(
-      `- 読めない task の行が ${list.unreadable.length} 件ある（上の件数には入っていない。終わったのではない）`,
-    );
-  }
-  lines.push(...describeTaskBacklogAge(list, options.nowMs));
+  const lines = describeTaskQueueSummary(list, options.nowMs);
   if (open.length === 0) return lines;
   const shown = open.slice(0, options.limit);
   for (const task of shown) {

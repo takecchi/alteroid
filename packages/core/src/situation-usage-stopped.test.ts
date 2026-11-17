@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ManagerSummary } from './manager.js';
 import type { JobStatus } from './schema.js';
 import { describeSituation } from './situation.js';
+import { READING, USAGE_STOPPED_READING, readingRef } from './turn-readings.js';
 
 function summary(id: string, status: JobStatus): ManagerSummary {
   return {
@@ -24,11 +25,13 @@ describe('describeSituation: USAGE_STOPPED_NOTICE は「ずっと done/running �
     const text = describeSituation({ managers: [manager], runners: [] });
 
     expect(text).toContain('枠(利用上限)で止まっているのは 1 本');
-    expect(text).toContain(
+    // 2026-11-17: 座り方と #1796 の例外は参照の先（システムプロンプトの〈枠で止まった委譲〉の項）へ移した。入力には参照が出る
+    expect(text).toContain(readingRef(READING.usageStopped));
+    expect(USAGE_STOPPED_READING).toContain(
       'セッションそのものが `failed` / `lost` / `stopped` として畳まれることがある',
     );
-    expect(text).toContain('#1796');
-    expect(text).toContain('通常は鍵が回ってこの委譲が起こし直されるまで');
+    expect(USAGE_STOPPED_READING).toContain('#1796');
+    expect(USAGE_STOPPED_READING).toContain('通常は鍵が回ってこの委譲が起こし直されるまで');
   });
 
   it('usageStoppedAt が1本以上あれば、status: stopped でも同じ例外を明記する', () => {
@@ -37,10 +40,11 @@ describe('describeSituation: USAGE_STOPPED_NOTICE は「ずっと done/running �
     const text = describeSituation({ managers: [manager], runners: [] });
 
     expect(text).toContain('枠(利用上限)で止まっているのは 1 本');
-    expect(text).toContain(
+    expect(text).toContain(readingRef(READING.usageStopped));
+    expect(USAGE_STOPPED_READING).toContain(
       'セッションそのものが `failed` / `lost` / `stopped` として畳まれることがある',
     );
-    expect(text).toContain('#1796');
+    expect(USAGE_STOPPED_READING).toContain('#1796');
   });
 
   it('⭐ 陰性対照。usageStoppedAt が無ければ、この断り書きは1文字も出ない', () => {

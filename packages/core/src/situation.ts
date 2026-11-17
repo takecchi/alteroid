@@ -43,9 +43,9 @@ const LOST_NOTICE =
   `**${LOST_LABEL} は「終わった」ではない。** 見ているのは「前のセッションへ戻れたか」だけで、` +
   '**成果の有無は1度も観測していない** — 落ちる前に成果が既に外へ出ていた（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）' +
   '実例がある。⟹ 誰かがそこを確かめるまで終われない。' +
-  '名指しで引くなら `manager_list` に status: ["lost"] を渡す（絞りは文字数の予算より前に効くので、' +
-  '古いものも本文に出る）。中身は `manager_report <managerId>` で読める。' +
-  RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN;
+  RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN +
+  // 引き方（名指しの綴り・中身の読み先）は参照の先へ移した（2026-11-17 のオーナー判断）。事故対策の文（成果を観測していない・確かめる前に起こし直さない）は判断の場面の隣に毎ターン残す
+  readingRef(READING.lost);
 
 // status の区分にしない: 軸の実体は lastFailure で status と独立に立ち、枠(429)で畳まれた回も status は done のままのため
 const LAST_FAILURE_LABEL = '直近のターンが失敗で終わっている';
@@ -54,11 +54,8 @@ const LAST_FAILURE_LABEL = '直近のターンが失敗で終わっている';
 // status で切り出せると書かない: この軸には絞りの綴りが無く、引けるのは各行の ⚠ だけのため
 const LAST_FAILURE_NOTICE =
   `**${LAST_FAILURE_LABEL}委譲は、区分の中では見分けが付かない。** ` +
-  '失敗（枠(429)など）で畳まれた回も、セッションが生きているので `status` は動かさず `done` に座る（仕様である）。' +
   '⟹ **この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。** ' +
-  '名指しで引くなら `manager_list` の各行に付く ⚠（`直近のターンは報告ではなく失敗で終わっている`）を見る' +
-  '——**この軸で絞る綴りは無い**（`status` の値ではない）。' +
-  '中身は `manager_report <managerId>` で読める。';
+  readingRef(READING.lastFailure);
 
 // lastTurnFailed と排他にしない: 利用上限で止まった委譲は通常 lastTurnFailed 側にも数えられ、走行中は usage_notice が先に届いて重ならないこともあり、片方からもう一方を推測できないため
 const USAGE_STOPPED_LABEL = '枠(利用上限)で止まっている';
@@ -67,17 +64,8 @@ const USAGE_STOPPED_LABEL = '枠(利用上限)で止まっている';
 // 「ずっと done/running のまま座る」と書き切らない: 印が下りる前に failed / lost / stopped へ確定することがあり、集計からは見分けられないため
 const USAGE_STOPPED_NOTICE =
   `**${USAGE_STOPPED_LABEL}委譲は、区分の中では見分けが付かない。** ` +
-  '通常は鍵が回ってこの委譲が起こし直されるまで、`done`（手が空いている）または' +
-  '`running` のまま座る——セッションが生きている間は `status` を動かさない（仕様である）。' +
   '⟹ **この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。** ' +
-  '**ただし、印が下りる前にセッションそのものが `failed` / `lost` / `stopped` として' +
-  '畳まれることがある**（Issue #1796）——その回は `status` がそちらへ確定している。' +
-  `${LAST_FAILURE_LABEL}委譲（上）と重なることが多いが同じ軸ではない` +
-  '（あちらは失敗の理由を問わない全体、こちらは利用上限に当たった委譲だけ）。' +
-  '名指しで引くなら `manager_list` の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見る' +
-  '（`status` も一緒に読めば、生きているか否かはその行だけで判定できる）。' +
-  '絞りでは切り出せない（`status` の値ではない）。' +
-  '中身は `manager_report <managerId>` で読める。';
+  readingRef(READING.usageStopped);
 
 // lost に数えない: lost は resume を試して戻れなかったと確かめた事実に付く名前で、器の判定がそこまで進んでいない委譲は lost の絞りに掛からないため
 const RUNNER_VANISHED_LABEL = '宛先の runner が名簿から entry ごと消えている';
@@ -85,14 +73,8 @@ const RUNNER_VANISHED_LABEL = '宛先の runner が名簿から entry ごと消�
 // running から外さない: 外すと「置けない」と読まれ、空き枠を作らない原則を壊すため
 const RUNNER_VANISHED_NOTICE =
   `**${RUNNER_VANISHED_LABEL}委譲は、\`manager_list status: ["lost"]\` の絞りでは見えない。** ` +
-  '`lost` が数えているのは「resume を試して前のセッションへ戻れなかった」と確かめた事実だけで、' +
-  'これは器（runner）が黙って名簿から entry ごと消えたのに `status` は `running` のまま残っているものである' +
-  '（`isLive()` は動かしていない。宛先を失っていても `sessionId` が残っていれば' +
-  '`manager_send` で resume を試せることがある）。' +
   '⟹ **必ず「走行中」の内側に座る**（区分とは足し合わせない）。' +
-  '名指しで引くなら `manager_list` の各行に付く注記（⚠ 宛先の runner が名簿から消えている）を見る' +
-  '——絞りでは切り出せない（`status` の値ではない）。' +
-  '中身は `manager_report <managerId>` で読める。';
+  readingRef(READING.runnerVanished);
 
 // 横断する軸（reachable / lastTurnFailed* / usageStopped* / runnerVanished）を6つの区分と足し合わせない: status と独立に立ち、走行中にも返事待ちにも重なりうるため。
 // lost を other に入れない: 毎ターン載る節で other に潰れて、どの面からも本数が読めなかったため。
