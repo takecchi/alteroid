@@ -989,14 +989,16 @@ describe('上限で切ったことを黙らない', () => {
   ];
 
   // 節約が切（`trimHistory: false`）なら全部の節が MAX_ITEMS 件。有効（既定）なら履歴の3節だけ DIGEST_BODY_SHAPE_LIMIT 件に縮み、エスカレーションは MAX_ITEMS のまま
-  it.each(journalSections.flatMap((section) => [
-    { ...section, trimHistory: false, shownLimit: MAX_ITEMS },
-    {
-      ...section,
-      trimHistory: undefined,
-      shownLimit: section.name === 'エスカレーション' ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT,
-    },
-  ]))(
+  it.each(
+    journalSections.flatMap((section) => [
+      { ...section, trimHistory: false, shownLimit: MAX_ITEMS },
+      {
+        ...section,
+        trimHistory: undefined,
+        shownLimit: section.name === 'エスカレーション' ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT,
+      },
+    ]),
+  )(
     '$name 節（trimHistory: $trimHistory）',
     async ({ entry, types, label, trimHistory, shownLimit }) => {
       const stores = createMemoryStores();

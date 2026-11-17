@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DIGEST_COUNTS_LINE_HEAD,
   DIGEST_COUNTS_TOOLS_REF,
+  DIGEST_MANAGER_EXCERPT_LIMIT,
   MAX_ITEMS,
   STANDING_SECTION_HEADING_HEAD,
   TASK_QUEUE_SECTION_HEADING_HEAD,
@@ -178,8 +179,10 @@ function legacyManagersSection(input: ManagersSectionInput): string[] {
   const shownManagers = listedManagers.slice(0, MAX_ITEMS);
   for (const job of shownManagers) {
     lines.push(
-      `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${oldBrief(job.request ?? job.summary)}` +
-        (job.lastReport === undefined ? '' : `\n  直近の報告: ${oldBrief(job.lastReport)}`) +
+      `- ${job.id} [${describeManagerState(job.status, liveness?.get(job.id), awaitingBackground?.get(job.id))}] ${oldBrief(job.request ?? job.summary, input.excerptLimit)}` +
+        (job.lastReport === undefined
+          ? ''
+          : `\n  直近の報告: ${oldBrief(job.lastReport, input.excerptLimit)}`) +
         oldDescribeLastFailureLine(job.lastFailure),
     );
   }
@@ -493,25 +496,29 @@ describe('旧式との 1 文字比べ（B1: buildActivityDigest の節ごとの�
         for (const foldOldTerminated of [true, false]) {
           for (const liveness of [undefined, LIVENESS]) {
             for (const awaitingBackground of [undefined, AWAITING]) {
-              const input: ManagersSectionInput = {
-                managers,
-                unreadableJobNote: note,
-                liveness,
-                awaitingBackground,
-                since: SINCE,
-                foldOldTerminated,
-              };
-              const actual = renderManagersSection(input);
-              expect(actual.join('\n'), name).toBe(legacyManagersSection(input).join('\n'));
-              expect(actual, name).toEqual(legacyManagersSection(input));
-              seen.add(actual.join('\n'));
-              compared += 1;
+              // 抜粋の上限は 200（節約の前）と DIGEST_MANAGER_EXCERPT_LIMIT（節約が有効）の両方で測る
+              for (const excerptLimit of [200, DIGEST_MANAGER_EXCERPT_LIMIT]) {
+                const input: ManagersSectionInput = {
+                  managers,
+                  unreadableJobNote: note,
+                  liveness,
+                  awaitingBackground,
+                  since: SINCE,
+                  foldOldTerminated,
+                  excerptLimit,
+                };
+                const actual = renderManagersSection(input);
+                expect(actual.join('\n'), name).toBe(legacyManagersSection(input).join('\n'));
+                expect(actual, name).toEqual(legacyManagersSection(input));
+                seen.add(actual.join('\n'));
+                compared += 1;
+              }
             }
           }
         }
       }
     }
-    expect(compared).toBe(7 * 2 * 2 * 2 * 2);
+    expect(compared).toBe(7 * 2 * 2 * 2 * 2 * 2);
     // 前提: 入力の違いが出力の違いになっている（全部が同じ出力になる退化をしていない）
     expect(seen.size).toBeGreaterThan(40);
   });
@@ -610,6 +617,7 @@ describe('旧式との 1 文字比べ（B1: buildActivityDigest の節ごとの�
       awaitingBackground: AWAITING,
       since: SINCE,
       foldOldTerminated: true,
+      excerptLimit: 200,
     });
     let compared = 0;
     const seen = new Set<string>();
