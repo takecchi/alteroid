@@ -37,7 +37,7 @@ export const MAX_ITEMS = 15;
 
 // 履歴の性格の節は `MAX_ITEMS` より短くする: 次の判断の材料ではなく、毎回全文で出すと入力が嵩むため（省略の行から辿れる）
 // 使う節: 外部イベントの本文の形・聞かずに決めたこと・記憶の更新・届いた外部イベントの一覧（いずれも `trimHistory` が有効なときだけ）。
-// エスカレーションと人間の回答待ちには使わない: 前者は窓の外のキューに載らないマネージャー発の未回答がこの節にしか出ず、後者は次の行動の材料のため
+// エスカレーションと人間の回答待ちには使わない: 前者は承認待ちキューに載らないマネージャー発の未回答がこの節にしか出ず、後者は次の行動の材料のため
 export const DIGEST_BODY_SHAPE_LIMIT = 5;
 
 // マネージャー節の1本ごとの抜粋（依頼・直近の報告）の上限。`trimHistory` が有効なときだけ使い、無効なら従来の 200 字
@@ -978,7 +978,7 @@ export async function buildActivityDigest(
   sections.push(...managersSection());
 
   // 履歴の3節（決めたこと・記憶の更新・外部イベント）の件数は `trimHistory` が有効なときだけ縮める: 節約の入り切りに従わせるため。
-  // エスカレーションは縮めない: 窓の外のキューに載らないマネージャー発の未回答は、この節にしか出ないため
+  // エスカレーションは縮めない: 承認待ちキューに載らないマネージャー発の未回答は、この節にしか出ないため
   const historyLimit = options.trimHistory === false ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT;
 
   appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount, historyLimit);
