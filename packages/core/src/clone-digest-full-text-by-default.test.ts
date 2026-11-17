@@ -243,6 +243,38 @@ describe('tick の要約は、同じ会話の中でも前回からの差分に�
     expect(report).not.toMatch(/ほかの \d+ 件は前回/u);
     await s.clone.stop();
   });
+
+  // 日報は人間が普段読む唯一の層で、聞かずに決めたことを人間が後から読んで否定できることが最終承認の実体のため、
+  // 履歴の3節（決めたこと・記憶の更新・外部イベント）を縮めない（2026-11-17 のオーナー判断）。同じ材料の発意の tick は 5 件に縮む
+  it('⭐ 日報の要約は、節約が有効でも聞かずに決めたことと外部イベントを 15 件まで出す（発意の tick は 5 件）', async () => {
+    const s = boot();
+    await seed(s.stores);
+
+    const self = await selfTick(s);
+    const before = s.inputs.length;
+    eventSeq += 1;
+    s.clone.post({
+      type: 'timer',
+      id: `evt-report-${eventSeq}`,
+      at: new Date().toISOString(),
+      kind: 'daily_report',
+      cause: 'manual',
+      target: new Date().toISOString().slice(0, 10),
+    });
+    await waitFor(() => s.inputs.length > before, '日報の入力');
+    const report = s.inputs[before] ?? '';
+
+    // 決めたこと 6 件: 日報は全部、発意の tick は新しい 5 件だけ（いちばん古い 0 番が省略の行へ回る）
+    for (const i of [0, 1, 2, 3, 4, 5]) expect(report).toContain(`聞かずに決めたこと ${i}（根拠`);
+    expect(self).not.toContain('聞かずに決めたこと 0（根拠');
+    for (const i of [1, 2, 3, 4, 5]) expect(self).toContain(`聞かずに決めたこと ${i}（根拠`);
+    // 外部イベント 20 件: 日報は新しい 15 件（19〜5）、発意の tick は新しい 5 件（19〜15）
+    expect(report).toContain('届いた出来事 5。');
+    expect(report).not.toContain('届いた出来事 4。');
+    expect(self).toContain('届いた出来事 15。');
+    expect(self).not.toContain('届いた出来事 14。');
+    await s.clone.stop();
+  });
 });
 
 describe('tick の種類で要約を出し分ける（#4938 の案2）', () => {

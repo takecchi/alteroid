@@ -85,7 +85,11 @@ export class CloneDigest {
   }
 
   // 日報は「記憶の床」の1行を付けない: tick という区切りに数を出す仕組みで、日報はその区切りではないため
-  async bare(shape: DigestShape = 'full'): Promise<string> {
+  // `keepOversightHistory` は日報の逃げ道（日付の範囲が取れなかった回）が渡す: 日報の材料の履歴の節を縮めないため（`buildActivityDigest` の同名の欄）
+  async bare(
+    shape: DigestShape = 'full',
+    options: { keepOversightHistory?: boolean } = {},
+  ): Promise<string> {
     try {
       const axes = await this.axes();
       return await buildActivityDigest(
@@ -93,7 +97,11 @@ export class CloneDigest {
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
         axes.liveness,
         axes.awaitingBackground,
-        { shape, trimHistory: this.#ports.tokenSavingExcerpt() },
+        {
+          shape,
+          trimHistory: this.#ports.tokenSavingExcerpt(),
+          ...(options.keepOversightHistory === true ? { keepOversightHistory: true } : {}),
+        },
       );
     } catch (error) {
       // 件数の形（定期の依頼の tick）は断り書き側が先頭を持つので足さない

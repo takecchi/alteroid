@@ -245,7 +245,7 @@ exports[`clone.ts の長いメソッドの中身を、出した先を差し戻�
   "sections.push(...renderTaskQueueSection(taskList, Date.now()));",
   "sections.push(...standingSection());",
   "sections.push(...managersSection());",
-  "const historyLimit = options.trimHistory === false ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT;",
+  "const historyLimit = options.trimHistory === false || options.keepOversightHistory === true ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT;",
   "if (decisionsCount > 0 || routineDecisionsCount > 0) {sections.push('', '## 聞かずに決めたこと');",
   "const shownDecisions = decisions.slice(0, historyLimit);",
   "for (const entry of shownDecisions) {sections.push(\`- \${entry.at} \${brief(entry.decision)}（根拠: \${brief(entry.grounds, 80)}）\`);} sections.push(...omitted(decisionsCount, shownDecisions.length, journalWhere('decision')));",

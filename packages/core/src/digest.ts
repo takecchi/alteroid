@@ -178,6 +178,12 @@ interface ActivityDigestOptions {
    * `false` は節約の前の形: 本文の形を `MAX_ITEMS` 件まで、失敗の印が付いた担当は終端の時刻を問わず1本ずつ出す。
    */
   trimHistory?: boolean;
+  /**
+   * 「聞かずに決めたこと」「記憶の更新」「届いた外部イベント」の一覧を、`trimHistory` が有効でも `MAX_ITEMS` 件まで出すか。省略は出さない（5 件に縮める）。
+   * 日報が `true` を渡す: 日報は人間が普段読む唯一の層で、聞かずに決めたことを人間が後から読んで否定できることが最終承認の実体のため（2026-11-17 のオーナー判断）。
+   * 担当の節の抜粋（`DIGEST_MANAGER_EXCERPT_LIMIT`）はこの欄では戻さない（日報でも 80 字でよいと決めてある）。
+   */
+  keepOversightHistory?: boolean;
 }
 
 // 件数の形の要約の断り（`DIGEST_COUNTS_TOOLS_NOTE`）と、手が止まっている担当の行の読み方（`DIGEST_IDLE_MANAGERS_NOTE`）の全文は
@@ -978,8 +984,12 @@ export async function buildActivityDigest(
   sections.push(...managersSection());
 
   // 履歴の3節（決めたこと・記憶の更新・外部イベント）の件数は `trimHistory` が有効なときだけ縮める: 節約の入り切りに従わせるため。
-  // エスカレーションは縮めない: 承認待ちキューに載らないマネージャー発の未回答は、この節にしか出ないため
-  const historyLimit = options.trimHistory === false ? MAX_ITEMS : DIGEST_BODY_SHAPE_LIMIT;
+  // エスカレーションは縮めない: 承認待ちキューに載らないマネージャー発の未回答は、この節にしか出ないため。
+  // 日報（`keepOversightHistory`）も縮めない: 人間が後から読んで否定できる材料を減らさないため
+  const historyLimit =
+    options.trimHistory === false || options.keepOversightHistory === true
+      ? MAX_ITEMS
+      : DIGEST_BODY_SHAPE_LIMIT;
 
   appendDecisionsSection(sections, decisions, decisionsCount, routineDecisionsCount, historyLimit);
 

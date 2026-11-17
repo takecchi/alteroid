@@ -90,7 +90,7 @@ export class CloneDailyReport {
     const axes = range === null ? null : await this.#digest.axes();
     const digest =
       range === null || axes === null
-        ? await this.#digest.bare()
+        ? await this.#digest.bare('full', { keepOversightHistory: true })
         : await buildActivityDigest(
             this.#ports.stores(),
             range,
@@ -98,6 +98,7 @@ export class CloneDailyReport {
             axes.awaitingBackground,
             {
               trimHistory: this.#ports.tokenSavingExcerpt(),
+              keepOversightHistory: true,
             },
           ).catch(
             async (error: unknown) =>

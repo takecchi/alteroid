@@ -421,6 +421,37 @@ describe('履歴の節の件数は、節約が有効なとき DIGEST_BODY_SHAPE_
     ]);
     expect(trimmed).toContain(`- ci: ${TOTAL} 件`);
   });
+
+  // 日報が渡す欄（`keepOversightHistory`）。日報は人間が後から読んで否定できる材料なので、履歴の3節を縮めない。担当の抜粋は日報でも 80 字のまま
+  it.each([
+    ['聞かずに決めたこと', '## 聞かずに決めたこと'],
+    ['記憶の更新', '## 記憶の更新'],
+    ['届いた外部イベント', '## 届いた外部イベント'],
+  ])('%s: 有効でも keepOversightHistory なら MAX_ITEMS 件出る', async (_name, heading) => {
+    const stores = createMemoryStores();
+    await seedHistory(stores);
+    const now = new Date().toISOString();
+    await stores.jobs.putJob({
+      id: 'mgr-long',
+      createdAt: now,
+      updatedAt: now,
+      status: 'running',
+      summary: '担当',
+      request: 'あ'.repeat(300),
+    });
+
+    const oversight = await buildActivityDigest(stores, window(), undefined, undefined, {
+      keepOversightHistory: true,
+    });
+
+    expect(rowsOf(oversight, heading)).toHaveLength(MAX_ITEMS);
+    expect(omittedOf(oversight, heading)).toEqual([
+      expect.stringContaining(`…ほか ${TOTAL - MAX_ITEMS} 件`),
+    ]);
+    expect(sectionOf(oversight, '## マネージャー')).toContain(
+      `${'あ'.repeat(DIGEST_MANAGER_EXCERPT_LIMIT)}…（${300 - DIGEST_MANAGER_EXCERPT_LIMIT} 文字省略。全 300 文字）`,
+    );
+  });
 });
 
 describe('#4938 の測定（担当30本・継続中の依頼10本など）', () => {
