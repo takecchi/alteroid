@@ -67,17 +67,24 @@ export function describeWorkerLimit(
 }
 
 /**
- * 身元。`WorkerLimitNotices.record` が重複を判定するキー（#4996）。作業者を呼んだ tool_use の id にそろえる: 作業者の発言の拒否の印と
- * タスクの失敗通知は同じ作業者について別々に届き、名札も原文も違うので、身元を tool_use の id にそろえないと2回記録されるため。
- * tool_use の id が分からなければ task の id、どちらも無ければ背景の作業者 1 つ。名札（`workerLimitLabel`）と対にして使う。
+ * 身元の別名の集合。`WorkerLimitNotices.record` が重複を判定するキー（#4996）。作業者の発言の拒否の印とタスクの失敗通知は
+ * 同じ作業者について別々に届き、名札も原文も違うので、身元でそろえないと2回記録されるため。
+ * 1つの id にそろえず別名の集合にする: 作業者が SendMessage で再開されると SDK は同じ task_id のまま新しい run を立て、
+ * 通知の `tool_use_id` は再開した呼び出しの id になる一方、発言の `parent_tool_use_id` は最初に立てた呼び出しの id のままで、
+ * tool_use の id だけでは両者が一致しないため。task の id（発言側は `agent_id`）は再開しても変わらないので先に置く。
+ * `agent_id` を出さない古い CLI では tool_use の id の一致だけが頼りなので、分かる tool_use の id は全部入れる。
+ * どれも無ければ背景の作業者 1 つ。名札（`workerLimitLabel`）と対にして使う。
  */
-export function workerLimitIdentity(
-  toolUseId: string | undefined,
+export function workerLimitIdentities(
+  toolUseIds: readonly (string | undefined)[],
   taskId: string | undefined,
-): string {
-  if (toolUseId !== undefined) return `tool_use:${toolUseId}`;
-  if (taskId === undefined) return 'background-worker';
-  return `task:${taskId}`;
+): string[] {
+  const aliases = new Set<string>();
+  if (taskId !== undefined) aliases.add(`task:${taskId}`);
+  for (const toolUseId of toolUseIds) {
+    if (toolUseId !== undefined) aliases.add(`tool_use:${toolUseId}`);
+  }
+  return aliases.size === 0 ? ['background-worker'] : [...aliases];
 }
 
 /** 名札。分かる id を全部書く（tool_use と task の両方が分かれば両方）。どちらも無ければ「背景の作業者」。 */
@@ -106,15 +113,17 @@ export class WorkerLimitNotices {
 
   /**
    * 新しく覚えたら `true`（日誌・クローンへ運ぶ側がこれで1回だけ運ぶ）。重複は `false`。
-   * 重複は作業者の身元（`identity`）だけで判定する。名札（`label`）と原文は判定に使わない:
+   * 重複は作業者の身元の別名（`identities`）だけで判定する。名札（`label`）と原文は判定に使わない:
    * 作業者が落ちると発言の拒否の印とタスクの失敗通知の2つが届き、名札も原文も違うので、名札＋原文で見ると2回記録されたため（#4996）。
+   * どれか1つでも最近見ていれば重複。新規の回は全部の別名を控える: 再開で tool_use の id が変わった後の合図を、
+   * 前に控えた別名（task の id）で拾うため。
    */
-  record(identity: string, label: string, raw: string, nowMs: number): boolean {
+  record(identities: readonly string[], label: string, raw: string, nowMs: number): boolean {
     for (const [key, at] of this.#recent) {
       if (nowMs - at >= WORKER_LIMIT_DEDUPE_MS) this.#recent.delete(key);
     }
-    if (this.#recent.has(identity)) return false;
-    this.#recent.set(identity, nowMs);
+    if (identities.some((identity) => this.#recent.has(identity))) return false;
+    for (const identity of identities) this.#recent.set(identity, nowMs);
     if (this.#pending.length >= WORKER_LIMIT_PENDING_MAX) {
       const dropped = this.#pending.shift();
       if (dropped !== undefined) this.#deliveredTo.delete(dropped);

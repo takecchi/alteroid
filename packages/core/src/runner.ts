@@ -312,7 +312,7 @@ import {
   WORKER_LIMIT_PRE_ROTATION_KEY_SENTENCE,
   WORKER_LIMIT_REOPENED_NUDGE,
   WorkerLimitNotices,
-  workerLimitIdentity,
+  workerLimitIdentities,
   workerLimitLabel,
 } from './runner-worker-limit-notice.js';
 import { StaleUntrackedNotices } from './runner-stale-untracked.js';
@@ -4354,8 +4354,8 @@ class RunnerSession {
         // 構造化された印（errorCode）だけで判定し、本文の引用では立てない（#4903）
         if (turnFailureKindOf(assistantFailureOf(event.errorCode, workerText)) === 'quota') {
           this.#recordWorkerLimit(
-            workerLimitIdentity(event.parentToolUseId, undefined),
-            workerLimitLabel(event.parentToolUseId, undefined),
+            workerLimitIdentities([event.parentToolUseId], event.agentId),
+            workerLimitLabel(event.parentToolUseId, event.agentId),
             workerText.length > 0 ? workerText : rejected.code,
           );
         }
@@ -4557,13 +4557,13 @@ class RunnerSession {
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
       // 失敗の通知で、文言が「上限に当たった」と読めるものに限る（`reached`）。completed の報告の引用では立てない（#4903）
       if (event.summary !== undefined && classifyUsageNotice(event.summary)?.kind === 'reached') {
-        // 身元は作業者を呼んだ tool_use の id にそろえる: 作業者の発言の拒否の印と同じ作業者を、2回記録しないため（#4996）
-        const toolUseId =
-          event.toolUseId ??
-          (taskId === undefined ? undefined : this.#toolUseIdByTaskId.get(taskId));
+        // 身元は別名の集合: 作業者の発言の拒否の印と同じ作業者を、2回記録しないため（#4996）。再開された作業者は通知の tool_use の id が
+        // 発言の parent_tool_use_id と食い違うので、task の id と、通知の id・task_started で控えた id の両方を別名にする
+        const mappedToolUseId =
+          taskId === undefined ? undefined : this.#toolUseIdByTaskId.get(taskId);
         this.#recordWorkerLimit(
-          workerLimitIdentity(toolUseId, taskId),
-          workerLimitLabel(toolUseId, taskId),
+          workerLimitIdentities([event.toolUseId, mappedToolUseId], taskId),
+          workerLimitLabel(event.toolUseId ?? mappedToolUseId, taskId),
           event.summary,
         );
       }
@@ -5527,12 +5527,12 @@ class RunnerSession {
   /**
    * 作業者が利用上限で落ちた事実を覚え、日誌とクローンの受信箱へ運ぶ（#4903）。担当のターンが成功しても捨てない。
    * 枠の印（`#usageStopped`）・`usage_notice`・鍵の回転の契機にはしない: 担当は動けるため。原文は伏せ字を通す。
-   * 重複は身元（作業者を呼んだ tool_use の id）でそろえる: 作業者が上限で落ちると、作業者の発言の拒否の印とタスクの失敗通知の2つが届き、
+   * 重複は身元の別名（task の id と tool_use の id。`workerLimitIdentities`）でそろえる: 作業者が上限で落ちると、作業者の発言の拒否の印とタスクの失敗通知の2つが届き、
    * 名札も原文も違うので2回記録して知らせが2通になっていた（#4996）。
    */
-  #recordWorkerLimit(identity: string, label: string, raw: string): void {
+  #recordWorkerLimit(identities: readonly string[], label: string, raw: string): void {
     const shown = redactErrorText(raw, process.env, this.#vaultValues());
-    if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
+    if (!this.#workerLimitNotices.record(identities, label, shown, Date.now())) return;
     // `wantsTokenRecycle` で判定しない: `GH_TOKEN` の差し替えや peer の開閉でも立ち、そのときは鍵は回っていないため（Claude の鍵が変わった回だけの印を読む）
     const preRotationKey = this.#sdkSession.onPreRotationClaudeKey;
     if (preRotationKey) this.#workerLimitOnPreRotationKey = true;

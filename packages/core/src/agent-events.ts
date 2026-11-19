@@ -90,6 +90,8 @@ interface AgentTextDelta {
 interface AgentAssistantMessage {
   type: 'assistant_message';
   parentToolUseId: string | null;
+  // 作業者の task id。再開されても変わらない（parentToolUseId は最初に立てた呼び出しの id のまま）。読めなければ省く
+  agentId?: string;
   blocks: readonly AgentContentBlock[];
   id?: string;
   errorCode?: string;

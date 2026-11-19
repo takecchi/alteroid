@@ -780,10 +780,12 @@ export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
       // 本文を載せず印だけを載せる: 本文の取り出し方は層によって違い、表示と報告の作法の側のため
       const errorCode = (message as { error?: unknown }).error;
       const messageId = (message as { uuid?: unknown }).uuid;
+      const agentId = (message as { agent_id?: unknown }).agent_id;
       return [
         {
           type: 'assistant_message',
           parentToolUseId: parentToolUseIdOf(message),
+          ...(typeof agentId === 'string' && agentId.length > 0 ? { agentId } : {}),
           blocks: contentBlocksOf((message as { message?: unknown }).message),
           ...(typeof messageId === 'string' && messageId.length > 0 ? { id: messageId } : {}),
           ...(typeof errorCode === 'string' && errorCode.trim().length > 0 ? { errorCode } : {}),

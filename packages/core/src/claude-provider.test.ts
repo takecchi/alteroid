@@ -648,6 +648,31 @@ describe('foldClaudeMessage — assistant', () => {
     ).toMatchObject({ parentToolUseId: 'tu-parent' });
   });
 
+  it('SDK の `agent_id`（作業者の task id。再開されても変わらない）は文字列のときだけ `agentId` へ写す', () => {
+    expect(
+      only(
+        sdk({
+          type: 'assistant',
+          parent_tool_use_id: 'tu-parent',
+          agent_id: 'task-T',
+          message: { content: [{ type: 'text', text: '作業者です' }] },
+        }),
+      ),
+    ).toMatchObject({ parentToolUseId: 'tu-parent', agentId: 'task-T' });
+
+    for (const agent_id of ['', 1, {}, null, undefined]) {
+      const event = only(
+        sdk({
+          type: 'assistant',
+          parent_tool_use_id: 'tu-parent',
+          agent_id,
+          message: { content: [] },
+        }),
+      );
+      expect(event).not.toHaveProperty('agentId');
+    }
+  });
+
   it('**「応答ではない」の印は、空でない文字列のときだけ載る**', () => {
     expect(
       only(sdk({ type: 'assistant', message: { content: [] }, error: 'billing_error' })),

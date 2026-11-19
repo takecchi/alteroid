@@ -52,8 +52,8 @@ describe('describeWorkerLimit', () => {
 describe('WorkerLimitNotices', () => {
   it('同じ相手へは間隔を置く。相手が違えば別に数える。担当本人に配ったものは消える', () => {
     const notices = new WorkerLimitNotices();
-    expect(notices.record('a', 'a', LIMIT_TEXT, 0)).toBe(true);
-    expect(notices.record('a', 'a', LIMIT_TEXT, 1)).toBe(false);
+    expect(notices.record(['a'], 'a', LIMIT_TEXT, 0)).toBe(true);
+    expect(notices.record(['a'], 'a', LIMIT_TEXT, 1)).toBe(false);
     expect(notices.next('agent-1', false, 10)).not.toBeNull();
     expect(notices.next('manager', true, 20)).not.toBeNull();
     // 配ったものは消えている
@@ -62,21 +62,30 @@ describe('WorkerLimitNotices', () => {
 
   it('間隔内に新しい落ちが来ても、間隔が明けるまで添えない', () => {
     const notices = new WorkerLimitNotices();
-    notices.record('a', 'a', LIMIT_TEXT, 0);
+    notices.record(['a'], 'a', LIMIT_TEXT, 0);
     expect(notices.next('manager', true, 0)).not.toBeNull();
-    notices.record('b', 'b', LIMIT_TEXT, 1);
+    notices.record(['b'], 'b', LIMIT_TEXT, 1);
     expect(notices.next('manager', true, WORKER_LIMIT_NOTICE_INTERVAL_MS - 1)).toBeNull();
     expect(notices.next('manager', true, WORKER_LIMIT_NOTICE_INTERVAL_MS)).not.toBeNull();
   });
 
   it('同じ身元は、名札と原文が違っても期間内は新しい記録にしない。違う身元・期間を過ぎたあとは記録する（#4996）', () => {
     const notices = new WorkerLimitNotices();
-    expect(notices.record('tool_use:X', 'tool_use X', LIMIT_TEXT, 0)).toBe(true);
-    expect(notices.record('tool_use:X', 'tool_use X ・task T', '別の原文', 1)).toBe(false);
-    expect(notices.record('tool_use:Y', 'tool_use Y', LIMIT_TEXT, 2)).toBe(true);
-    expect(notices.record('tool_use:X', 'tool_use X', LIMIT_TEXT, WORKER_LIMIT_DEDUPE_MS)).toBe(
+    expect(notices.record(['tool_use:X'], 'tool_use X', LIMIT_TEXT, 0)).toBe(true);
+    expect(notices.record(['tool_use:X'], 'tool_use X ・task T', '別の原文', 1)).toBe(false);
+    expect(notices.record(['tool_use:Y'], 'tool_use Y', LIMIT_TEXT, 2)).toBe(true);
+    expect(notices.record(['tool_use:X'], 'tool_use X', LIMIT_TEXT, WORKER_LIMIT_DEDUPE_MS)).toBe(
       true,
     );
+  });
+
+  it('別名のどれか1つでも最近見ていれば重複。新規の回は全部の別名を控える', () => {
+    const notices = new WorkerLimitNotices();
+    expect(notices.record(['task:T', 'tool_use:A'], 'a', LIMIT_TEXT, 0)).toBe(true);
+    // task だけが共通（再開で tool_use の id が変わった）
+    expect(notices.record(['task:T', 'tool_use:B'], 'b', LIMIT_TEXT, 1)).toBe(false);
+    // 別名が1つも重ならなければ別の作業者
+    expect(notices.record(['task:U', 'tool_use:C'], 'c', LIMIT_TEXT, 3)).toBe(true);
   });
 });
 
@@ -87,7 +96,10 @@ interface FakeSession {
   /** CLI へ届いた入力（JSON の文字列）。 */
   inputs: string[];
   finish(result?: string): Promise<void>;
-  say(text: string, options?: { error?: string; parentToolUseId?: string }): Promise<void>;
+  say(
+    text: string,
+    options?: { error?: string; parentToolUseId?: string; agentId?: string },
+  ): Promise<void>;
   notify(
     taskId: string,
     options: { status: string; summary: string; toolUseId?: string },
@@ -124,6 +136,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           type: 'assistant',
           message: { role: 'assistant', content: [{ type: 'text', text }] },
           parent_tool_use_id: sayOptions.parentToolUseId ?? null,
+          ...(sayOptions.agentId === undefined ? {} : { agent_id: sayOptions.agentId }),
           session_id: 'sess-mgr',
           uuid: `uuid-say-${String((serial += 1))}`,
           ...(sayOptions.error === undefined ? {} : { error: sayOptions.error }),
@@ -325,6 +338,72 @@ describe('同じ作業者の2つの合図を1つの知らせにそろえる（#4
       toolUseId: 'toolu-Y',
     });
     expect(lines(events)).toHaveLength(2);
+  });
+
+  // 再開された作業者: 同じ task_id のまま、通知の tool_use_id は再開した呼び出しの id、発言の parent_tool_use_id は最初の呼び出しの id
+  const named = (context: string | undefined) =>
+    (context?.match(/利用上限で落ちた（原文/g) ?? []).length;
+
+  it('⭐ 再開された作業者: 発言の拒否（parentToolUseId=元の id・agentId=T）と失敗通知（toolUseId=別の id・taskId=T）で note は1つ、担当への知らせも1体ぶん', async () => {
+    const { session, events } = await start();
+    await session.say(LIMIT_TEXT, {
+      error: 'rate_limit',
+      parentToolUseId: 'toolu-first',
+      agentId: 'task-T',
+    });
+    await session.notify('task-T', {
+      status: 'failed',
+      summary: `作業者が落ちた: ${LIMIT_TEXT}`,
+      toolUseId: 'toolu-resumed',
+    });
+    expect(lines(events)).toHaveLength(1);
+    const context = contextOf(await postToolUse(session.options));
+    expect(named(context)).toBe(1);
+    expect(context).toContain('task task-T');
+  });
+
+  it('再開された作業者: 通知が先、発言が後でも note は1つ', async () => {
+    const { session, events } = await start();
+    await session.notify('task-T', {
+      status: 'failed',
+      summary: `作業者が落ちた: ${LIMIT_TEXT}`,
+      toolUseId: 'toolu-resumed',
+    });
+    await session.say(LIMIT_TEXT, {
+      error: 'rate_limit',
+      parentToolUseId: 'toolu-first',
+      agentId: 'task-T',
+    });
+    expect(lines(events)).toHaveLength(1);
+    expect(named(contextOf(await postToolUse(session.options)))).toBe(1);
+  });
+
+  it('agent_id を出さない古い CLI でも、tool_use の id が一致していれば note は1つ', async () => {
+    const { session, events } = await start();
+    await session.say(LIMIT_TEXT, { error: 'rate_limit', parentToolUseId: 'toolu-X' });
+    await session.notify('task-T', {
+      status: 'failed',
+      summary: `作業者が落ちた: ${LIMIT_TEXT}`,
+      toolUseId: 'toolu-X',
+    });
+    expect(lines(events)).toHaveLength(1);
+    expect(named(contextOf(await postToolUse(session.options)))).toBe(1);
+  });
+
+  it('task の id も tool_use の id も違う別の作業者2体なら、agentId があっても note は2つ・知らせも2体ぶん', async () => {
+    const { session, events } = await start();
+    await session.say(LIMIT_TEXT, {
+      error: 'rate_limit',
+      parentToolUseId: 'toolu-first',
+      agentId: 'task-T',
+    });
+    await session.notify('task-U', {
+      status: 'failed',
+      summary: LIMIT_TEXT,
+      toolUseId: 'toolu-other',
+    });
+    expect(lines(events)).toHaveLength(2);
+    expect(named(contextOf(await postToolUse(session.options)))).toBe(2);
   });
 });
 

@@ -62,7 +62,7 @@ import { stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import {
   WorkerLimitNotices,
-  workerLimitIdentity,
+  workerLimitIdentities,
   workerLimitLabel,
 } from './runner-worker-limit-notice.js';
 import { excerpt } from './excerpt.js';
@@ -4589,9 +4589,13 @@ class Clone implements CloneHost {
    * 作業者だけが利用上限で落ちた事実を覚え、日誌へ1行残す（#4911。担当の層は `runner.ts` の `#recordWorkerLimit`、#4903）。
    * クローン自身の枠の印（`#usageBlocked`）・`usage_limited`・鍵の回転の契機にはしない: クローン本体は動けるため。原文は伏せ字を通す。
    */
-  async #recordWorkerLimit(identity: string, label: string, raw: string): Promise<void> {
+  async #recordWorkerLimit(
+    identities: readonly string[],
+    label: string,
+    raw: string,
+  ): Promise<void> {
     const shown = redactErrorText(raw, this.#env);
-    if (!this.#workerLimitNotices.record(identity, label, shown, Date.now())) return;
+    if (!this.#workerLimitNotices.record(identities, label, shown, Date.now())) return;
     await this.#journalSelf(
       'outbound',
       `${EXCHANGE_KIND_DECISION_PREFIX}作業者（${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。` +
@@ -5251,9 +5255,9 @@ class Clone implements CloneHost {
       event.summary !== undefined &&
       classifyUsageNotice(event.summary)?.kind === 'reached'
     ) {
-      // 身元は作業者を呼んだ tool_use の id にそろえる（#4996。担当の層 `runner.ts` と同じ）
+      // 身元は別名の集合（#4996。担当の層 `runner.ts` と同じ。再開で tool_use の id が変わっても task の id でそろう）
       await this.#recordWorkerLimit(
-        workerLimitIdentity(event.toolUseId, event.taskId),
+        workerLimitIdentities([event.toolUseId], event.taskId),
         workerLimitLabel(event.toolUseId, event.taskId),
         event.summary,
       );
@@ -5361,8 +5365,8 @@ class Clone implements CloneHost {
         turnFailureKindOf(assistantFailureOf(event.errorCode, said)) === 'quota'
       ) {
         await this.#recordWorkerLimit(
-          workerLimitIdentity(event.parentToolUseId, undefined),
-          workerLimitLabel(event.parentToolUseId, undefined),
+          workerLimitIdentities([event.parentToolUseId], event.agentId),
+          workerLimitLabel(event.parentToolUseId, event.agentId),
           said.length > 0 ? said : workerRejected.code,
         );
       }

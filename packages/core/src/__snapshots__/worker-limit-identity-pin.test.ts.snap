@@ -3,22 +3,32 @@
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 同じ作業者が発言の拒否と失敗通知の2通りで届くと、同じ身元で2回目は記録されない（#4996） 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": true,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": false,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": false,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": false,
   },
@@ -28,12 +38,16 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 失敗通知: taskId が無く toolUseId だけでも tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": true,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": false,
   },
@@ -43,12 +57,18 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 失敗通知: toolUseId があれば taskId があっても tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": true,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": false,
   },
@@ -58,12 +78,16 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 失敗通知: toolUseId が無く taskId だけなら task:<id> 1`] = `
 [
   {
-    "identity": "task:task-T",
+    "identities": [
+      "task:task-T",
+    ],
     "label": "task task-T",
     "recorded": true,
   },
   {
-    "identity": "task:task-T",
+    "identities": [
+      "task:task-T",
+    ],
     "label": "task task-T",
     "recorded": false,
   },
@@ -73,12 +97,16 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 失敗通知: toolUseId も taskId も無ければ background-worker 1`] = `
 [
   {
-    "identity": "background-worker",
+    "identities": [
+      "background-worker",
+    ],
     "label": "背景の作業者",
     "recorded": true,
   },
   {
-    "identity": "background-worker",
+    "identities": [
+      "background-worker",
+    ],
     "label": "背景の作業者",
     "recorded": false,
   },
@@ -88,12 +116,16 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Clone（今の出力から変えないための歯） > 発言の拒否（parentToolUseId）の身元は tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-P",
+    "identities": [
+      "tool_use:toolu-P",
+    ],
     "label": "tool_use toolu-P",
     "recorded": true,
   },
   {
-    "identity": "tool_use:toolu-P",
+    "identities": [
+      "tool_use:toolu-P",
+    ],
     "label": "tool_use toolu-P",
     "recorded": false,
   },
@@ -103,12 +135,17 @@ exports[`作業者の上限の身元 — Clone（今の出力から変えない�
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 同じ作業者が発言の拒否と失敗通知の2通りで届くと、同じ身元で2回目は記録されない（#4996） 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": true,
   },
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": false,
   },
@@ -118,7 +155,9 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知: taskId が無く toolUseId だけでも tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X",
     "recorded": true,
   },
@@ -128,7 +167,10 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知: toolUseId があれば taskId があっても tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
     "recorded": true,
   },
@@ -138,7 +180,9 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知: toolUseId が無く taskId だけなら task:<id> 1`] = `
 [
   {
-    "identity": "task:task-T",
+    "identities": [
+      "task:task-T",
+    ],
     "label": "task task-T",
     "recorded": true,
   },
@@ -148,8 +192,24 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知: toolUseId も taskId も無ければ background-worker 1`] = `
 [
   {
-    "identity": "background-worker",
+    "identities": [
+      "background-worker",
+    ],
     "label": "背景の作業者",
+    "recorded": true,
+  },
+]
+`;
+
+exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知: 通知の toolUseId と task_started で控えた toolUseId が違えば、両方が別名に入る 1`] = `
+[
+  {
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-new",
+      "tool_use:toolu-old",
+    ],
+    "label": "tool_use toolu-new ・task task-T",
     "recorded": true,
   },
 ]
@@ -158,8 +218,24 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 失敗通知に toolUseId が無くても、先の task_started の対応から tool_use:<id> に解決する 1`] = `
 [
   {
-    "identity": "tool_use:toolu-X",
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-X",
+    ],
     "label": "tool_use toolu-X ・task task-T",
+    "recorded": true,
+  },
+]
+`;
+
+exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 発言の拒否に agent_id があれば、task:<id> の別名も渡る 1`] = `
+[
+  {
+    "identities": [
+      "task:task-T",
+      "tool_use:toolu-P",
+    ],
+    "label": "tool_use toolu-P ・task task-T",
     "recorded": true,
   },
 ]
@@ -168,7 +244,9 @@ exports[`作業者の上限の身元 — Runner（今の出力から変えない
 exports[`作業者の上限の身元 — Runner（今の出力から変えないための歯） > 発言の拒否（parentToolUseId）の身元は tool_use:<id> 1`] = `
 [
   {
-    "identity": "tool_use:toolu-P",
+    "identities": [
+      "tool_use:toolu-P",
+    ],
     "label": "tool_use toolu-P",
     "recorded": true,
   },

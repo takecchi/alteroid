@@ -7,13 +7,14 @@ import { WorkerLimitNotices } from './runner-worker-limit-notice.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 // 仕様を先に書いたものではなく、今の出力から変えないための歯（期待は `-u` で生成して目で読んだ）。
-// 作業者が上限で落ちたときに `WorkerLimitNotices.record` へ渡る「身元」の字を、Clone と Runner の両方で縛る。
-// 呼び出し側（clone.ts / runner.ts）の身元の式（`tool_use:` / `background-worker` / `task:` と三項の向き）を動かすと赤くなる。
+// 作業者が上限で落ちたときに `WorkerLimitNotices.record` へ渡る「身元の別名」の字を、Clone と Runner の両方で縛る。
+// 呼び出し側（clone.ts / runner.ts）の別名の式（`tool_use:` / `background-worker` / `task:` と並びの向き）を動かすと赤くなる。
+// 別名の集合へ変えたとき（再開で tool_use の id が変わるため）、渡る値が文字列から配列になり、通知の経路は task: の別名が足された。snapshot はその分だけ更新してある。
 
 const LIMIT_TEXT = "You've hit your weekly limit · resets Oct 20, 3am (UTC)";
 
 interface RecordCall {
-  identity: string;
+  identities: readonly string[];
   label: string;
   recorded: boolean;
 }
@@ -24,13 +25,13 @@ function spyRecord(): RecordCall[] {
   const original = WorkerLimitNotices.prototype.record;
   vi.spyOn(WorkerLimitNotices.prototype, 'record').mockImplementation(function (
     this: WorkerLimitNotices,
-    identity,
+    identities,
     label,
     raw,
     nowMs,
   ) {
-    const recorded = original.call(this, identity, label, raw, nowMs);
-    calls.push({ identity, label, recorded });
+    const recorded = original.call(this, identities, label, raw, nowMs);
+    calls.push({ identities, label, recorded });
     return recorded;
   });
   return calls;
@@ -42,9 +43,10 @@ afterEach(() => {
 
 // --- Clone を通す ---
 
-function cloneWorkerAssistant(parentToolUseId: string): SDKMessage {
+function cloneWorkerAssistant(parentToolUseId: string, agentId?: string): SDKMessage {
   return {
     type: 'assistant',
+    ...(agentId === undefined ? {} : { agent_id: agentId }),
     message: { content: [{ type: 'text', text: LIMIT_TEXT }] },
     error: 'rate_limit',
     parent_tool_use_id: parentToolUseId,
@@ -107,6 +109,18 @@ describe('作業者の上限の身元 — Clone（今の出力から変えない
       ]),
     ).toMatchSnapshot();
   });
+
+  it('再開された作業者（発言は元の tool_use の id・agent_id=T、通知は別の tool_use の id・task=T）は、2回目が記録されない', async () => {
+    const calls = await cloneRecords([
+      cloneWorkerAssistant('toolu-first', 'task-T'),
+      cloneNotification({ taskId: 'task-T', toolUseId: 'toolu-resumed' }),
+    ]);
+    // 同じ合図は1通につき複数回 record に届く（既存の snapshot も同じ）ので、「新しく記録された」のがちょうど1回であることを見る
+    expect(calls.filter((call) => call.recorded)).toHaveLength(1);
+    expect(calls.map((call) => call.identities.join(','))).toContain(
+      'task:task-T,tool_use:toolu-resumed',
+    );
+  });
 });
 
 // --- Runner を通す ---
@@ -114,7 +128,7 @@ describe('作業者の上限の身元 — Clone（今の出力から変えない
 interface FakeSession {
   options: Options;
   finish(): Promise<void>;
-  say(parentToolUseId: string): Promise<void>;
+  say(parentToolUseId: string, agentId?: string): Promise<void>;
   notify(options: { taskId?: string; toolUseId?: string }): Promise<void>;
   startTask(taskId: string, toolUseId: string): Promise<void>;
 }
@@ -142,9 +156,10 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
         } as unknown as SDKMessage);
         await tick();
       },
-      async say(parentToolUseId) {
+      async say(parentToolUseId, agentId) {
         push({
           type: 'assistant',
+          ...(agentId === undefined ? {} : { agent_id: agentId }),
           message: { role: 'assistant', content: [{ type: 'text', text: LIMIT_TEXT }] },
           parent_tool_use_id: parentToolUseId,
           session_id: 'sess-mgr',
@@ -291,6 +306,22 @@ describe('作業者の上限の身元 — Runner（今の出力から変えな�
     const session = await startRunner();
     await session.say('toolu-X');
     await session.notify({ taskId: 'task-T', toolUseId: 'toolu-X' });
+    expect(calls).toMatchSnapshot();
+  });
+
+  it('発言の拒否に agent_id があれば、task:<id> の別名も渡る', async () => {
+    const calls = spyRecord();
+    const session = await startRunner();
+    await session.say('toolu-P', 'task-T');
+    await session.finish();
+    expect(calls).toMatchSnapshot();
+  });
+
+  it('失敗通知: 通知の toolUseId と task_started で控えた toolUseId が違えば、両方が別名に入る', async () => {
+    const calls = spyRecord();
+    const session = await startRunner();
+    await session.startTask('task-T', 'toolu-old');
+    await session.notify({ taskId: 'task-T', toolUseId: 'toolu-new' });
     expect(calls).toMatchSnapshot();
   });
 });
