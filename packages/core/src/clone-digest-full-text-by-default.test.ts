@@ -1,5 +1,5 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createClone } from './clone.js';
 import { REPORT_FOLLOW_UP_GUIDE, REPORT_FOLLOW_UP_REF } from './clone-batch-prompts.js';
@@ -7,6 +7,7 @@ import { waitFor, withoutQueueNotice } from './clone-test-harness.js';
 import type { CloneHost } from './host.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
+import { localDate } from './schedule.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { READING, readingRef } from './turn-readings.js';
@@ -218,7 +219,21 @@ function expectCompleteFull(text: string): void {
   expect(text).toContain('発行元（source）別の件数');
 }
 
+// 日報の target は、本体（#daily.run）と同じ localDate（器の時間帯の日付）で作る。UTC の日付（toISOString().slice(0, 10)）で渡すと、
+// 器が UTC より進んだ時間帯（例: Asia/Tokyo の 15:00Z〜24:00Z）で、いま積んだ日誌が日報の窓（前日扱い）から外れて落ちる。
+// 時計は 2026-11-20T03:00:00Z に据える: UTC-12〜UTC+14 のどの時間帯でも現地時刻が 15:00〜17:00 で、日付の境目から遠いため。
+// Date だけを偽にする: waitFor は setTimeout で待つので、タイマーまで偽にすると待ちが進まなくなる
+const REPORT_CLOCK = new Date('2026-11-20T03:00:00.000Z');
+
 describe('tick の要約は、同じ会話の中でも前回からの差分にならず全文で出る（#4937）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: REPORT_CLOCK });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('日報は全文のまま（差分にしない）', async () => {
     const s = boot();
     await seed(s.stores);
@@ -232,7 +247,7 @@ describe('tick の要約は、同じ会話の中でも前回からの差分に�
       at: new Date().toISOString(),
       kind: 'daily_report',
       cause: 'manual',
-      target: new Date().toISOString().slice(0, 10),
+      target: localDate(new Date()),
     });
     await waitFor(() => s.inputs.length > before, '日報の入力');
     const report = s.inputs[before] ?? '';
@@ -259,7 +274,7 @@ describe('tick の要約は、同じ会話の中でも前回からの差分に�
       at: new Date().toISOString(),
       kind: 'daily_report',
       cause: 'manual',
-      target: new Date().toISOString().slice(0, 10),
+      target: localDate(new Date()),
     });
     await waitFor(() => s.inputs.length > before, '日報の入力');
     const report = s.inputs[before] ?? '';
