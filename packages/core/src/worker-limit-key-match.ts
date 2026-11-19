@@ -87,32 +87,51 @@ function describeActive(
   return `現役ではない（現役は ${who}）。`;
 }
 
-export function describeWorkerLimitKeyMatch(input: WorkerLimitKeyMatchInput): string {
+interface WorkerLimitKeyMatch {
+  line: string;
+  /** 一意に1本へ一致した回だけ載る。読めない・一致なし・複数一致では載せない（決め打ちしない）。 */
+  tokenId?: string;
+}
+
+export function matchWorkerLimitKey(input: WorkerLimitKeyMatchInput): WorkerLimitKeyMatch {
   if (input.pool === undefined) {
-    return `${PREFIX}鍵のプールを読めなかったので、落ちた枠がどの鍵のものかは言えない。`;
+    return {
+      line: `${PREFIX}鍵のプールを読めなかったので、落ちた枠がどの鍵のものかは言えない。`,
+    };
   }
   const resetAt =
     parseNoticeResetDatedAt(input.raw, { at: input.at, withinMs: DATED_HORIZON_MS }) ??
     parseNoticeResetAt(input.raw, { at: input.at, withinMs: TIME_ONLY_HORIZON_MS });
   if (resetAt === undefined) {
-    return `${PREFIX}原文の resets を時刻に直せなかったので、落ちた枠がどの鍵のものかは言えない。`;
+    return {
+      line: `${PREFIX}原文の resets を時刻に直せなかったので、落ちた枠がどの鍵のものかは言えない。`,
+    };
   }
   const target = roundDownToMinute(resetAt);
   const when = new Date(target).toISOString();
   const hits = findHits(input.pool, input.windows, target);
   if (hits.length === 0) {
-    return `${PREFIX}原文の resets（${when}）に一致する鍵の枠は、プールの記録に無い。どの鍵のものかは言えない。`;
+    return {
+      line: `${PREFIX}原文の resets（${when}）に一致する鍵の枠は、プールの記録に無い。どの鍵のものかは言えない。`,
+    };
   }
   if (hits.length > 1) {
-    return (
-      `${PREFIX}原文の resets（${when}）は複数の鍵に一致する（${hits.map((hit) => describeToken(hit.token)).join('、')}）。` +
-      'どの鍵のものかは決められない。'
-    );
+    return {
+      line:
+        `${PREFIX}原文の resets（${when}）は複数の鍵に一致する（${hits.map((hit) => describeToken(hit.token)).join('、')}）。` +
+        'どの鍵のものかは決められない。',
+    };
   }
   const [hit] = hits;
-  if (hit === undefined) return `${PREFIX}一致を読めなかった。`;
-  return (
-    `${PREFIX}原文の resets（${when}、分単位の一致）は ${describeToken(hit.token)} の ${describeWindow(hit)}に一致する。` +
-    describeActive(input, input.pool, hit)
-  );
+  if (hit === undefined) return { line: `${PREFIX}一致を読めなかった。` };
+  return {
+    line:
+      `${PREFIX}原文の resets（${when}、分単位の一致）は ${describeToken(hit.token)} の ${describeWindow(hit)}に一致する。` +
+      describeActive(input, input.pool, hit),
+    tokenId: hit.token.id,
+  };
+}
+
+export function describeWorkerLimitKeyMatch(input: WorkerLimitKeyMatchInput): string {
+  return matchWorkerLimitKey(input).line;
 }

@@ -5023,17 +5023,46 @@ class Pool implements ManagerPool {
 
       case 'note': {
         // 作業者の落ちの印を立てる（#5030）。`await` の前に同期で立てる: 鍵の突き合わせの間にターンが終わっても、終わりの契機が印を見られるように。
-        // `#usageStopped` と鍵の回転の観測（`#observeForTokenRotation`）へは流さない（#4903）。
+        // `#usageStopped` は立てない（#4903）。鍵の回転の観測（`#observeForTokenRotation`）へ流すのは、落ちた枠が担当の抱えている鍵と一意に一致した回だけ（下）:
+        // 一致を確かめずに流すと、担当が使っていない別の鍵まで休ませて回してしまう。
         if (event.workerLimit !== undefined) {
           await this.#note.markWorkerLimitStopped(record, event.managerId, event.workerLimit);
         }
         // 作業者の落ちの note（`event.workerLimit` の欄で判定する）には、落ちた枠の鍵の突き合わせを1行足す（#5021）。日誌とクローンへの知らせの両方に同じ文を載せる。
-        const noteText =
+        const keyMatch =
           event.workerLimit === undefined
+            ? undefined
+            : await this.#usageWake.matchWorkerLimitKey(event.workerLimit.raw);
+        // 落ちた枠が担当の抱えている鍵のものと一意に分かった回だけ、担当本体が当たったときと同じ経路へ流す。決め打ちしない: 他の鍵・複数一致・読めない・身元が無い回は何もしない
+        const heldTokenId = this.#tokenIdentities.get(event.managerId)?.tokenId;
+        const heldKeyNotice =
+          event.workerLimit !== undefined &&
+          keyMatch?.tokenId !== undefined &&
+          keyMatch.tokenId === heldTokenId
+            ? classifyUsageNotice(event.workerLimit.raw)
+            : undefined;
+        const flowsToRotation = heldKeyNotice?.kind === 'reached';
+        const noteText =
+          keyMatch === undefined
             ? event.text
-            : `${event.text}\n${await this.#usageWake.describeWorkerLimitKey(event.workerLimit.raw)}`;
+            : `${event.text}\n${keyMatch.line}` +
+              (flowsToRotation
+                ? '\n担当が抱えている鍵の枠なので、担当本体が当たったときと同じく、この鍵を休ませて担当を移す経路へ流した。'
+                : '');
         await this.#note.journalNote(event, noteText);
         this.#note.emitNoteNotices(event, noteText);
+        if (flowsToRotation && heldKeyNotice !== undefined && heldTokenId !== undefined) {
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `[${event.managerId}] 作業者が落ちた枠（${event.workerLimit?.raw ?? ''}）は担当が抱えている鍵（id ${heldTokenId.slice(0, 8)}）のもの。` +
+              '同じアカウントの枠なので担当もいずれ当たる。担当本体が当たったときと同じく、この鍵を休ませて担当を移す',
+            grounds:
+              `managerId=${event.managerId} tokenId=${heldTokenId}` +
+              '（作業者は担当と同じ鍵で走るので、担当本体が当たるのを待つと作業者だけが何度も落ちる）',
+          });
+          await this.#observeForTokenRotation(event.managerId, { notice: heldKeyNotice });
+        }
 
         // 逃すと自動で追いついたセッションにまで `manager_list` / `runner_list` の世代の食い違いが出続ける。世代の値は受け取らない: runner は世代を知らず、daemon が現役の身元を読み直す。
         if (event.tokenRotation === true) this.#rememberTokenIdentity(event.managerId);

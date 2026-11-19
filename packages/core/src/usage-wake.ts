@@ -14,7 +14,7 @@ import {
   type RateLimitFacts,
   type UsageLimitNotice,
 } from './usage-limits.js';
-import { describeWorkerLimitKeyMatch, type RememberedWindow } from './worker-limit-key-match.js';
+import { matchWorkerLimitKey, type RememberedWindow } from './worker-limit-key-match.js';
 
 /** 枠の起こし直しの結果。`'joined'` は同じ担当の起こし直しが既に走っていて、重ねなかった回（#5205）。 */
 type UsageNudgeOutcome = 'nudged' | 'still-running' | 'gone' | 'skipped' | 'joined';
@@ -343,7 +343,7 @@ export class UsageWake {
     }
     for (const [managerId, mark] of [...d.workerLimitStopped]) {
       if (d.stopped()) break;
-      if (!mark.preRotationKey) continue;
+      if (!this.#heldKeyIsBehind(managerId, mark)) continue;
       const retry = d.workerLimitWakeRetry.get(managerId);
       if (retry !== undefined && d.now() < retry.nextAt) continue;
       if (await this.wakeForWorkerLimit(managerId, 'turn-ended')) {
@@ -584,6 +584,19 @@ export class UsageWake {
   }
 
   /**
+   * 担当が抱えている鍵が、もう走るべき鍵ではない（落ちた枠の鍵は担当の手を離れている）。ターンの終わりに起こしてよい印の判定を1箇所に持つ。
+   * runner の `preRotationKey` だけでは足りない: balanced の割り当て替え（作業者の落ちで鍵を休ませて担当を移す）は runner の鍵の回転を経ないので、
+   * `preRotationKey` が偽のまま次の回転まで取り残される。抱えている身元を覚えていない回（再起動で引き取っただけ）は食い違いと決めつけない。
+   */
+  #heldKeyIsBehind(managerId: string, mark: { readonly preRotationKey: boolean }): boolean {
+    if (mark.preRotationKey) return true;
+    const held = this.#deps.tokenIdentities.get(managerId);
+    const target = this.#deps.tokenIdentity(managerId);
+    if (held === undefined || target === undefined) return false;
+    return held.tokenId !== target.tokenId || held.generation !== target.generation;
+  }
+
+  /**
    * 作業者の枠の落ちで手を止めた担当を、通る鍵で起こし直す（#5030）。起こすのは担当の続きだけで、鍵の回転は起こさない（#4903）。
    * `'turn-ended'`: 回転前の鍵で落ちた印を、担当のターンが `done` で終わった時点で起こす。現役の鍵が `ready` と分かっているときだけ（`wakeIfHeldTokenStale` と同じ: 通らないなら起こしても同じ枠に当たる）。
    * `'rotation'`: 印を、次の鍵の回転（`resumeStoppedByUsage`）で起こす。回転前の鍵で落ちてターンの終わりに起こせなかった印も含む。
@@ -614,7 +627,7 @@ export class UsageWake {
         return false;
       }
       if (trigger === 'turn-ended') {
-        if (!mark.preRotationKey || record.job.status !== 'done') return false;
+        if (!this.#heldKeyIsBehind(managerId, mark) || record.job.status !== 'done') return false;
       } else if (isManagerInFlight(record.job.status)) {
         // 回転の契機では回転前の鍵の印も起こす: ターンの終わりに現役が `ready` でなかった印は、ここで拾わないと次の自分のターンまで取り残されるため
         // 走っている間は起こさない（印は残す）: ターンが終われば次の回転が拾う。
@@ -712,6 +725,11 @@ export class UsageWake {
    * 投げない: 読めなければ「読めなかった」と書いた行を返す（note の配達を巻き添えにしない）。例外の文言は載せない（鍵の値を含みうる）。
    */
   async describeWorkerLimitKey(raw: string): Promise<string> {
+    return (await this.matchWorkerLimitKey(raw)).line;
+  }
+
+  /** `describeWorkerLimitKey` の構造つき版。プールと窓は1回だけ読み、`tokenId` は一意に1本へ一致した回だけ載る。 */
+  async matchWorkerLimitKey(raw: string): Promise<{ line: string; tokenId?: string }> {
     const d = this.#deps;
     let pool: readonly AgentToken[] | undefined;
     let activeTokenId: string | null | undefined;
@@ -736,7 +754,7 @@ export class UsageWake {
         resetsAt: facts.resetsAt,
       });
     }
-    return describeWorkerLimitKeyMatch({ raw, at: d.now(), pool, activeTokenId, windows });
+    return matchWorkerLimitKey({ raw, at: d.now(), pool, activeTokenId, windows });
   }
 
   /**

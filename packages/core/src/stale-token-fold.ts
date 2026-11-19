@@ -43,6 +43,7 @@ interface StaleTokenFoldOptions {
   /**
    * 鍵の回転の起こし直しで、まだ待ちの上限に届いていない回の、上限の時刻（epoch ms。#5044）。
    * peer 以外の背景処理が残っていれば、この時刻までは畳まずに断る: 背景処理を待つ間、担当は鍵を使わないので枠は焼かず、畳むと結果を失うため。
+   * ただし背景に作業者が居て抱えている鍵が使えないなら待たない: 作業者は同じ古い鍵で走るので、この前提が崩れる。
    */
   rotationFoldDueAt?: number;
   /** 見回りの届け直しの回だけ真（#4982）。前に書いた断りと本文が同じなら、断りの decision を書かない（断る判定そのものは変えない）。 */
@@ -235,12 +236,17 @@ export class StaleTokenFold {
       state.liveBackgroundAgents !== undefined &&
       nonPeerBackground > 0 &&
       state.liveBackgroundAgents >= nonPeerBackground;
+    // 鍵の回転の待ちだけに掛ける: Bash が混ざって #5109 が効かなくても、作業者が1本でも居れば「待つ間は担当が鍵を使わない」は成り立たない
+    // （作業者は担当のセッションの env＝同じ古い鍵で走り、使えない鍵なら進まずに落ちる。2026-11-19 は 6 本が古い鍵で次々落ちて 16 分待った）。
+    // `foldBackgroundAfterWait`・普通の送信・預かりの届け直しは変えない。欄が無い古い runner・鍵の状態が読めない回は、今までどおり待つ。
+    const workersAliveOnUnusableKey = heldTokenUnusable && (state.liveBackgroundAgents ?? 0) > 0;
     const rotationWaiting =
       options.foldBackgroundIfHeldTokenNotReady === true &&
       options.rotationFoldDueAt !== undefined &&
       blockers.length === 1 &&
       nonPeerBackground > 0 &&
-      !agentsStuckOnUnusableKey;
+      !agentsStuckOnUnusableKey &&
+      !workersAliveOnUnusableKey;
     const foldBackground =
       (options.foldBackgroundAfterWait === true ||
         (options.foldBackgroundIfHeldTokenNotReady === true && !rotationWaiting) ||
@@ -373,25 +379,35 @@ export class StaleTokenFold {
       // 待ちの上限を過ぎた回と、鍵の回転の回と、作業者だけが古い鍵で止まっている回を言い分ける: 後の2つは待っていない
       const byAgents = agentsStuckOnUnusableKey && options.foldBackgroundAfterWait !== true;
       const byRotation = !byAgents && options.foldBackgroundAfterWait !== true;
+      // 待ちに入るはずの回（待ちの上限の時刻が在り、peer 以外が残っている）を、作業者が居るので待たなかった回
+      const byWorkersAlive =
+        byRotation &&
+        workersAliveOnUnusableKey &&
+        options.rotationFoldDueAt !== undefined &&
+        nonPeerBackground > 0;
       await ports.journal({
         type: 'decision',
         decision:
           `[${managerId}] done の委譲を、残っていた背景処理 ${String(foldBackground)} 本ごと畳んで新しい鍵で起こし直す` +
           (byAgents
             ? `（${staleness}。残っている背景処理は作業者だけで、抱えている古い鍵は使えないので、待っても進まない）`
-            : byRotation
-              ? `（${staleness}。鍵の回転の起こし直しで、抱えている古い鍵は使えない）`
-              : `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`),
+            : byWorkersAlive
+              ? `（${staleness}。背景の作業者が ${String(state.liveBackgroundAgents)} 本残っていて、抱えている古い鍵は使えない。作業者はその鍵で走るので待っても進まない）`
+              : byRotation
+                ? `（${staleness}。鍵の回転の起こし直しで、抱えている古い鍵は使えない）`
+                : `（${staleness}。預かった伝言が ${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分届かなかった）`),
         grounds:
           `managerId=${managerId} liveBackgroundTasks=${String(foldBackground)} ` +
           `liveBackgroundAgents=${state.liveBackgroundAgents === undefined ? '（分からない）' : String(state.liveBackgroundAgents)} 確認待ち=0 ` +
           `鍵の状態=${heldTokenState ?? '（聞いていない）'}` +
           (byAgents
             ? '（#5109。作業者は担当と同じ古い鍵で走るので、背景処理の終わりを待たない。子プロセスの背景処理なら待ちの上限まで待つ）'
-            : byRotation
-              ? `（#4850 / #5044。鍵の回転の起こし直しは、背景処理を待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）までしか待たない` +
-                '（待ち始めが分からない回は待たない）。古い背景処理は runner が止める）'
-              : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
+            : byWorkersAlive
+              ? '（鍵の回転の起こし直し。背景に作業者が居ると、待つ間も担当と同じ古い鍵で走って落ちるだけなので、待ちの上限を待たない。古い背景処理は runner が止める）'
+              : byRotation
+                ? `（#4850 / #5044。鍵の回転の起こし直しは、背景処理を待ちの上限（${String(HELD_FORCE_FOLD_AFTER_MS / 60_000)} 分）までしか待たない` +
+                  '（待ち始めが分からない回は待たない）。古い背景処理は runner が止める）'
+                : '（#4472。背景処理が終わらない・終わったのに本数が下りないと、古い鍵のまま居座るため）'),
       });
       const commands = redactedBackgroundCommands(state.backgroundTaskCommands);
       // 本数の内数。欄が無い古い runner は 0 本（今までどおり全部を畳んだと書く）
