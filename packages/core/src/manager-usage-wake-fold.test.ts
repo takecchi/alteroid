@@ -619,8 +619,47 @@ describe('背景処理が作業者だけで、抱えている鍵が使えない�
     await s.pool.stop();
   });
 
-  it('⭐ (g2) 作業者と子プロセスが混ざっていれば、今までどおり上限まで待つ', async () => {
+  // 元の題: 「作業者と子プロセスが混ざっていれば、今までどおり上限まで待つ」。2026-11-19 の本番（Bash 1 本が混ざり、古い鍵の作業者が落ち続けて 16 分待った）で、
+  // 鍵の回転の起こし直しに限り反転した: 作業者は担当と同じ古い鍵で走るので、待つ間も担当が鍵を使わない前提が崩れる。子プロセスが混ざっても、作業者が1本でも居れば待たずに畳む。
+  it('⭐ (g2) 作業者と子プロセスが混ざっていれば、鍵の回転の起こし直しは待たずに畳む（旧: 今までどおり上限まで待つ）', async () => {
     const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.agents = 1;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual(['mgr-fold']);
+    expect(s.fake.stops).toEqual(['mgr-fold']);
+    const decisions = (await s.stores.journal.list({ types: ['decision'] })).filter((e) =>
+      JSON.stringify(e).includes('背景の作業者が 1 本残っていて'),
+    );
+    expect(decisions).toHaveLength(1);
+    await s.pool.stop();
+  });
+
+  it('(g2d) 人間・クローンの普通の manager_send は、Bash と作業者が混ざっていても今どおり預かる（回転の起こし直しだけが待たない）', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.agents = 1;
+
+    const result = await s.pool.send('mgr-fold', '続きを');
+
+    expect(result.outcome).toBe('held');
+    expect(s.fake.stops).toHaveLength(0);
+    expect(s.fake.resumes).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('(g2b) 背景処理が子プロセスだけ（作業者 0 本）なら、今までどおり上限まで待つ', async () => {
+    const s = await setup(async () => 'cooling');
+    s.fake.behavior.background = 2;
+    s.fake.behavior.agents = 0;
+
+    expect(await s.pool.resumeStoppedByUsage()).toEqual([]);
+    expect(s.fake.stops).toHaveLength(0);
+    await s.pool.stop();
+  });
+
+  it('(g2c) 子プロセスが混ざっていても、抱えている鍵が使えるか読めなければ、作業者が居ても待つ', async () => {
+    const s = await setup(async () => undefined);
     s.fake.behavior.background = 2;
     s.fake.behavior.agents = 1;
 
