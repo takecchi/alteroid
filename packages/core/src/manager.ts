@@ -5045,10 +5045,12 @@ class Pool implements ManagerPool {
         const noteText =
           keyMatch === undefined
             ? event.text
-            : `${event.text}\n${keyMatch.line}` +
+            : // 流した旨は突き合わせの行の前に挟む: 突き合わせの行は末尾に在る前提で読まれる（クローンへの知らせ・日誌）
+              `${event.text}` +
               (flowsToRotation
                 ? '\n担当が抱えている鍵の枠なので、担当本体が当たったときと同じく、この鍵を休ませて担当を移す経路へ流した。'
-                : '');
+                : '') +
+              `\n${keyMatch.line}`;
         await this.#note.journalNote(event, noteText);
         this.#note.emitNoteNotices(event, noteText);
         if (flowsToRotation && heldKeyNotice !== undefined && heldTokenId !== undefined) {
