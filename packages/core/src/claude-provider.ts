@@ -428,6 +428,30 @@ export function withCloneAutoCompactWindow(env: NodeJS.ProcessEnv): NodeJS.Proce
   return { ...env, [AUTO_COMPACT_WINDOW_ENV_KEY]: CLONE_AUTO_COMPACT_WINDOW_DEFAULT };
 }
 
+/**
+ * マネージャーの作業者（サブエージェント）のキャッシュの寿命の既定値。
+ *
+ * CLI は主の会話にはサブスクで 1 時間の寿命を自動で付けるが、サブエージェントには付けない（下の `Settings` の逐語）。
+ * 同梱の CLI を偽の API に向けて、作業者の要求の `cache_control` に `ttl` が無い（5 分）ことを確かめた（`real-cli-worker-cache-ttl.test.ts`）。
+ * 作業者はテスト・ビルド・CI の待ちで1回の道具に5分を超えて止まり、背景の作業者はマネージャーの
+ * 報告とマージの往復のあいだ止まってから SendMessage で起こし直される。どちらも次の要求で作業者の文脈を丸ごと書き直す。
+ * 台帳の実測（2026-11-20 JST）では、作り直しの大半はマネージャー本体（Opus）ではなく作業者（Sonnet）の側にあった。
+ *
+ * `ENABLE_PROMPT_CACHING_1H` を使わない: 主の会話の寿命まで 1 時間に固定し、API キーの器で CLI の自動判定（5 分）を覆すため。
+ * `settings` ではなく env で渡す: env は settings より優先されるので、人間が env やプロファイルで `5m` と置けば降りられるため。
+ */
+// [sdk-verbatim Settings.subagentPromptCacheTtl]
+// Unset = automatic (5 minutes unless ENABLE_PROMPT_CACHING_1H=1). The CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL environment variable takes precedence.
+export const MANAGER_WORKER_CACHE_TTL_DEFAULT = '1h';
+
+const SUBAGENT_PROMPT_CACHE_TTL_ENV_KEY = 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL';
+
+/** マネージャーの env に作業者のキャッシュの寿命の既定値を足した新しい env（置かれていれば上書きしない。渡された env は書き換えない）。 */
+export function withManagerWorkerCacheTtl(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (isEnvSet(env, SUBAGENT_PROMPT_CACHE_TTL_ENV_KEY)) return { ...env };
+  return { ...env, [SUBAGENT_PROMPT_CACHE_TTL_ENV_KEY]: MANAGER_WORKER_CACHE_TTL_DEFAULT };
+}
+
 /** モデルの降格止め → 題名づけ止めの順に、置かれていない鍵だけ '1' を足した新しい env（渡された env は書き換えない）。 */
 export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out = { ...env };
@@ -715,7 +739,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
-    env: withCliSessionEnv(env),
+    env: withManagerWorkerCacheTtl(withCliSessionEnv(env)),
     // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
     // [sdk-verbatim Options.settings]

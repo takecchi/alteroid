@@ -31,6 +31,7 @@ import {
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withCliSessionEnv,
   withCloneAutoCompactWindow,
+  withManagerWorkerCacheTtl,
 } from './claude-provider.js';
 import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -2214,6 +2215,47 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
       // 自動要約の窓の既定はクローン本体だけに入る（下の「自動の要約の窓」）
       ...(build === cloneOptions ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' } : {}),
+      // 作業者のキャッシュの寿命はマネージャーだけに入る（下の「作業者のキャッシュの寿命」）
+      ...(build === managerOptions ? { CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' } : {}),
+    });
+  });
+
+  describe('作業者のキャッシュの寿命（subagentPromptCacheTtl）', () => {
+    it('マネージャー: env に寿命が無ければ 1h を渡す（settings には載せない）', () => {
+      const options = managerOptions({ PATH: '/bin' });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' });
+      expect(options.settings).not.toHaveProperty('subagentPromptCacheTtl');
+    });
+
+    it('マネージャー: 人間が 5m と置いていれば、既定で上書きせずそのまま渡す', () => {
+      const options = managerOptions({ CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m' });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m' });
+    });
+
+    it.each([[''], ['  ']])('マネージャー: 空（%j）なら置いていないと読み、1h を渡す', (value) => {
+      const options = managerOptions({ CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: value });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' });
+    });
+
+    it('主の会話の寿命（CLAUDE_CODE_PROMPT_CACHE_TTL / ENABLE_PROMPT_CACHING_1H）は足さない', () => {
+      const env = managerOptions({ PATH: '/bin' }).env;
+      expect(env).not.toHaveProperty('CLAUDE_CODE_PROMPT_CACHE_TTL');
+      expect(env).not.toHaveProperty('ENABLE_PROMPT_CACHING_1H');
+    });
+
+    it('クローン本体と蒸留には入れない（作業者を持たない層のため）', () => {
+      expect(cloneOptions({ PATH: '/bin' }).env).not.toHaveProperty(
+        'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL',
+      );
+      expect(distillOptions({ PATH: '/bin' }).env).not.toHaveProperty(
+        'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL',
+      );
+    });
+
+    it('withManagerWorkerCacheTtl は渡された env を書き換えない', () => {
+      const env: NodeJS.ProcessEnv = { PATH: '/bin' };
+      withManagerWorkerCacheTtl(env);
+      expect(env).toEqual({ PATH: '/bin' });
     });
   });
 
@@ -2765,7 +2807,8 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
         "skills": "all",
         "env": {
           "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
-          "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+          "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+          "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
         },
         "sessionStore": {},
         "settings": {
