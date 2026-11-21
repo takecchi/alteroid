@@ -11,11 +11,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { BASH_GUARD_ENV } from './bash-guard-mode.js';
+import { BASH_GUARD_ENV, BASH_SHAPE_GUARD_ENV } from './bash-guard-mode.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-const DENY_ENV = { [BASH_GUARD_ENV]: 'deny' };
+// 形の歯は既定 on。この試験は待ちの歯（deny）を見るので、形の歯は明示的に切る
+const DENY_ENV = { [BASH_GUARD_ENV]: 'deny', [BASH_SHAPE_GUARD_ENV]: 'off' };
 
 interface Started {
   options: Options;

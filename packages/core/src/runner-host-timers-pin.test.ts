@@ -929,7 +929,7 @@ describe('Host.constructor のタイマーと起動順の固定', () => {
           },
           "without": {
             "anthropicRoute": [],
-            "bashShapeGuardLine": "Bash の形の歯: off（ALTEROID_BASH_SHAPE_GUARD。runner の env の値。実行環境プロファイルに置けばそちらが優先される）",
+            "bashShapeGuardLine": "Bash の形の歯: on（ALTEROID_BASH_SHAPE_GUARD。runner の env の値。実行環境プロファイルに置けばそちらが優先される）",
             "reportLanguageLine": "報告の言語の知らせ: off（ALTEROID_REPORT_LANGUAGE。runner の env の値。実行環境プロファイルに置けばそちらが優先される）",
           },
         }

@@ -81,7 +81,7 @@ export class RunnerBashGuard {
           const releaseProd = inspectReleaseProdDispatch(command);
           // 形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す
           // マネージャーにも掛ける（#4949）: heosterra のマネージャーも同じ形を打っていて、オーナーの決まりはマネージャーにも同じ形を禁じているため
-          // `ALTEROID_BASH_GUARD` から切り離す（#4949）: 形の歯は `ALTEROID_BASH_SHAPE_GUARD`（既定 off）だけで決まる。呼び出しのたびに読み、プロファイルの値を優先する（プロファイルに置けば次の呼び出しから効く）。不正な値はここで投げ、下の catch が確認（`deny` 設定なら deny）に倒す
+          // `ALTEROID_BASH_GUARD` から切り離す（#4949）: 形の歯は `ALTEROID_BASH_SHAPE_GUARD`（既定 on）だけで決まる。呼び出しのたびに読み、プロファイルの値を優先する（プロファイルに置けば次の呼び出しから効く）。不正な値はここで投げ、下の catch が確認（`deny` 設定なら deny）に倒す
           const shape =
             !releaseProd.matched &&
             resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on'

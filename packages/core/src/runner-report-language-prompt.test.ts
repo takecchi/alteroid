@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { BASH_GUARD_ENV } from './bash-guard-mode.js';
+import { BASH_GUARD_ENV, BASH_SHAPE_GUARD_ENV } from './bash-guard-mode.js';
 import { createProfileVessel } from './profile.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
 import { REPORT_LANGUAGE_ENV, REPORT_LANGUAGE_PROMPT_PARAGRAPH } from './report-language.js';
@@ -69,10 +69,11 @@ async function open(
     workspacePath: dir,
     emit: (event) => events.push(event),
     queryFn: fn,
-    // 待ちの歯は既定で ask（プロンプトに待ちの形の節が載る）。この節の試験は言語の段落だけを見るので、歯を閉じて載せない
+    // 待ちの歯は既定で ask・形の歯は既定で on（プロンプトに歯の節が載る）。この節の試験は言語の段落だけを見るので、歯を明示的に閉じて載せない
     env: {
       PATH: '/usr/bin',
       [BASH_GUARD_ENV]: 'off',
+      [BASH_SHAPE_GUARD_ENV]: 'off',
       ...env,
     },
     ...(profileScript === undefined
@@ -106,7 +107,7 @@ const appendOf = (options: Options): string =>
 const workerPromptOf = (options: Options): string =>
   String(((options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown }).prompt);
 
-// 形の歯は既定 off なので、runner 経由のプロンプトには「分類器に止められやすい形」の節が入る
+// 形の歯を明示的に off にしているので、runner 経由のプロンプトには「分類器に止められやすい形」の節が入る
 const SHAPE_OFF = { shape: false, wait: false, shapeOff: true } as const;
 const BASE_APPEND = buildManagerSystemPrompt({
   managerId: 'mgr-1',

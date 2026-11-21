@@ -13,17 +13,17 @@ import {
 } from './bash-guard-mode.js';
 
 describe('resolveBashShapeGuard（#4949）', () => {
-  it('未設定・空・空白は既定（off）', () => {
-    expect(DEFAULT_BASH_SHAPE_GUARD).toBe('off');
-    expect(resolveBashShapeGuard({})).toBe('off');
-    expect(resolveBashShapeGuard({ [BASH_SHAPE_GUARD_ENV]: ' ' })).toBe('off');
+  it('未設定・空・空白は既定（on）', () => {
+    expect(DEFAULT_BASH_SHAPE_GUARD).toBe('on');
+    expect(resolveBashShapeGuard({})).toBe('on');
+    expect(resolveBashShapeGuard({ [BASH_SHAPE_GUARD_ENV]: ' ' })).toBe('on');
   });
 
   it('on / off を読む。綴り違いは投げる', () => {
     expect(resolveBashShapeGuard({ [BASH_SHAPE_GUARD_ENV]: ' on ' })).toBe('on');
     expect(resolveBashShapeGuard({ [BASH_SHAPE_GUARD_ENV]: 'off' })).toBe('off');
     expect(() => resolveBashShapeGuard({ [BASH_SHAPE_GUARD_ENV]: 'ON' })).toThrow(
-      /ALTEROID_BASH_SHAPE_GUARD の値が不正: ON（使えるのは on \/ off。既定は off）/,
+      /ALTEROID_BASH_SHAPE_GUARD の値が不正: ON（使えるのは on \/ off。既定は on）/,
     );
   });
 
@@ -39,7 +39,7 @@ describe('resolveBashShapeGuard（#4949）', () => {
 
   it('起動行は on / off を言い、不正な値でも投げずに不正と書く', () => {
     expect(describeBashShapeGuard({}, {})).toBe(
-      'Bash の形の歯: off（ALTEROID_BASH_SHAPE_GUARD。runner の env の値。実行環境プロファイルに置けばそちらが優先される）',
+      'Bash の形の歯: on（ALTEROID_BASH_SHAPE_GUARD。runner の env の値。実行環境プロファイルに置けばそちらが優先される）',
     );
     expect(describeBashShapeGuard({}, { [BASH_SHAPE_GUARD_ENV]: 'on' })).toBe(
       'Bash の形の歯: on（ALTEROID_BASH_SHAPE_GUARD。実行環境プロファイルの値。runner の env より優先される）',

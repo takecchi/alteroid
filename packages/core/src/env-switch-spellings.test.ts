@@ -118,11 +118,11 @@ describe('門（寄せない。厳密な列挙のまま。綴り違いは落と�
     expect(() => resolveMemoryGuard({ ALTEROID_MEMORY_GUARD: raw })).toThrow(/不正/);
   });
 
-  it('Bash の形の歯: on / off と、未設定・空は既定の off', () => {
-    expect(resolveBashShapeGuard({ ALTEROID_BASH_SHAPE_GUARD: 'on' })).toBe('on');
+  it('Bash の形の歯: on / off と、未設定・空は既定の on', () => {
+    expect(resolveBashShapeGuard({ ALTEROID_BASH_SHAPE_GUARD: ' on ' })).toBe('on');
     expect(resolveBashShapeGuard({ ALTEROID_BASH_SHAPE_GUARD: ' off ' })).toBe('off');
-    expect(resolveBashShapeGuard({})).toBe('off');
-    expect(resolveBashShapeGuard({ ALTEROID_BASH_SHAPE_GUARD: '' })).toBe('off');
+    expect(resolveBashShapeGuard({})).toBe('on');
+    expect(resolveBashShapeGuard({ ALTEROID_BASH_SHAPE_GUARD: '' })).toBe('on');
   });
 
   it.each(['ON', 'true', '1', 'yes'])('Bash の形の歯: %j は落とす', (raw) => {

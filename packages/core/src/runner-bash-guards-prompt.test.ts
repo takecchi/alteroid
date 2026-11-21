@@ -103,8 +103,17 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
   });
 
-  it('形の歯が既定（off）で待ちの歯が ask なら、待ちの節と分類器の節が載り、形の一覧は載らない', async () => {
+  it('形の歯が既定（on）で待ちの歯が ask なら、形の一覧と待ちの節が載り、分類器の節は載らない', async () => {
     const options = await open({});
+    const guards = { shape: true, wait: true };
+    expect(appendOf(options)).toBe(managerPrompt(guards));
+    expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
+    expect(appendOf(options)).toContain('# この器で断られる Bash の形');
+    expect(appendOf(options)).not.toContain('# 分類器に止められやすい Bash の形');
+  });
+
+  it('形の歯を明示的に off にして待ちの歯が ask なら、待ちの節と分類器の節が載り、形の一覧は載らない', async () => {
+    const options = await open({ [BASH_SHAPE_GUARD_ENV]: 'off' });
     const guards = { shape: false, wait: true, shapeOff: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
@@ -113,12 +122,12 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
   });
 
   it('待ちの歯が deny でも載る', async () => {
-    const options = await open({ [BASH_GUARD_ENV]: 'deny' });
+    const options = await open({ [BASH_GUARD_ENV]: 'deny', [BASH_SHAPE_GUARD_ENV]: 'off' });
     expect(appendOf(options)).toBe(managerPrompt({ shape: false, wait: true, shapeOff: true }));
   });
 
   it('どちらも閉じていれば、歯の節は載らず、分類器の節だけが載る（作業者にも）', async () => {
-    const options = await open({ [BASH_GUARD_ENV]: 'off' });
+    const options = await open({ [BASH_GUARD_ENV]: 'off', [BASH_SHAPE_GUARD_ENV]: 'off' });
     const guards = { shape: false, wait: false, shapeOff: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
@@ -126,8 +135,11 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
     expect(appendOf(options)).toContain('# 分類器に止められやすい Bash の形');
   });
 
-  it('プロファイルで形の歯を on にすると載る（runner の env は未設定）', async () => {
-    const options = await open({ [BASH_GUARD_ENV]: 'off' }, `export ${BASH_SHAPE_GUARD_ENV}=on`);
+  it('プロファイルで形の歯を on にすると載る（runner の env は off）', async () => {
+    const options = await open(
+      { [BASH_GUARD_ENV]: 'off', [BASH_SHAPE_GUARD_ENV]: 'off' },
+      `export ${BASH_SHAPE_GUARD_ENV}=on`,
+    );
     expect(appendOf(options)).toBe(managerPrompt({ shape: true, wait: false }));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt({ shape: true, wait: false }));
   });

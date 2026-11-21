@@ -176,8 +176,8 @@ x-shared-env: &shared-env
   # を読む**（`packages/core/src/bash-guard-mode.ts`）ので、auto-memory と同じくここに要る。
   ALTEROID_BASH_GUARD: ${ALTEROID_BASH_GUARD:-}
   # Bash の形の歯（ヒアドキュメント・リダイレクト・`git reset`・force push など。#4949）の入り切り:
-  # off（既定）/ on。`ALTEROID_BASH_GUARD` とは独立。runner の `process.env` を読む（同じ理由でここに要る）。
-  # 実行環境プロファイルに `export ALTEROID_BASH_SHAPE_GUARD=on` を置けばそちらが優先され、次の Bash の呼び出しから効く。
+  # on（既定）/ off。`ALTEROID_BASH_GUARD` とは独立。runner の `process.env` を読む（同じ理由でここに要る）。
+  # 切るなら `off`。実行環境プロファイルに `export ALTEROID_BASH_SHAPE_GUARD=off` を置けばそちらが優先され、次の Bash の呼び出しから効く。
   ALTEROID_BASH_SHAPE_GUARD: ${ALTEROID_BASH_SHAPE_GUARD:-}
   # 担当の発言に英語の文が混ざったら、次の道具の結果に知らせを添えて日誌に1行残す（#4965。止めない）:
   # off（既定）/ ja。runner の `process.env` を読む（同じ理由でここに要る）。

@@ -70,7 +70,7 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
-// 形の歯は既定 off（`ALTEROID_BASH_SHAPE_GUARD`）。この節の試験は、on を置いて走らせる
+// 形の歯は既定 on（`ALTEROID_BASH_SHAPE_GUARD`）。この節の試験は、on を明示して走らせる（既定の値に依らない）
 async function startSession(
   env: NodeJS.ProcessEnv,
 ): Promise<{ options: Options; events: RunnerEvent[] }> {
@@ -311,12 +311,20 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
     };
   }
 
-  it('既定（未設定）では断らない', async () => {
-    expect((await decisionOf({})).decision).toBeUndefined();
+  it('既定（未設定・空）では断る', async () => {
+    expect((await decisionOf({})).decision).toBe('deny');
     await host?.shutdown();
     expect((await decisionOf({ [BASH_SHAPE_GUARD_ENV]: '' }, undefined, true)).decision).toBe(
-      undefined,
+      'deny',
     );
+  });
+
+  it('明示的に off なら、既定が on でも断らない（従来どおり切れる。作業者も）', async () => {
+    expect((await decisionOf({ [BASH_SHAPE_GUARD_ENV]: 'off' })).decision).toBeUndefined();
+    await host?.shutdown();
+    expect(
+      (await decisionOf({ [BASH_SHAPE_GUARD_ENV]: 'off' }, undefined, true)).decision,
+    ).toBeUndefined();
   });
 
   it.each([false, true])('runner の env が on なら断る（作業者=%s）', async (worker) => {
@@ -329,13 +337,19 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
     expect(reason).toContain('付け替えを外して');
   });
 
-  it('プロファイルで on なら断る（runner の env は未設定）', async () => {
-    const { decision } = await decisionOf({}, `export ${BASH_SHAPE_GUARD_ENV}=on`);
+  it('プロファイルで on なら断る（runner の env は off）', async () => {
+    const { decision } = await decisionOf(
+      { [BASH_SHAPE_GUARD_ENV]: 'off' },
+      `export ${BASH_SHAPE_GUARD_ENV}=on`,
+    );
     expect(decision).toBe('deny');
   });
 
-  it('プロファイルは呼び出しのたびに読む: 置く前は通り、置いた次の呼び出しから断る', async () => {
-    const { options } = await startSessionRaw({}, 'export OTHER_VAR=1');
+  it('プロファイルは呼び出しのたびに読む: 置く前は通り（runner の env が off）、置いた次の呼び出しから断る', async () => {
+    const { options } = await startSessionRaw(
+      { [BASH_SHAPE_GUARD_ENV]: 'off' },
+      'export OTHER_VAR=1',
+    );
     const call = async (): Promise<unknown> =>
       ((await firePreToolUse(options, bash('pnpm test 2>&1', false))) as Out).hookSpecificOutput
         ?.permissionDecision;
@@ -363,7 +377,9 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
 
   it('ALTEROID_BASH_GUARD=ask・deny でも、形の歯が off なら断らない（独立）', async () => {
     for (const mode of ['ask', 'deny']) {
-      expect((await decisionOf({ [BASH_GUARD_ENV]: mode })).decision).toBeUndefined();
+      expect(
+        (await decisionOf({ [BASH_GUARD_ENV]: mode, [BASH_SHAPE_GUARD_ENV]: 'off' })).decision,
+      ).toBeUndefined();
       await host?.shutdown();
     }
   });
@@ -380,7 +396,7 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
 
   it('実効の値が変わったときだけ1行出し直す（setProfile の後）', async () => {
     const logs: string[] = [];
-    await startSessionRaw({}, 'export OTHER_VAR=1', logs);
+    await startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'off' }, 'export OTHER_VAR=1', logs);
     expect(logs).toEqual([]);
     await host?.setProfile('export OTHER_VAR=2');
     expect(logs).toEqual([]);
@@ -399,6 +415,9 @@ describe('Bash の形の歯の入り切り（ALTEROID_BASH_SHAPE_GUARD。#4949�
     expect(host?.bashShapeGuardLine()).toContain('Bash の形の歯: on（ALTEROID_BASH_SHAPE_GUARD。');
     await host?.shutdown();
     await startSessionRaw({});
+    expect(host?.bashShapeGuardLine()).toContain('Bash の形の歯: on');
+    await host?.shutdown();
+    await startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'off' });
     expect(host?.bashShapeGuardLine()).toContain('Bash の形の歯: off');
     await host?.shutdown();
     await startSessionRaw({ [BASH_SHAPE_GUARD_ENV]: 'x' });
