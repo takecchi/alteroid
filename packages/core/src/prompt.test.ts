@@ -354,12 +354,19 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
   });
 
   it('「閉じてよい」の許可に、終了条件と「対象が消えた」の抜け道が付いている', () => {
+    // 経緯: もとは作業者にも同じ許可と抜け道を求めていた。作業者がターンを閉じると最終の報告になるので
+    // 許可そのものが作業者には当てはまらず、`SubagentStop` の起こし直し（`subagent_stall` の `woken`）を招いていた。
+    // 作業者の側は下の歯で「許可を持たない・閉じると報告になる」へ反転した。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    expect(manager).toContain('何の完了を待っているか');
+    expect(manager).toContain('抜ける条件に入れ');
+  });
+
+  it('作業者には「閉じてよい」の許可を渡さず、閉じると最終の報告になることと、前景で待ってから閉じることを告げている', () => {
     const worker = buildWorkerPrompt();
-    for (const prompt of [manager, worker]) {
-      expect(prompt).toContain('何の完了を待っているか');
-      expect(prompt).toContain('抜ける条件に入れ');
-    }
+    expect(worker).not.toContain('ターンを閉じてよい');
+    expect(worker).toContain('ターンを閉じるとそれが最終の報告になる');
+    expect(worker).toContain('前景で完了を待ってから閉じる');
   });
 
   it('マネージャーに、通知が実処理の完了と一致しないことがあるという事実を告げている', () => {
