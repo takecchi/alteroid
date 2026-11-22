@@ -126,7 +126,7 @@ describe('buildDenialAllowedByCloneNote', () => {
   });
 });
 
-describe('拒否の後に伝える「別の手」が、別のコマンドへの言い換えを勧めない（2026-11-23 のオーナー決定）', () => {
+describe('拒否の後に伝える「別の手」が、別のコマンドへの言い換えを勧めない（2026-11-22 の運用の判断）', () => {
   // 「入力を変える」を別の手に数えていた間、作業者は止められた Bash の読みを grep → git grep と言い換えて撃ち直し、迂回として止め直された
   const texts = [
     ['一時規則を足せない確認の段落', DENIAL_ASK_AFTER_ANSWER_PARAGRAPH],
