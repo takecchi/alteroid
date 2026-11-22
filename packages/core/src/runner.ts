@@ -5293,7 +5293,8 @@ class RunnerSession {
         : `${this.#sessionAllowRuleLabel(use.grant)}に当たる ${use.useActor} の呼び出しが、それでも拒否された` +
             `（合図の出所: ${outcome.via}）。セッションに許可規則を足すこの口が、分類器に効いていない疑いがある。` +
             `規則は外した。同じ入力を撃ち直さず、人間が止められた中身を見て誤検知だと確かめるか、` +
-            `別の手（入力を変える・手順を分ける・人間に頼む）を取ること（#4905）。入力の先頭（伏せ字）: ${head}`,
+            `別の手（手順を分ける・人間に頼む）を取ること。` +
+            `同じ操作を別のコマンドに言い換えない（ファイルの読み・探しなら Read/Grep/Glob へ移す）（#4905）。入力の先頭（伏せ字）: ${head}`,
     );
     void this.#pushAfterSessionAllowRuleRemoval();
   }

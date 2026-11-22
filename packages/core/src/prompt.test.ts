@@ -201,14 +201,28 @@ describe('分類器に止められた後の巻き添え — 読むだけは道�
     }
   });
 
-  it('止められた操作そのものは回り込まないことを、同じ節で言っている（道具へ寄せるのを回り込みと取り違えさせない）', () => {
+  it('⭐ 読む・探すは道具で、を分類器の節ではなく平時の決まりの位置に置いている（最初の1回から道具で読ませる）', () => {
+    const line = 'ファイルの中身を読む・語を探す・ファイルを探すのは、Bash ではなく';
+    expect(manager.indexOf(line)).toBeGreaterThan(-1);
+    expect(manager.indexOf(line)).toBeLessThan(manager.indexOf('# auto mode の分類器に止められたとき'));
+    const workerClassifier = worker.indexOf('**分類器は、この会話の文脈全体を見て判断する。**');
+    expect(workerClassifier).toBeGreaterThan(-1);
+    expect(worker.indexOf(line)).toBeGreaterThan(-1);
+    expect(worker.indexOf(line)).toBeLessThan(workerClassifier);
+  });
+
+  it('止められた操作は回り込まないことを、回り込みに数えるもの・数えないものの線とともに言っている', () => {
+    // 経緯: もとは「言い換え・別の道具・別の手段で回り込まない」「道具へ寄せるのは巻き添えの照会の話であって、止められた操作の話ではない」を固定していた。
+    // それだと止められたのが読みそのもののとき、道具へ移すのも回り込みに読め、作業者は Bash の言い換え（grep → git grep）へ流れた。
+    // 2026-11-23 のオーナー決定で、作業ツリーの読み・探しを道具へ移すのは回り込みに数えない線へ反転した。
     for (const prompt of [manager, worker]) {
+      expect(prompt).toContain('止められた操作を回り込んで通そうとしないこと。');
+      expect(prompt).toContain('止められた Bash の読みを別の Bash コマンドに言い換えること');
+      expect(prompt).toContain('副作用のある操作（書き込み・削除・外部への送信）を別の経路で通すこと');
       expect(prompt).toContain(
-        '止められた操作そのものを、言い換え・別の道具・別の手段で回り込んで通そうとしないこと。',
+        '作業ツリーの中のファイルを読む・探すのは、止められた後でも `Read`・`Grep`・`Glob` へ移してよい',
       );
-      expect(prompt).toContain(
-        '巻き添えになった読むだけの照会の話であって、止められた操作の話ではない',
-      );
+      expect(prompt).not.toContain('言い換え・別の道具・別の手段で回り込んで');
     }
   });
 

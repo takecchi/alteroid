@@ -261,7 +261,7 @@ describe('allow の一往復（issue #1105 P1）', () => {
     expect(summary).toContain('allow しても撃ち直しは通らないことがある');
     expect(summary).toContain('人間が止められた中身を見て誤検知だと確かめる必要がある');
     expect(summary).toContain(
-      '続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること',
+      '続けて同じ入力を撃たず、別の手（手順を分ける・人間に頼む）を取ること。同じ操作を別のコマンドに言い換えない（ファイルの読み・探しなら Read/Grep/Glob へ移す）',
     );
     expect(summary).not.toContain('「同じ入力で撃ち直してよい」と伝える');
     expect(summary).toContain('この許可で通るかは確かめていない。');

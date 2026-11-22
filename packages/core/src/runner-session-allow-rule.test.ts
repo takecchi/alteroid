@@ -597,7 +597,7 @@ describe('確認の固定の段落（#4905・#4943）', () => {
       'そのセッションの他の作業者にも効く',
     );
     expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE).toContain(
-      '撃ち直すなら入力を1字も変えないこと。それでも拒否されたら、別の手（入力を変える・手順を分ける・人間に頼む）を取ること',
+      '撃ち直すなら入力を1字も変えないこと。それでも拒否されたら、別の手（手順を分ける・人間に頼む）を取ること。同じ操作を別のコマンドに言い換えない（ファイルの読み・探しなら Read/Grep/Glob へ移す）',
     );
     expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE).toContain('自動では撃ち直されない');
     expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH_BASH_RULE).not.toContain('続けて同じ入力を撃たず');
@@ -607,7 +607,7 @@ describe('確認の固定の段落（#4905・#4943）', () => {
 
   it('それ以外用の段落は #4904 の文面のまま', () => {
     expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH).toContain(
-      '続けて同じ入力を撃たず、別の手（入力を変える・手順を分ける・人間に頼む）を取ること',
+      '続けて同じ入力を撃たず、別の手（手順を分ける・人間に頼む）を取ること。同じ操作を別のコマンドに言い換えない（ファイルの読み・探しなら Read/Grep/Glob へ移す）',
     );
     expect(DENIAL_ASK_AFTER_ANSWER_PARAGRAPH).not.toContain('一時規則');
   });
