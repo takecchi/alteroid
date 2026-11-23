@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { SEARCH_TOOLS_OPT_IN } from './claude-provider.js';
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
 import { gitChildEnv } from './git-child-env.test-support.js';
 import {
@@ -323,7 +324,9 @@ describe('マネージャー', () => {
     expect(WORKER_MODEL).toBe('sonnet');
 
     expect(options.tools).toBeUndefined();
-    expect(options.allowedTools).toBeUndefined();
+    // かつては `toBeUndefined()`。同梱の CLI は preset のままだと Grep / Glob を外すので、名指しして戻す。
+    // 絞る欄（`tools` / `disallowedTools`）は今も空で、足したのは道具を戻す名指しだけ（`real-cli-search-tools.test.ts`）
+    expect(options.allowedTools).toEqual(SEARCH_TOOLS_OPT_IN);
     expect(options.disallowedTools).toBeUndefined();
     expect(worker.tools).toBeUndefined();
     expect(worker.disallowedTools).toBeUndefined();

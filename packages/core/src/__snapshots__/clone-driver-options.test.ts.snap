@@ -64,7 +64,9 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "mcp__alteroid__manager_transcript",
     "mcp__alteroid__archive_remove",
     "mcp__alteroid__archive_remove_many",
-    "mcp__alteroid__runner_list"
+    "mcp__alteroid__runner_list",
+    "Grep(./**)",
+    "Glob(./**)"
   ],
   "permissionMode": "auto",
   "mcpServers": {
@@ -199,7 +201,9 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "mcp__alteroid__manager_transcript",
     "mcp__alteroid__archive_remove",
     "mcp__alteroid__archive_remove_many",
-    "mcp__alteroid__runner_list"
+    "mcp__alteroid__runner_list",
+    "Grep(./**)",
+    "Glob(./**)"
   ],
   "permissionMode": "auto",
   "mcpServers": {
@@ -333,7 +337,9 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "mcp__alteroid__manager_transcript",
     "mcp__alteroid__archive_remove",
     "mcp__alteroid__archive_remove_many",
-    "mcp__alteroid__runner_list"
+    "mcp__alteroid__runner_list",
+    "Grep(./**)",
+    "Glob(./**)"
   ],
   "permissionMode": "auto",
   "mcpServers": {

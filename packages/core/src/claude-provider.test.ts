@@ -2560,7 +2560,9 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
           "mcp__alteroid__manager_transcript",
           "mcp__alteroid__archive_remove",
           "mcp__alteroid__archive_remove_many",
-          "mcp__alteroid__runner_list"
+          "mcp__alteroid__runner_list",
+          "Grep(./**)",
+          "Glob(./**)"
         ],
         "permissionMode": "auto",
         "mcpServers": {
@@ -2709,7 +2711,9 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
           "mcp__alteroid__manager_transcript",
           "mcp__alteroid__archive_remove",
           "mcp__alteroid__archive_remove_many",
-          "mcp__alteroid__runner_list"
+          "mcp__alteroid__runner_list",
+          "Grep(./**)",
+          "Glob(./**)"
         ],
         "permissionMode": "auto",
         "mcpServers": {
@@ -2786,6 +2790,10 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
       "{
         "model": "opus",
         "permissionMode": "auto",
+        "allowedTools": [
+          "Grep(./**)",
+          "Glob(./**)"
+        ],
         "systemPrompt": {
           "type": "preset",
           "preset": "claude_code",

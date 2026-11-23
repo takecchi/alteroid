@@ -475,6 +475,19 @@ export function withCliSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 // Older Claude Code versions reject true or false here, so use the object form in settings files shared across versions.
 export const NO_ATTRIBUTION_SETTINGS = { attribution: { commit: '', pr: '' } } as const;
 
+/**
+ * 同梱の CLI は、`tools` を preset のままにすると Grep / Glob を外し、検索を Bash の `find` / `grep` へ寄せる
+ * （CLI 2.1.318 で確認。`Grep` を呼ぶと `No such tool available: Grep` が返る）。Grep / Glob を `allowedTools` に
+ * 名指しすると戻る。クローン・担当・作業者の全員に渡す（作業者は親の道具を継ぐ）。`real-cli-search-tools.test.ts` が本物の CLI で固定する。
+ *
+ * 素の `'Grep'` / `'Glob'` にしない: 素の名前は道具全体を確認なしで通すので、作業ディレクトリの外の検索まで
+ * `canUseTool` を経ずに通り、Read より広く読めるようになるため。範囲は作業ディレクトリの中（既定でも確認なしに読める所）に限り、
+ * 外は Read と同じく確認へ回す。`tools` に書かない: 明示リストは preset 一式を置き換え、能力の削除になるため。
+ */
+// [sdk-verbatim Options.tools]
+// dedicated Grep/Glob tools. List Grep/Glob here or in `allowedTools` to get them.
+export const SEARCH_TOOLS_OPT_IN: readonly string[] = ['Grep(./**)', 'Glob(./**)'];
+
 // 本セッション（`buildCloneSessionOptions`）と蒸留（`buildCloneDistillOptions`）が共に取る欄
 interface CloneOptionsRequestBase {
   model: string;
@@ -502,7 +515,7 @@ function cloneBaseOptions(
     // `tools` を渡さない: 明示リストで絞ると能力の削除になるため
     // [sdk-verbatim Options.allowedTools]
     // To restrict which tools are available, use the `tools` option instead.
-    allowedTools: CLONE_ALLOWED_TOOLS,
+    allowedTools: [...CLONE_ALLOWED_TOOLS, ...SEARCH_TOOLS_OPT_IN],
     // `default` のまま道具を渡さない: このセッションには `canUseTool` が無く、SDK は確認相手が居ないとき `ask` をそのまま拒否で終わらせるため
     // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
     permissionMode: request.permissionMode,
@@ -712,6 +725,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     model,
     // `tools` と `maxTurns` を渡さない: 明示リストで絞らず、ターン数でも止めないため
     permissionMode,
+    allowedTools: [...SEARCH_TOOLS_OPT_IN],
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',

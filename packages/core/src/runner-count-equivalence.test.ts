@@ -9,6 +9,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { SEARCH_TOOLS_OPT_IN } from './claude-provider.js';
 import { createManagerPool, MANAGER_MODEL, WORKER_AGENT_NAME, WORKER_MODEL } from './manager.js';
 import { createProfileService } from './profile-service.js';
 import { FakeRunnerClientBase } from './runner-client.test-support.js';
@@ -509,7 +510,8 @@ describe('能力・プロトコルの等価性（M5 ゴール本文 / PR7）', (
     for (const result of [at1, at3]) {
       expect(result.capability.model).toBe(MANAGER_MODEL);
       expect(result.capability.tools).toBeUndefined();
-      expect(result.capability.allowedTools).toBeUndefined();
+      // かつては `toBeUndefined()`。Grep / Glob を戻す名指しだけを載せる（`real-cli-search-tools.test.ts`）
+      expect(result.capability.allowedTools).toEqual(SEARCH_TOOLS_OPT_IN);
       expect(result.capability.disallowedTools).toBeUndefined();
       expect(result.capability.maxTurns).toBeUndefined();
       expect(result.capability.maxBudgetUsd).toBeUndefined();

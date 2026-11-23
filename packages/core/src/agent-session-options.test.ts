@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { cloneMcpServers } from './claude-provider.js';
+import { cloneMcpServers, SEARCH_TOOLS_OPT_IN } from './claude-provider.js';
 import { CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { withEffectiveMcpServers } from './mcp-config-file.test-support.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -137,7 +137,8 @@ describe('クローン本セッションへ渡す Options', () => {
     const { options } = calls[0] as { options: Options };
 
     expect(options.model).toBe('opus');
-    expect(options.allowedTools).toEqual(CLONE_ALLOWED_TOOLS);
+    // かつては `CLONE_ALLOWED_TOOLS` だけ。同梱の CLI が preset のままだと外す Grep / Glob を戻す名指しを足した（`real-cli-search-tools.test.ts`）
+    expect(options.allowedTools).toEqual([...CLONE_ALLOWED_TOOLS, ...SEARCH_TOOLS_OPT_IN]);
     expect(options.permissionMode).toBe(DEFAULT_PERMISSION_MODE);
     expect(Object.keys(options.mcpServers ?? {})).toEqual([MCP_SERVER_NAME]);
     expect(typeof options.systemPrompt).toBe('string');
