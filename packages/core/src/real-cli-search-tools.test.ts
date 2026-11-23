@@ -105,7 +105,7 @@ async function startFakeApi(
         res.end(JSON.stringify({ input_tokens: 1 }));
         return;
       }
-      let parsed: ParsedRequest = {};
+      let parsed: ParsedRequest;
       try {
         parsed = JSON.parse(body) as ParsedRequest;
       } catch {
