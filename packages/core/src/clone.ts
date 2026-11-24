@@ -4704,7 +4704,7 @@ class Clone implements CloneHost {
     } catch {
       env = this.#env;
     }
-    let vault: Record<string, string> = {};
+    let vault: Record<string, string>;
     try {
       vault = { ...this.#vaultCredentialOverlay(), ...(this.#credentials?.() ?? {}) };
     } catch {
