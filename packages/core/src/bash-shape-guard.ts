@@ -537,10 +537,7 @@ export type CommandWord = { name: string; args: string[]; rawArgs: string[] };
 
 // コマンドの位置にある語と、その引数を返す（前置きを読み飛ばす）。`rawArgs` は引用符を外す前の引数（`args` と同じ並び）
 // `keepEnv` を立てると `env` を前置きとして読み飛ばさず、`env` そのものを語として返す（引数なしの `env` を見分けるため。`bash-env-guard.ts`）
-export function commandWordOf(
-  tokens: readonly string[],
-  keepEnv = false,
-): CommandWord | undefined {
+export function commandWordOf(tokens: readonly string[], keepEnv = false): CommandWord | undefined {
   const t = tokens.map(unquote);
   let i = 0;
   while (i < t.length) {

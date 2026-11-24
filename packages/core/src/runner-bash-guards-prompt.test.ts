@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { BASH_ENV_GUARD_ENV } from './bash-env-guard.js';
 import { BASH_GUARD_ENV, BASH_SHAPE_GUARD_ENV } from './bash-guard-mode.js';
 import { createProfileVessel } from './profile.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -84,10 +85,12 @@ const appendOf = (options: Options): string =>
 const workerPromptOf = (options: Options): string =>
   String(((options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown }).prompt);
 
+// 環境変数の値を出す形の歯（#6864）は既定で on なので、下の各ケースの期待値には `env: true` が入る（閉じたケースだけ env も閉じて省く）
 const managerPrompt = (bashGuards?: {
   shape: boolean;
   wait: boolean;
   shapeOff?: boolean;
+  env?: boolean;
 }): string =>
   buildManagerSystemPrompt({
     managerId: 'mgr-1',
@@ -98,14 +101,14 @@ const managerPrompt = (bashGuards?: {
 describe('歯が断る形を担当・作業者のプロンプトへ渡す（#5017）', () => {
   it('形の歯が on（待ちの歯は既定の ask）なら、両方の節が担当にも作業者にも載る', async () => {
     const options = await open({ [BASH_SHAPE_GUARD_ENV]: 'on' });
-    const guards = { shape: true, wait: true };
+    const guards = { shape: true, wait: true, env: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
   });
 
   it('形の歯が既定（off）で待ちの歯が ask なら、待ちの節と分類器の節が載り、形の一覧は載らない', async () => {
     const options = await open({});
-    const guards = { shape: false, wait: true, shapeOff: true };
+    const guards = { shape: false, wait: true, shapeOff: true, env: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
     expect(appendOf(options)).toContain('# 分類器に止められやすい Bash の形');
@@ -114,11 +117,14 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
 
   it('待ちの歯が deny でも載る', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'deny' });
-    expect(appendOf(options)).toBe(managerPrompt({ shape: false, wait: true, shapeOff: true }));
+    expect(appendOf(options)).toBe(
+      managerPrompt({ shape: false, wait: true, shapeOff: true, env: true }),
+    );
   });
 
+  // 環境変数の歯（#6864）も閉じる: この歯が足される前は「待ちの歯と形の歯が閉じていれば、断られる節は1つも載らない」を測っていたので、3つ目の歯も閉じて同じことを測る
   it('どちらも閉じていれば、歯の節は載らず、分類器の節だけが載る（作業者にも）', async () => {
-    const options = await open({ [BASH_GUARD_ENV]: 'off' });
+    const options = await open({ [BASH_GUARD_ENV]: 'off', [BASH_ENV_GUARD_ENV]: 'off' });
     const guards = { shape: false, wait: false, shapeOff: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
@@ -128,13 +134,15 @@ describe('歯が断る形を担当・作業者のプロンプトへ渡す（#501
 
   it('プロファイルで形の歯を on にすると載る（runner の env は未設定）', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'off' }, `export ${BASH_SHAPE_GUARD_ENV}=on`);
-    expect(appendOf(options)).toBe(managerPrompt({ shape: true, wait: false }));
-    expect(workerPromptOf(options)).toBe(buildWorkerPrompt({ shape: true, wait: false }));
+    expect(appendOf(options)).toBe(managerPrompt({ shape: true, wait: false, env: true }));
+    expect(workerPromptOf(options)).toBe(
+      buildWorkerPrompt({ shape: true, wait: false, env: true }),
+    );
   });
 
   it('形の歯の値が不正で判定が投げても、セッションは開き、歯の形の一覧は載せない（off として扱う）', async () => {
     const options = await open({ [BASH_GUARD_ENV]: 'off', [BASH_SHAPE_GUARD_ENV]: 'yes' });
-    const guards = { shape: false, wait: false, shapeOff: true };
+    const guards = { shape: false, wait: false, shapeOff: true, env: true };
     expect(appendOf(options)).toBe(managerPrompt(guards));
     expect(workerPromptOf(options)).toBe(buildWorkerPrompt(guards));
   });

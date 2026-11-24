@@ -106,8 +106,8 @@ const appendOf = (options: Options): string =>
 const workerPromptOf = (options: Options): string =>
   String(((options.agents ?? {})[WORKER_AGENT_NAME] as { prompt?: unknown }).prompt);
 
-// 形の歯は既定 off なので、runner 経由のプロンプトには「分類器に止められやすい形」の節が入る
-const SHAPE_OFF = { shape: false, wait: false, shapeOff: true } as const;
+// 形の歯は既定 off なので、runner 経由のプロンプトには「分類器に止められやすい形」の節が入る。環境変数の値を出す形の歯は既定 on なので、その節も入る（#6864）
+const SHAPE_OFF = { shape: false, wait: false, shapeOff: true, env: true } as const;
 const BASE_APPEND = buildManagerSystemPrompt({
   managerId: 'mgr-1',
   workerName: WORKER_AGENT_NAME,

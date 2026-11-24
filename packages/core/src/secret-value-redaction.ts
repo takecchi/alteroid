@@ -77,7 +77,12 @@ export function createSecretValueRedactor(source: SecretValueSource): SecretValu
         const r = redactValue(item);
         if (r !== item) changed = true;
         // 普通の代入にしない: `__proto__` という名前のキーがプロトタイプの書き換えに化けるため
-        Object.defineProperty(out, key, { value: r, enumerable: true, writable: true, configurable: true });
+        Object.defineProperty(out, key, {
+          value: r,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
       }
       return changed ? out : value;
     }

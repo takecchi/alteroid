@@ -39,7 +39,8 @@ async function readRange(
 export async function readRedactedTranscriptTail(
   path: string,
   maxChars: number,
-  options: { initialWindowBytes?: number } = {},
+  // `redactText` は画像の後に掛ける（`#readTranscript` と同じ順）。行をまたがない置き換え（秘密の値の完全一致。JSONL の1行の中に生の改行は無い）に限る: 上の「同じ値になる根拠」がそのまま効くため
+  options: { initialWindowBytes?: number; redactText?: (text: string) => string } = {},
 ): Promise<{ body: string; bytesRead: number }> {
   const handle = await open(path, 'r');
   try {
@@ -55,7 +56,9 @@ export async function readRedactedTranscriptTail(
         const newline = text.indexOf('\n');
         text = newline === -1 ? '' : text.slice(newline + 1);
       }
-      const redacted = await redactImagesInTranscriptYielding(text);
+      const imagesRedacted = await redactImagesInTranscriptYielding(text);
+      const redacted =
+        options.redactText === undefined ? imagesRedacted : options.redactText(imagesRedacted);
       if (redacted.length > maxChars) return { body: redacted.slice(-(maxChars + 1)), bytesRead };
       if (start === 0) return { body: redacted, bytesRead };
       width *= 2;

@@ -78,27 +78,31 @@ export class RunnerBashGuard {
           ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
         let shapeDeny: boolean;
         try {
-          // 環境変数の値を出す形は最初に見る（`bash-env-guard.ts`）: 確認に上げてクローンが開けても、値は出力ごと会話の記録へ書かれるため、`ask` でも deny にする。
+          // 本番デプロイの起動（release-prod）は `off` でも確認に残す
+          const releaseProd = inspectReleaseProdDispatch(command);
+          // プロファイルは1回の呼び出しにつき1回だけ読む（環境変数の歯と形の歯で分け合う）。release-prod に当たったら読まない（読むのが投げても release-prod の確認を失わないため）
+          let profile: Record<string, string> | undefined;
+          const profileEnv = (): Record<string, string> => (profile ??= this.#profileEnv());
+          // 環境変数の値を出す形（`bash-env-guard.ts`）は形の歯より先に見る: 確認に上げてクローンが開けても、値は出力ごと会話の記録へ書かれるため、`ask` でも deny にする。
           // `ALTEROID_BASH_GUARD` から切り離す: `off` を選んだ器でも資格の値を記録へ流さないため。開けるのは `ALTEROID_BASH_ENV_GUARD=off`（プロファイルが優先）
           const envDump =
-            resolveEffectiveBashEnvGuard(this.#env, this.#profileEnv()) === 'on'
+            !releaseProd.matched && resolveEffectiveBashEnvGuard(this.#env, profileEnv()) === 'on'
               ? inspectBashEnvDump(command)
               : { blocked: false as const };
           if (envDump.blocked) {
             const actor = this.#actorOf(record);
             this.#tryObservation('ガードの note の送り出し', () => {
-              this.#note(`Bash の呼び出しを弾いた（${actor}・形=${envDump.form}）。${envDump.reason}`);
+              this.#note(
+                `Bash の呼び出しを弾いた（${actor}・形=${envDump.form}）。${envDump.reason}`,
+              );
             });
             return { kind: 'decided', decision: { kind: 'deny', reason: envDump.reason } };
           }
-          // 本番デプロイの起動（release-prod）は `off` でも確認に残す
-          const releaseProd = inspectReleaseProdDispatch(command);
           // 形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す
           // マネージャーにも掛ける（#4949）: heosterra のマネージャーも同じ形を打っていて、オーナーの決まりはマネージャーにも同じ形を禁じているため
           // `ALTEROID_BASH_GUARD` から切り離す（#4949）: 形の歯は `ALTEROID_BASH_SHAPE_GUARD`（既定 off）だけで決まる。呼び出しのたびに読み、プロファイルの値を優先する（プロファイルに置けば次の呼び出しから効く）。不正な値はここで投げ、下の catch が確認（`deny` 設定なら deny）に倒す
           const shape =
-            !releaseProd.matched &&
-            resolveEffectiveBashShapeGuard(this.#env, this.#profileEnv()) === 'on'
+            !releaseProd.matched && resolveEffectiveBashShapeGuard(this.#env, profileEnv()) === 'on'
               ? inspectBashShape(command)
               : { blocked: false as const };
           shapeDeny = shape.blocked;

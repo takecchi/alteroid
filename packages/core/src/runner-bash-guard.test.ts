@@ -88,6 +88,20 @@ describe('口を呼ぶ順と回数', () => {
     expect(h.calls).toEqual(['actorOf', 'tryObservation:ガードの note の送り出し', 'note']);
   });
 
+  it('環境変数の値を出す形（#6864）: off でも deny。profileEnv → actorOf → tryObservation → note、profileEnv は 1 回だけ', () => {
+    const h = harness({ bashGuard: 'off' });
+    const outcome = h.guard.decide(bash('env', { agentId: 'a1', agentType: 'worker' }));
+    expect(outcome.kind).toBe('decided');
+    expect(outcome.kind === 'decided' ? outcome.decision.kind : undefined).toBe('deny');
+    expect(h.calls).toEqual([
+      'profileEnv',
+      'actorOf',
+      'tryObservation:ガードの note の送り出し',
+      'note',
+    ]);
+    expect(h.notes[0]).toContain('Bash の呼び出しを弾いた（worker:m・形=env）');
+  });
+
   it('off: 弾く待ち形でも判定しない。profileEnv は 1 回だけ、actorOf・note は呼ばない', () => {
     const h = harness({ bashGuard: 'off' });
     expect(h.guard.decide(bash(WAITING))).toEqual({ kind: 'none' });

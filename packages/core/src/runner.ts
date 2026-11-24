@@ -2963,7 +2963,12 @@ class RunnerSession {
     const path = this.#sdkSession.transcriptPath;
     if (path === undefined) return null;
     try {
-      return (await readRedactedTranscriptTail(path, maxChars)).body;
+      const redactor = this.#secretValueRedactor();
+      return (
+        await readRedactedTranscriptTail(path, maxChars, {
+          redactText: (text) => redactor.redactText(text),
+        })
+      ).body;
     } catch {
       return null;
     }

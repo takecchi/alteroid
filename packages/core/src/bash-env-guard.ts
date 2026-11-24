@@ -9,7 +9,8 @@ import { resolveEnumEnv } from './placed-env.js';
 // 見分けるだけで守りではない: 文字列しか見ないので、スクリプトファイルの中・`eval`・変数に入れた命令・`echo "$GH_TOKEN"` のように名前を指して値を出す形は拾えない。
 // 塞いだことにしない。生ログへ写す側の伏せ字（`secret-value-redaction.ts`）と2枚で受ける。
 
-export type BashEnvForm = 'env' | 'printenv' | 'printenv-secret' | 'export' | 'declare' | 'set' | 'proc-environ';
+export type BashEnvForm =
+  'env' | 'printenv' | 'printenv-secret' | 'export' | 'declare' | 'set' | 'proc-environ';
 
 type BashEnvVerdict = { blocked: false } | { blocked: true; form: BashEnvForm; reason: string };
 
@@ -36,8 +37,7 @@ export function resolveEffectiveBashEnvGuard(
   return resolveBashEnvGuard(env);
 }
 
-const WHY =
-  'Bash の出力は会話の記録にそのまま残るので、`GH_TOKEN` などの資格の値が平文で載る。';
+const WHY = 'Bash の出力は会話の記録にそのまま残るので、`GH_TOKEN` などの資格の値が平文で載る。';
 const INSTEAD =
   '名前の一覧が要るなら `compgen -e`（値を出さない）、ある変数が在るかだけなら `test -n "${名前+x}"`、秘密でない1つの値なら `printenv PATH` のように名前を指して打つこと。';
 const CONTINUE =
@@ -46,7 +46,8 @@ const CONTINUE =
 const SHAPES: Record<BashEnvForm, string> = {
   env: '引数なしの `env`（環境変数を値ごと全部出す）',
   printenv: '引数なしの `printenv`（環境変数を値ごと全部出す）',
-  'printenv-secret': '`printenv` に秘密の名前（`TOKEN`・`KEY`・`SECRET`・`PASSWORD` などを含む名前）を渡す形（その値を出す）',
+  'printenv-secret':
+    '`printenv` に秘密の名前（`TOKEN`・`KEY`・`SECRET`・`PASSWORD` などを含む名前）を渡す形（その値を出す）',
   export: '引数なしの `export`・`export -p`（環境変数を値ごと全部出す）',
   declare: '名前を付けない `declare`・`typeset`（`-p`・`-x` を含む。変数を値ごと全部出す）',
   set: '引数なしの `set`（変数を値ごと全部出す）',
