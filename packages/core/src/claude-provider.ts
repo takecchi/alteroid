@@ -44,6 +44,7 @@ import type {
   AgentToolAuditRecord,
 } from './agent-hooks.js';
 import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
+import { MANAGER_COMPACTION_INSTRUCTIONS } from './manager-compaction-instructions.js';
 import { splitInProcessMcpServers } from './clone-mcp-config-file.js';
 import { noteBackgroundFailure } from './dropped-record.js';
 import { excerpt } from './excerpt.js';
@@ -127,7 +128,7 @@ function wrapObservationHook<T>(
   };
 }
 
-// クローン本体の PreCompact: 観測の記録を渡したうえで、要約への指示を `systemMessage` で返す。
+// クローン本体とマネージャーの PreCompact: 観測の記録を渡したうえで、要約への指示を `systemMessage` で返す（指示の中身は層ごとに別）。
 // 指示を足す口はこの返り値だけである（`hookSpecificOutput` に PreCompact の型は無い。同梱 CLI は返り値の `systemMessage` を要約の追加の指示に使う）。
 // 観測のフックは投げた例外を握らず投げ返す（`wrapObservationHook` と同じ）: 指示を足すためだけに、退避・蒸留の失敗の扱いを変えないため
 function wrapPreCompactHookWithInstructions(
@@ -799,7 +800,14 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       ],
       // `PostToolUse` と `PostToolUseFailure` の片方だけを登録しない: 失敗・中断した道具呼び出しが日誌に1件も残らなくなるため
       PostToolUseFailure: postToolUseFailureMatchers(onPostToolUseFailure),
-      PreCompact: [{ hooks: [wrapObservationHook(onPreCompact, toAgentPreCompactRecord)] }],
+      // クローンと同じ口（返り値の `systemMessage`）で、マネージャー用の指示を渡す: 窓を絞ると要約が起きるので、依頼の決まりを逐語で残させるため
+      PreCompact: [
+        {
+          hooks: [
+            wrapPreCompactHookWithInstructions(onPreCompact, MANAGER_COMPACTION_INSTRUCTIONS),
+          ],
+        },
+      ],
       ...(onSessionStart === undefined
         ? {}
         : { SessionStart: [{ hooks: [wrapSessionStartHook(onSessionStart)] }] }),

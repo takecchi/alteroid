@@ -35,6 +35,7 @@ import {
   withManagerWorkerCacheTtl,
 } from './claude-provider.js';
 import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
+import { MANAGER_COMPACTION_INSTRUCTIONS } from './manager-compaction-instructions.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { WORKER_AGENT_NAME } from './runner.js';
@@ -1370,7 +1371,9 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     });
   });
 
-  it('buildManagerSessionOptions: PreCompact も同じ中立の記録として渡り、{ continue: true } を返す', async () => {
+  // 元の名前は「PreCompact も同じ中立の記録として渡り、{ continue: true } を返す」。マネージャーにも窓（350k）を入れて要約が起きるようになったので、
+  // 依頼の決まりを逐語で残させる指示を返すように期待を反転した（2026-11-24）。中立の記録として渡ることは変えていない。
+  it('buildManagerSessionOptions: PreCompact も同じ中立の記録として渡り、マネージャー用の要約の指示を返す', async () => {
     let captured: AgentPreCompactRecord | undefined;
     const options = buildManagerSessionOptions({
       model: 'opus',
@@ -1404,8 +1407,75 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       custom_instructions: null,
     });
 
-    expect(result).toEqual({ continue: true });
+    expect(result).toEqual({ continue: true, systemMessage: MANAGER_COMPACTION_INSTRUCTIONS });
     expect(captured?.transcriptPath).toBe('/tmp/manager.jsonl');
+  });
+
+  it('要約の指示を層で取り違えない: クローン本体にはクローンの指示、マネージャーにはマネージャーの指示、蒸留には PreCompact が無い', async () => {
+    const preCompactInput = {
+      hook_event_name: 'PreCompact',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/tmp/t.jsonl',
+      trigger: 'auto',
+      custom_instructions: null,
+    };
+    const clone = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
+    });
+    const manager = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onSubagentStop: () => ({ kind: 'continue' }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
+      managerAutoMemoryEnabled: false,
+    });
+    const distill = buildCloneDistillOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+    });
+
+    const cloneResult = await invokeHook(clone.hooks?.PreCompact?.[0]?.hooks[0], preCompactInput);
+    const managerResult = await invokeHook(
+      manager.hooks?.PreCompact?.[0]?.hooks[0],
+      preCompactInput,
+    );
+
+    expect(cloneResult).toEqual({ continue: true, systemMessage: CLONE_COMPACTION_INSTRUCTIONS });
+    expect(managerResult).toEqual({
+      continue: true,
+      systemMessage: MANAGER_COMPACTION_INSTRUCTIONS,
+    });
+    expect(distill.hooks?.PreCompact).toBeUndefined();
+    expect(JSON.stringify(distill)).not.toContain(MANAGER_COMPACTION_INSTRUCTIONS.split('\n')[0]);
   });
 
   describe('SessionStart フックの包み直し（#4995）', () => {
