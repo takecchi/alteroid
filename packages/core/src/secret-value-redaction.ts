@@ -7,7 +7,7 @@ import { SECRET_ENV_VALUE_MIN_LENGTH } from './secret-redaction.js';
  * - **当てるのは値の完全一致だけ。** 形で当てる規則（`secret-redaction.ts` の `CREDENTIAL_RULES` など）は使わない: 生ログは resume の正本で、
  *   読んだコードの `password=…` のような普通の文字列まで書き換えると、起こし直した担当が読む文脈が元と違ってしまうため。
  *   値の完全一致は、偶然に一致する普通の文がほぼ無い（16 字以上の秘密の値に限る）。
- * - **対象は、名前が秘密に見える環境変数（`isSecretEnvName`）と、資格の正本の値（名前によらない。#4829 と同じ理由）。**
+ * - **対象は、名前が秘密に見える環境変数（`isSecretEnvName`）・値がパスワード入りの URL の環境変数・資格の正本の値（名前によらない。#4829 と同じ理由）。**
  * - **今持っている値しか知らない。** 鍵を回した後は、回す前の値が残った行を伏せない（その行は CLI の手元の生ログにも平文で在る）。塞いだことにしない。
  * - **触らない行は同じ参照で返す**（`transcript-image-redaction.ts` と同じ約束。アーカイブの連続性の判定がバイト比較のため）。
  */
@@ -31,6 +31,14 @@ interface Needle {
   readonly mark: string;
 }
 
+// 名前が秘密に見えなくても、値が `scheme://user:password@host` の形なら秘密として扱う（#6866）。
+// クローンの子は記憶ストアの所在（`ALTEROID_DATABASE_URL` のような、名前に TOKEN・KEY を含まない接続文字列）を持つため
+const URL_WITH_PASSWORD_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]*:[^/\s@]+@/;
+
+function hasUrlPassword(value: string): boolean {
+  return URL_WITH_PASSWORD_RE.test(value.trim());
+}
+
 export function createSecretValueRedactor(source: SecretValueSource): SecretValueRedactor {
   const byValue = new Map<string, string>();
   const add = (name: string, value: unknown): void => {
@@ -39,7 +47,9 @@ export function createSecretValueRedactor(source: SecretValueSource): SecretValu
   };
   for (const [name, value] of Object.entries(source.alwaysSecret ?? {})) add(name, value);
   for (const [name, value] of Object.entries(source.env)) {
-    if (isSecretEnvName(name)) add(name, value);
+    if (isSecretEnvName(name) || (typeof value === 'string' && hasUrlPassword(value))) {
+      add(name, value);
+    }
   }
   // 長い値から当てる: 値が別の値を含むとき、短いほうが先に当たると長いほうの断片が残るため
   const plain: Needle[] = [...byValue.entries()]

@@ -42,6 +42,8 @@ export interface CloneGravePorts {
   ): Promise<void>;
   /** `Clone` の `#distillMemory.transcriptPath` */
   transcriptPath(): string | null;
+  /** `Clone` の `#secretValueRedactor().redactText`（子が持つ秘密の値を退避の本文から伏せる。#6866） */
+  redactSecrets(text: string): string;
   /** `Clone` の `#sdkSession.sdkSessionId` */
   sdkSessionId(): string | null;
   /** `Clone` の `#sdkSession.stopped` */
@@ -100,8 +102,10 @@ export class CloneGraves {
     const sessionId = this.#ports.sdkSessionId() ?? 'clone';
     let archiveId: string | null = null;
     try {
-      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
-      const transcript = await redactImagesInTranscriptYielding(await readFile(path, 'utf8'));
+      // 画像の中身と子が持つ秘密の値は archive へ渡さない: 保持期限後も消えない生ログになるため
+      const transcript = this.#ports.redactSecrets(
+        await redactImagesInTranscriptYielding(await readFile(path, 'utf8')),
+      );
       const write = await this.#ports.stores().archive.archive(sessionId, transcript);
       archiveId = write.id;
       const continuityText = describeArchiveContinuityForJournal({

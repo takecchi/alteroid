@@ -229,6 +229,31 @@ describe('runner: peer の記録を預ける（#5257）', () => {
     await s.host.shutdown();
   });
 
+  // #6866: peer の Bash の出力（`env` など）に載った資格を、pg の記録へ平文で残さない。担当の mirror と同じ伏せ字（担当の子の env の値）
+  it('peer の記録を預けるとき、子が持つ秘密の値は印になる', async () => {
+    // ダミーの値（本物の鍵ではない）。名前が秘密に見える変数として、担当と peer の子へ渡る
+    const name = 'ALTEROID_TEST_DUMMY_API_KEY';
+    const value = 'dummy-peer-secret-for-6866-0123456789';
+    const s = await setup({ [name]: value });
+    mkdirSync(dirname(s.rolloutFile), { recursive: true });
+    writeFileSync(s.rolloutFile, `${JSON.stringify(line(0, `HOME=/x\n${name}=${value}\n`))}\n`);
+    await s.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    const store = s.sdk.options()['sessionStore'] as {
+      append: (key: Json, entries: unknown[]) => Promise<void>;
+    };
+    await store.append(MAIN_KEY, [{ type: 'user' }]);
+    const client = await s.connect();
+    await client.callTool({ name: 'peer_run', arguments: { provider: 'codex', prompt: '調べて' } });
+    await vi.waitFor(() => expect(s.peerMirrors().length).toBeGreaterThan(0));
+
+    const json = JSON.stringify(s.peerMirrors().flatMap((e) => e.entries));
+    expect(json).not.toContain(value);
+    expect(json).toContain(`${name}=[redacted:env:${name}]`);
+    expect(json).toContain('HOME=/x');
+    await client.close();
+    await s.host.shutdown();
+  });
+
   it('主の記録の鍵が分かる前は預けず、分かったら預ける', async () => {
     const s = await setup();
     mkdirSync(dirname(s.rolloutFile), { recursive: true });

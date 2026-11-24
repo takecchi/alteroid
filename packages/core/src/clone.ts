@@ -261,6 +261,8 @@ import {
   redactImagesInEntries,
   redactImagesInTranscriptYielding,
 } from './transcript-image-redaction.js';
+import { inspectBashEnvDump, resolveEffectiveBashEnvGuard } from './bash-env-guard.js';
+import { createSecretValueRedactor, type SecretValueRedactor } from './secret-value-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry, type TurnInputText } from './turn-input.js';
 import { buildTurnInputEntry, type TurnInputObservation } from './turn-input-observation.js';
@@ -929,6 +931,7 @@ class Clone implements CloneHost {
     journal: (entry) => this.#journal(entry),
     distill: (transcriptTail, options) => this.#distillFromTranscript(transcriptTail, options),
     transcriptPath: () => this.#distillMemory.transcriptPath,
+    redactSecrets: (text) => this.#secretValueRedactor().redactText(text),
     sdkSessionId: () => this.#sdkSession.sdkSessionId,
     isStopped: () => this.#sdkSession.stopped,
     isInboxClosed: () => this.#delivery.inbox.closed,
@@ -1114,9 +1117,13 @@ class Clone implements CloneHost {
     this.#sessionStore =
       sessionStore === undefined
         ? undefined
-        : withProjectKeyProbe(sessionStore, (projectKey) => {
-            this.#graves.noteProjectKey(projectKey);
-          });
+        : withProjectKeyProbe(
+            sessionStore,
+            (projectKey) => {
+              this.#graves.noteProjectKey(projectKey);
+            },
+            () => this.#secretValueRedactor(),
+          );
     const envSource = env ?? process.env;
     this.#model = resolveCloneModel(envSource);
     this.#modelOverridden = placedCloneModel(envSource) !== null;
@@ -4537,6 +4544,9 @@ class Clone implements CloneHost {
     const command = toolInput?.command;
     if (typeof command !== 'string') return { kind: 'continue' };
 
+    const envDump = this.#inspectBashEnvDump(command);
+    if (envDump !== undefined) return envDump;
+
     const grants = await this.#stores.permissionGrants.list();
     const now = new Date().toISOString();
     for (const grant of grants) {
@@ -4563,6 +4573,30 @@ class Clone implements CloneHost {
       };
     }
     return { kind: 'continue' };
+  }
+
+  /**
+   * 環境変数の値を出す Bash（`bash-env-guard.ts`）を断る（#6866）。マネージャー・作業者の門（`runner-bash-guard.ts`）と同じ判定・同じ設定（`ALTEROID_BASH_ENV_GUARD`。プロファイルが優先）。
+   * - 人間が承認した許可より先に見る: 許可は「この形のコマンドを確認なしで通してよい」という判断で、出力が会話の記録に平文で残ることまでは許していないため。開けたいなら歯を off にする
+   * - 判定が投げたら（綴り違い）止めずに既存の流れへ委ねる: クローンの門には確認に上げる口が無く、deny に倒すと誰も開けられない形になるため。綴り違いは日誌へ1行残す
+   * - クローンの system prompt には節を足さない: 毎ターン載るので、断られたときの理由の文で代わりの書き方を渡すだけにする
+   */
+  #inspectBashEnvDump(command: string): AgentPreToolDecision | undefined {
+    let on: boolean;
+    try {
+      on = resolveEffectiveBashEnvGuard(this.#env, this.#profile?.env() ?? {}) === 'on';
+    } catch (error) {
+      noteDroppedRecord('環境変数の歯の設定', 'clone', error);
+      return undefined;
+    }
+    if (!on) return undefined;
+    const verdict = inspectBashEnvDump(command);
+    if (!verdict.blocked) return undefined;
+    void this.#journalSelf(
+      'outbound',
+      `${EXCHANGE_KIND_DECISION_PREFIX}Bash の呼び出しを弾いた（clone・形=${verdict.form}）。${verdict.reason}`,
+    ).catch(() => undefined);
+    return { kind: 'deny', reason: verdict.reason };
   }
 
   /**
@@ -4659,6 +4693,26 @@ class Clone implements CloneHost {
     return this.#childEnvWithoutIdentityCapture();
   }
 
+  /**
+   * 生ログを写す口と蒸留の入力で使う伏せ字（`secret-value-redaction.ts`）。呼ぶたびに作る: 鍵の回転・プロファイルの書き換えの後は、子が今持っている値で伏せるため。
+   * `#childEnv()` を呼ばない: 世代の照合に使う身元を捕まえてしまうため。子の env が組めなかったら器の env で伏せる（投げて生ログの写しごと落とさない）
+   */
+  #secretValueRedactor(): SecretValueRedactor {
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = this.#childEnvWithoutIdentityCapture();
+    } catch {
+      env = this.#env;
+    }
+    let vault: Record<string, string> = {};
+    try {
+      vault = { ...this.#vaultCredentialOverlay(), ...(this.#credentials?.() ?? {}) };
+    } catch {
+      vault = {};
+    }
+    return createSecretValueRedactor({ env, alwaysSecret: vault });
+  }
+
   /** 蒸留のセッションは `#childEnv()` ではなくこちらを使う: 走行中の本セッションの鍵の身元を、回した後の鍵で上書きしてしまうため（#4880）。 */
   #childEnvWithoutIdentityCapture(): NodeJS.ProcessEnv {
     const env = this.#layeredChildEnv();
@@ -4736,9 +4790,9 @@ class Clone implements CloneHost {
     // 退避と蒸留を別の `try` に割る: 生ログが伸びて `readFile` が落ちたとき、蒸留まで道連れに止めないため。
     let archiveId: string | null = null;
     try {
-      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
-      const transcript = await redactImagesInTranscriptYielding(
-        await readFile(transcriptPath, 'utf8'),
+      // 画像の中身と子が持つ秘密の値は archive へ渡さない: 保持期限後も消えない生ログになるため
+      const transcript = this.#secretValueRedactor().redactText(
+        await redactImagesInTranscriptYielding(await readFile(transcriptPath, 'utf8')),
       );
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
       archiveId = write.id;
@@ -4802,6 +4856,9 @@ class Clone implements CloneHost {
       onQuotaFailure?: (tokenKey: string | undefined) => void;
     } = {},
   ): Promise<void> {
+    // 子が持つ秘密の値を伏せてから蒸留へ渡す: 生ログの末尾は蒸留のセッションへの入力になり、入力の行（`journalInput`）と記憶へ写りうるため。
+    // 呼び手は PreCompact と墓標の拾い直しの2つで、どちらもここを通るのでここで1回掛ける
+    transcriptTail = this.#secretValueRedactor().redactText(transcriptTail);
     // 持たない駆動役では投げる: 黙って返すと、蒸留していないのに成功として扱われるため。
     const driver = this.#driver;
     const distill = driver.distill?.bind(driver);
@@ -5897,6 +5954,7 @@ function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
 function withProjectKeyProbe(
   store: SessionStore,
   note: (projectKey: string) => void,
+  secretRedactor: () => SecretValueRedactor,
 ): SessionStore {
   const listSessions = store.listSessions?.bind(store);
   const listSessionSummaries = store.listSessionSummaries?.bind(store);
@@ -5906,7 +5964,11 @@ function withProjectKeyProbe(
     append: async (key: SessionKey, entries) => {
       note(key.projectKey);
       // 画像の中身は pg へ書かない: 保持期限後も消えない生ログになるため
-      await store.append(key, redactImagesInEntries(entries) as typeof entries);
+      // 子が持つ秘密の値も書かない: Bash の出力（`env` など）に載った資格が、pg の生ログに平文で残るため（runner の mirror と同じ。`secret-value-redaction.ts`）
+      await store.append(
+        key,
+        secretRedactor().redactEntries(redactImagesInEntries(entries)) as typeof entries,
+      );
     },
     load: store.load.bind(store),
     ...(listSessions === undefined ? {} : { listSessions }),

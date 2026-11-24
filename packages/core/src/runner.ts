@@ -3392,6 +3392,8 @@ class RunnerSession {
       mirror: (key, entries) =>
         binding.session.#emit({ type: 'mirror', managerId: binding.session.#id, key, entries }),
       note: (text) => binding.session.#note(text),
+      // peer の Bash の出力（`env` など）に載った資格を pg の記録へ平文で残さない（#6866。担当の mirror と同じ伏せ字。peer の env は担当の `#childEnv()` と同じもの）
+      redactEntries: (entries) => binding.session.#secretValueRedactor().redactEntries(entries),
       // rollout の読みは子の uid の子プロセスで行う（#5259）。env は呼ぶたびに引く（`#childEnv()` は変わりうる）
       ...(this.#childUser === undefined
         ? {}

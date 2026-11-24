@@ -19,6 +19,11 @@ interface PeerRolloutDeps {
   readonly mainKey: () => PeerRolloutKey | undefined;
   readonly mirror: (key: PeerRolloutKey & { subpath: string }, entries: unknown[]) => void;
   readonly note: (text: string) => void;
+  /**
+   * 預ける前に行を伏せる口（子が持つ秘密の値。`secret-value-redaction.ts`。#6866）。分けて切る前に掛ける: 印のほうが値より長いことがあり、切った後に掛けると1件の大きさの上限を超えうるため。
+   * 無ければ伏せない（試験の口。runner は必ず渡す）。
+   */
+  readonly redactEntries?: (entries: readonly unknown[]) => unknown[];
   /** rollout の解決と読み取りの口。子を別 UID で起こす構成では子の uid の子プロセスで行う口を渡す（#5259）。無ければ runner 自身で読む。 */
   readonly io?: RolloutIo;
 }
@@ -277,8 +282,10 @@ export class PeerRolloutMirror {
   #emitBuffered(peer: TrackedPeer): void {
     const key = this.#deps.mainKey();
     if (key === undefined || peer.buffered.length === 0) return;
-    const entries = peer.buffered;
+    const buffered = peer.buffered;
     peer.buffered = [];
+    const entries =
+      this.#deps.redactEntries === undefined ? buffered : this.#deps.redactEntries(buffered);
     for (const chunk of chunkMirrorEntries(entries, MIRROR_EVENT_MAX_CHARS)) {
       this.#deps.mirror({ ...key, subpath: `${PEER_SUBPATH_PREFIX}${peer.peerId}` }, chunk);
     }

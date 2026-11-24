@@ -53,6 +53,38 @@ const start = (location: string | undefined = rollout, resumed = false) =>
   });
 const allEntries = () => mirrored.flatMap((item) => item.entries);
 
+describe('PeerRolloutMirror: 預ける前に redactEntries を通す（#6866）', () => {
+  it('分けて切る前に、増えた行（メタの行を含む）を1回だけ伏せ字の口へ渡す', async () => {
+    const seen: unknown[][] = [];
+    const redacting = new PeerRolloutMirror({
+      codexHome: () => codexHome,
+      mainKey: () => mainKey,
+      mirror: (key, entries) => mirrored.push({ key, entries }),
+      note: (text) => notes.push(text),
+      redactEntries: (entries) => {
+        seen.push([...entries]);
+        return entries.map((entry) =>
+          JSON.parse(JSON.stringify(entry).split('needle-value').join('[redacted:test]')),
+        );
+      },
+    });
+    await writeFile(rollout, line(0, 'needle-value') + line(1));
+    await redacting.track({
+      peerId: 'peer-aaaa',
+      provider: 'codex',
+      threadId: THREAD,
+      transcriptLocation: rollout,
+      resumed: false,
+    });
+    await redacting.collect('peer-aaaa');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toHaveLength(3);
+    const json = JSON.stringify(allEntries());
+    expect(json).not.toContain('needle-value');
+    expect(json).toContain('[redacted:test]');
+  });
+});
+
 describe('PeerRolloutMirror: 増えた行だけを peers/<peerId> へ預ける', () => {
   it('止まるたびに、読み済みの位置から増えた行だけを載せる（メタの行は最初の1回だけ）', async () => {
     await writeFile(rollout, line(0) + line(1));

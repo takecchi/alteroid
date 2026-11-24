@@ -58,6 +58,17 @@ describe('createSecretValueRedactor: 子が持つ秘密の値を生ログから�
     expect(touched.message.content).toContain(DUMMY_GH);
   });
 
+  it('名前が秘密に見えなくても、値がパスワード入りの URL なら伏せる（#6866）', () => {
+    const url = 'postgres://alteroid:dummy-pass-6866@db.example.invalid:5432/alteroid';
+    const r = createSecretValueRedactor({
+      env: { STORE_URL: url, PLAIN_URL: 'https://example.invalid/some/long/path/here' },
+    });
+    expect(r.redactText(`x=${url}`)).toBe('x=[redacted:env:STORE_URL]');
+    expect(r.redactText('https://example.invalid/some/long/path/here')).toBe(
+      'https://example.invalid/some/long/path/here',
+    );
+  });
+
   it('伏せる値が無ければ本文をそのまま返す', () => {
     const none = createSecretValueRedactor({ env: { PATH: '/usr/bin' } });
     expect(none.redactText(`GH_TOKEN=${DUMMY_GH}`)).toBe(`GH_TOKEN=${DUMMY_GH}`);
