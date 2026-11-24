@@ -6,13 +6,15 @@ import {
   type HookCallback,
   type McpServerConfig,
   type SDKUserMessage,
+  type SessionStore,
 } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
-import { buildCloneSessionOptions } from './claude-provider.js';
+import { buildCloneSessionOptions, buildManagerSessionOptions } from './claude-provider.js';
 import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
+import { MANAGER_COMPACTION_INSTRUCTIONS } from './manager-compaction-instructions.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 
 /**
@@ -130,6 +132,38 @@ function cloneCompactHook(): HookCallback {
   return hook;
 }
 
+// マネージャーの組み立てから PreCompact フックだけを取り出す（セッションの他の欄は偽の API の試験には要らない）
+function managerCompactHook(): HookCallback {
+  const options = buildManagerSessionOptions({
+    model: 'haiku',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    systemPromptAppend: 'probe',
+    workerAgentName: 'worker',
+    workerPrompt: 'probe',
+    workerModel: 'haiku',
+    cwd: '/tmp',
+    env: {},
+    sessionStore: {} as unknown as SessionStore,
+    canUseTool: async () => ({ behavior: 'deny', message: 'probe' }),
+    onPostToolUse: () => ({ kind: 'continue' }),
+    onPostToolUseFailure: () => {},
+    onPreCompact: () => {},
+    onSubagentStop: () => ({ kind: 'continue' }),
+    onStop: () => {},
+    onPreToolUse: () => ({ kind: 'continue' }),
+    onPermissionDenied: async () => ({ kind: 'no-retry' }),
+    managerAutoMemoryEnabled: false,
+  });
+  const hook = options.hooks?.PreCompact?.[0]?.hooks[0];
+  if (hook === undefined) throw new Error('マネージャーの PreCompact フックが無い');
+  return hook;
+}
+
+// 本文は JSON の中に入っているので、先頭の1行を JSON の文字列の形（改行などのエスケープ）にして照合する
+function firstLineAsJson(instructions: string): string {
+  return JSON.stringify(instructions.split('\n')[0] ?? '').slice(1, -1);
+}
+
 /** 自動要約を1回起こし、要約の要求の本文のうち "Additional Instructions" を持つものと、フックの契機を返す。 */
 async function runAutoCompaction(
   hook: HookCallback,
@@ -208,6 +242,18 @@ describe('real CLI: クローンの PreCompact の指示が自動要約の指示
     // 本文は JSON の中に入っているので、先頭の1行を JSON の文字列の形（改行などのエスケープ）にして照合する
     const head = JSON.stringify(CLONE_COMPACTION_INSTRUCTIONS.split('\n')[0] ?? '').slice(1, -1);
     expect(additional.some((body) => body.includes(head))).toBe(true);
+  }, 120_000);
+
+  it('マネージャー: 自動要約の要求に、マネージャーの要約の指示が載り、クローンの指示は載らない', async () => {
+    const { additional, trigger, compacted } = await runAutoCompaction(managerCompactHook());
+
+    expect(trigger).toBe('auto');
+    expect(compacted).toBe(true);
+    expect(additional.length).toBeGreaterThan(0);
+    const manager = firstLineAsJson(MANAGER_COMPACTION_INSTRUCTIONS);
+    const clone = firstLineAsJson(CLONE_COMPACTION_INSTRUCTIONS);
+    expect(additional.some((body) => body.includes(manager))).toBe(true);
+    expect(additional.some((body) => body.includes(clone))).toBe(false);
   }, 120_000);
 
   it('対照: 指示を返さないフックでは、要約の指示に載らない', async () => {
