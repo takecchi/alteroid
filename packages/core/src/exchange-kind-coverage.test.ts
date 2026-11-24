@@ -351,6 +351,8 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     // `#handle` の case を種類ごとのメソッドへ出した。書き込みは出した先の `#handleDistill`（蒸留の見送り）と `#handleTimer`（定期の依頼）に移った
     '#handleDistill': 'thinning',
     '#handleTimer': 'decision',
+    // 環境変数の値を出す Bash を断った1行（#6866）
+    '#inspectBashEnvDump': 'decision',
     '#journalIncomingBody': 'reply',
     // `#restoreUnreadPass` の live の見出しの1行を出した先
     '#journalRedeliveredLive': 'recovery',

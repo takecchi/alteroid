@@ -99,6 +99,7 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
   "#plugins 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}plugin \${rebuilt.name} の\${detail} #4798\`",
   "#plugins 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: \` + \`\${loaded.length === 0 ? 'なし' : loaded.join(', ')}\` + \`\${removedSummary === null ? '' : \`。展開しなかったもの: \${removedSummary}\`}\`",
   "#buildSessionSpec 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}\${text}\`",
+  "#inspectBashEnvDump 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}Bash の呼び出しを弾いた（clone・形=\${verdict.form}）。\${verdict.reason}\`",
   "#recordWorkerLimit 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}作業者（\${label}）だけが利用上限で落ちた。クローンは動けるので、枠の印も鍵の回転も起こしていない。\` + \`次の道具の結果に知らせを添える（原文: \${shown.trim().slice(0, 300)}）\`",
   "#workerLimitNotice 'outbound' \`\${EXCHANGE_KIND_DECISION_PREFIX}作業者が利用上限で落ちている（\${String(notice.count)} 体）ので、\` + 'この道具の結果に「戻るまで作業者を立て直しても同じく落ちうる」という知らせを添えた（止める指示ではない）。'",
   "#onPreCompact 'outbound' \`\${EXCHANGE_KIND_RECOVERY_PREFIX}\${continuityText}\`",
