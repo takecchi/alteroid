@@ -31,6 +31,7 @@ import {
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withCliSessionEnv,
   withCloneAutoCompactWindow,
+  withManagerAutoCompactWindow,
   withManagerWorkerCacheTtl,
 } from './claude-provider.js';
 import { CLONE_COMPACTION_INSTRUCTIONS } from './clone-compaction-instructions.js';
@@ -2213,8 +2214,10 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       PATH: '/bin',
       CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
       CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
-      // 自動要約の窓の既定はクローン本体だけに入る（下の「自動の要約の窓」）
-      ...(build === cloneOptions ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' } : {}),
+      // 自動要約の窓の既定はクローン本体とマネージャーに入る（下の「自動の要約の窓」）
+      ...(build === cloneOptions || build === managerOptions
+        ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' }
+        : {}),
       // 作業者のキャッシュの寿命はマネージャーだけに入る（下の「作業者のキャッシュの寿命」）
       ...(build === managerOptions ? { CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h' } : {}),
     });
@@ -2346,9 +2349,47 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       expect(env).toEqual({ PATH: '/bin' });
     });
 
-    it('マネージャーと蒸留には既定を入れない（効果と代償を見てから決める）', () => {
-      expect(managerOptions({ PATH: '/bin' }).env).not.toHaveProperty(
+    it('マネージャー: env に窓が無ければ既定の 350k を渡す（settings には載せない）', () => {
+      const options = managerOptions({ PATH: '/bin' });
+      expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' });
+      expect(options.settings).not.toHaveProperty('autoCompactWindow');
+    });
+
+    it.each([['500k'], ['auto'], ['1000000']])(
+      'マネージャー: env に窓が %s と置かれていれば、既定で上書きせずそのまま渡す',
+      (value) => {
+        const options = managerOptions({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+        expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+      },
+    );
+
+    it.each([[''], ['  ']])(
+      'マネージャー: 窓が空（%j）なら置いていないと読み、既定を渡す',
+      (value) => {
+        const options = managerOptions({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: value });
+        expect(options.env).toMatchObject({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k' });
+      },
+    );
+
+    it('withManagerAutoCompactWindow は渡された env を書き換えない', () => {
+      const env: NodeJS.ProcessEnv = { PATH: '/bin' };
+      withManagerAutoCompactWindow(env);
+      expect(env).toEqual({ PATH: '/bin' });
+    });
+
+    it('マネージャーでも作業者のキャッシュの寿命の既定は引き続き入る', () => {
+      expect(managerOptions({ PATH: '/bin' }).env).toMatchObject({
+        CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '1h',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '350k',
+      });
+    });
+
+    // 元の名前は「マネージャーと蒸留には既定を入れない（効果と代償を見てから決める）」。
+    // 2026-11-24 JST の実測（teto・mgr-7d563c49）で効果と代償を見たので、マネージャーの期待だけ反転した。蒸留は入れないまま。
+    it('マネージャーには既定を入れ、蒸留には入れない（実測で効果と代償を見て、マネージャーだけ反転）', () => {
+      expect(managerOptions({ PATH: '/bin' }).env).toHaveProperty(
         'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+        '350k',
       );
       expect(distillOptions({ PATH: '/bin' }).env).not.toHaveProperty(
         'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
@@ -2816,7 +2857,8 @@ describe('返す options の全体（キーと値・キーの順）を固定す�
         "env": {
           "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
           "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
-          "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"
+          "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "350k"
         },
         "sessionStore": {},
         "settings": {
