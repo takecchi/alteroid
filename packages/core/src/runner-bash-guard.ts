@@ -1,4 +1,5 @@
 import type { AgentPreToolDecision, AgentPreToolRecord } from './agent-hooks.js';
+import { inspectBashEnvDump, resolveEffectiveBashEnvGuard } from './bash-env-guard.js';
 import { resolveEffectiveBashShapeGuard, type BashGuardMode } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashShape } from './bash-shape-guard.js';
@@ -77,6 +78,19 @@ export class RunnerBashGuard {
           ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
         let shapeDeny: boolean;
         try {
+          // 環境変数の値を出す形は最初に見る（`bash-env-guard.ts`）: 確認に上げてクローンが開けても、値は出力ごと会話の記録へ書かれるため、`ask` でも deny にする。
+          // `ALTEROID_BASH_GUARD` から切り離す: `off` を選んだ器でも資格の値を記録へ流さないため。開けるのは `ALTEROID_BASH_ENV_GUARD=off`（プロファイルが優先）
+          const envDump =
+            resolveEffectiveBashEnvGuard(this.#env, this.#profileEnv()) === 'on'
+              ? inspectBashEnvDump(command)
+              : { blocked: false as const };
+          if (envDump.blocked) {
+            const actor = this.#actorOf(record);
+            this.#tryObservation('ガードの note の送り出し', () => {
+              this.#note(`Bash の呼び出しを弾いた（${actor}・形=${envDump.form}）。${envDump.reason}`);
+            });
+            return { kind: 'decided', decision: { kind: 'deny', reason: envDump.reason } };
+          }
           // 本番デプロイの起動（release-prod）は `off` でも確認に残す
           const releaseProd = inspectReleaseProdDispatch(command);
           // 形の歯は release-prod の後・wait-guard の前に置く: release-prod は `off` でも残す門で、形の歯は断る理由が単純（打ち直せば抜けられる）なため先に返す

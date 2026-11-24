@@ -10,6 +10,7 @@
  * `.claude/agents-md-records/memory-index.md` に在る。プロンプトの本文には載せない。
  */
 
+import { bashEnvPromptLines } from './bash-env-guard.js';
 import { bashClassifierPromptLines, bashShapePromptLines } from './bash-shape-guard.js';
 import { externalSourceNote } from './report-problem.js';
 import { waitGuardPromptLines } from './bash-wait-guard.js';
@@ -498,6 +499,8 @@ export interface BashGuardsInPrompt {
    * `shape` と別の欄にしたのは、`{ shape: false, wait: false }` が「1文字も増えない」という既存の契約を保つため。
    */
   shapeOff?: boolean;
+  /** 環境変数の値を出す形の歯（`ALTEROID_BASH_ENV_GUARD`）が on。省略は偽（既存の「1文字も増えない」契約を保つため、`shapeOff` と同じく別の欄にする） */
+  env?: boolean;
 }
 
 /**
@@ -526,6 +529,13 @@ ${bashClassifierPromptLines()}`);
 この器では、次の待ちの形の Bash は、打つとその呼び出しだけが実行されず、確認か拒否の知らせが返る。最初から右の書き方で打つこと。
 
 ${waitGuardPromptLines()}`);
+  }
+  if (guards.env === true) {
+    sections.push(`# この器で断られる、環境変数の値を出す Bash の形
+
+Bash の出力は会話の記録にそのまま残るので、資格の値が平文で載る。この器では、次の形の Bash は打つとその呼び出しだけが断られる。最初から右の書き方で打つこと。
+
+${bashEnvPromptLines()}`);
   }
   return sections.length === 0 ? '' : `\n\n${sections.join('\n\n')}`;
 }

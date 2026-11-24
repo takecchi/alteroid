@@ -533,10 +533,14 @@ const WRAPPERS: Record<string, ReadonlySet<string>> = {
 
 const TIMEOUT_VALUE_OPTIONS = new Set(['-k', '-s', '--signal', '--kill-after']);
 
-type CommandWord = { name: string; args: string[]; rawArgs: string[] };
+export type CommandWord = { name: string; args: string[]; rawArgs: string[] };
 
 // コマンドの位置にある語と、その引数を返す（前置きを読み飛ばす）。`rawArgs` は引用符を外す前の引数（`args` と同じ並び）
-function commandWordOf(tokens: readonly string[]): CommandWord | undefined {
+// `keepEnv` を立てると `env` を前置きとして読み飛ばさず、`env` そのものを語として返す（引数なしの `env` を見分けるため。`bash-env-guard.ts`）
+export function commandWordOf(
+  tokens: readonly string[],
+  keepEnv = false,
+): CommandWord | undefined {
   const t = tokens.map(unquote);
   let i = 0;
   while (i < t.length) {
@@ -544,7 +548,7 @@ function commandWordOf(tokens: readonly string[]): CommandWord | undefined {
     const base = word.slice(word.lastIndexOf('/') + 1);
     if (word === '' || KEYWORDS.has(word) || ASSIGNMENT_RE.test(word)) {
       i += 1;
-    } else if (base === 'env') {
+    } else if (base === 'env' && !keepEnv) {
       i += 1;
       while (i < t.length) {
         const o = t[i] ?? '';
@@ -1219,6 +1223,31 @@ export function inspectBashShape(command: string): BashShapeVerdict {
   const head = first.reason.slice(0, first.reason.length - BASH_SHAPE_CONTINUE_NOTE.length);
   const others = extras.map((e) => e.sentence).join('／');
   return { ...first, reason: `${head}（他にも: ${others}）${BASH_SHAPE_CONTINUE_NOTE}` };
+}
+
+/**
+ * 単純コマンドごとの語の並び（引用符は外す前のまま）を返す。形の歯と同じ読み方をする: 注釈は落とし、
+ * `bash -c` の引数（1段）と二重引用符の中の `$(...)`・バッククォート（1段）の中も読む。引用符の外の `$(...)`・バッククォートは区切りとして分かれる。
+ * 形の歯の判定（`inspectBashShapeFirst`）はこれを使わない: 段ごとに早く返す順序を変えないため。
+ */
+export function simpleCommandTokens(command: string, depth = 0): string[][] {
+  const subs = depth <= MAX_SUBSTITUTION_DEPTH ? findQuotedSubstitutions(command) : [];
+  const visible = subs.length > 0 ? maskSubstitutions(command, subs) : command;
+  const scan = computeQuoteScan(visible);
+  const scrubbed = scrubComments(visible, scan.comment);
+  const tokenMask = scan.outside.map((o, i) => o || scan.comment[i] === true);
+  const out: string[][] = [];
+  for (const tokens of splitSegments(scrubbed, tokenMask)) {
+    if (tokens.length === 0) continue;
+    out.push(tokens);
+    if (depth !== 0) continue;
+    const word = commandWordOf(tokens);
+    if (word === undefined || !SHELLS.has(word.name)) continue;
+    const script = shellScriptOperand(word.rawArgs);
+    if (script !== undefined) out.push(...simpleCommandTokens(dequote(script), depth + 1));
+  }
+  for (const sub of subs) out.push(...simpleCommandTokens(sub.body, depth + 1));
+  return out;
 }
 
 // `valueSubstitution` は二重引用符の中の `$(...)` の中身を読むときだけ立てる: 値を1行取る管（`"$(ls | head -1)"`）を `pipe-trim` で断らないため

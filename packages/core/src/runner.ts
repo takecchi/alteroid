@@ -37,6 +37,8 @@ import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.j
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
 import { describeRunWatchRewrite, planRunWatchCompact } from './bash-run-watch-compact.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
+import { resolveEffectiveBashEnvGuard } from './bash-env-guard.js';
+import { createSecretValueRedactor, type SecretValueRedactor } from './secret-value-redaction.js';
 import {
   describeBashShapeGuard,
   resolveBashGuardMode,
@@ -3071,9 +3073,12 @@ class RunnerSession {
     if (path === undefined) return { status: 'no-path' };
     try {
       // 返す前に画像の中身を控えへ置き換える: archive と transcript API の両方がここを通り、base64 が生ログに残ると保持期限（30日）後も消えないため
+      // 子が持つ秘密の値も伏せる（mirror と同じ理由。`secret-value-redaction.ts`）
       return {
         status: 'ok',
-        body: await redactImagesInTranscriptYielding(await readFile(path, 'utf8')),
+        body: this.#secretValueRedactor().redactText(
+          await redactImagesInTranscriptYielding(await readFile(path, 'utf8')),
+        ),
       };
     } catch (error) {
       return { status: 'unreadable', error };
@@ -3594,7 +3599,15 @@ class RunnerSession {
       }
     })();
     const wait = this.#bashGuard !== 'off';
-    return { shape, wait, ...(shape ? {} : { shapeOff: true }) };
+    // 判定が投げる（綴り違い）なら載せる: 歯は投げたとき確認か拒否へ倒れるので、断られる側として案内するほうが実際に近い
+    const env = ((): boolean => {
+      try {
+        return resolveEffectiveBashEnvGuard(this.#env, this.#profileEnv()) === 'on';
+      } catch {
+        return true;
+      }
+    })();
+    return { shape, wait, ...(shape ? {} : { shapeOff: true }), ...(env ? { env: true } : {}) };
   }
 
   // 開く時点と発言の観測の両方から呼ぶ。同じ値は1回だけ書く: 設定の誤りは1つで、日誌を2行にしないため
@@ -3713,8 +3726,9 @@ class RunnerSession {
         }
         // 画像の中身は mirror（pg）へ流さない: 保持期限後も消えない生ログになるため
         // 書き出し1回分を丸ごと1件にしない: 数十 MB の1行をデーモンが受けて処理する間、ループが秒単位で塞がるため（#4485）
+        // 子が持つ秘密の値も伏せる: Bash の出力（`env` など）に載った資格が、pg の生ログに平文で残るため（`secret-value-redaction.ts`）
         for (const chunk of chunkMirrorEntries(
-          redactImagesInEntries(entries),
+          this.#secretValueRedactor().redactEntries(redactImagesInEntries(entries)),
           MIRROR_EVENT_MAX_CHARS,
         )) {
           this.#emit({ type: 'mirror', managerId: this.#id, key: mirrorKey, entries: chunk });
@@ -5346,6 +5360,18 @@ class RunnerSession {
   // 資格の正本の値を、名前によらず伏せ字の対象にする（#4829）: 正本は名前と値しか降りず「秘密か」の印が無いので、`DB_PASS` のように名前の決まりに合わない秘密が抜粋・日誌・note へ伏せずに出るため
   #vaultValues(): string[] {
     return Object.values(this.#credentials?.values() ?? {});
+  }
+
+  // 呼ぶたびに作る: 鍵の回転・プロファイルの書き換えの後は、子が今持っている値で伏せるため
+  // 子の環境が組めなかったら runner の env で伏せる: 投げて生ログの写し（resume の正本）ごと落とさないため
+  #secretValueRedactor(): SecretValueRedactor {
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = this.#childEnv();
+    } catch {
+      env = this.#env;
+    }
+    return createSecretValueRedactor({ env, alwaysSecret: this.#credentials?.values() ?? {} });
   }
 
   // 生の入力を保持しない（伏せ字済みの先頭だけ）: 忘れるまでの間ずっと鍵が入りうる文字列を抱え、`onForget` の日誌行へ滲み出る経路も増えるため
