@@ -21,7 +21,7 @@ import { settleWithin } from './usage-probe.js';
 // 台帳（自分で数えた推定値）とアカウント全体の残り枠・支出上限（向こうが言っている値、`usage-snapshot.ts`）を足したり混ぜたりしない: 一致する保証がないため
 // 出所は `modelUsage` で `usage` ではない: **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage] で、`usage` を採ると委譲の末端である作業者の消費が丸ごと落ちるため
 // 累積値を足さず差分を取る: **「cumulative across turns in streaming-input sessions — each result carries the running total so far, so read the latest result rather than summing across results」** [sdk-verbatim SDKResultSuccess.total_cost_usd] で、足すと二重計上になるため
-// 減少は数え直しとして扱う（resume と /clear で累積が 0 から始まりうる）:
+// 累積は減りうる。減った幅からは「0 から始まったか」「古い累積から続いたか」を区別できない（下の `foldUsageSnapshot` の判定を参照）:
 // - 「a resumed or forked session continues from the total its transcript saved, when it has one」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
 // - 「a mid-session /clear resets the running total」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
 // 成功した `result` の値しか台帳へ入れない: **「Crash/startup-error results may carry zeroed values」** [sdk-verbatim SDKResultSuccess.total_cost_usd] で、ゼロを累積が 0 になったと採ると記録済みの消費が消えるため
@@ -173,32 +173,13 @@ function sumCostUsd(models: Record<string, UsageTotals>): number {
   return Object.values(models).reduce((sum, m) => sum + m.costUsd, 0);
 }
 
-// session id は見ない: resume は同じ id のまま 0 に戻るため
-// 前回にあって今回に無いモデルは、原則「変化なし」で数え直しにしない: 載るモデルの組は呼び出しごとに食い違いうる（セッションを畳む直前の `sessionModelUsage()` とターン末の `result.modelUsage` など）ため、無いことを数え直しと読むと記録済みの累積が全量でもう一度積まれる
-// 例外は、欠けたモデルの前回 cost の合計（欠落ぶん）が、今回の全モデルの cost 合計より大きいとき（欠落が支配的）だけ reset とする。haiku のような小さな欠落は変化なし（下の判定を参照）
-// 向きの違う誤りが両方ある（どちらも台帳は推定値で、完全には避けられない）:
-// - 過大に数える側: 数え直しでない読みで opus が丸ごと欠け、他のモデルだけが載ると、欠落ぶんが今回の合計を上回って誤って reset になる。基準は今回だけになるので、次の累積で opus が戻ると、差分ではなく opus の全量が増分に積まれ、二重計上になる（#5402 と同じ規模）
-// - 少なく数える側: 欠落が支配的でない数え直し（合計が前回以上になる、など）は拾えず、基準に残った前回の値に追いつくまでの消費が積まれない
-// reset の発生は日誌で見張れる: `turn_usage` 行の `reset`（fromCostUsd / toCostUsd）と、reset 時に出る gauge の exchange（「自分の消費の累積が数え直された」）
-// 減ったのに数え直しにしない場合がある（resume の遅れ。2026-11-14 の本番事象）: 「a resumed or forked session continues from the total its transcript saved」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、
-// 保存済みの transcript の累積は直前の result より少し古いことがある。再開した最初の result が 2411.69 → 2403.43 と約 0.3% 減っただけで reset にすると、
-// 記録済みの約 2,403 ドルが全量でもう一度積まれる（同じ日に 2 回起き、台帳の 1 日が約 4,800 ドル過大になった）。
-// 本物の数え直し（resume 先が空・/clear）は 0 付近から始まる。今回の cost 合計が前回の `RESUME_LAG_RATIO` 以上なら、前回の累積を引き継いだ読み（減ったのは遅れぶん）として扱う
-const RESUME_LAG_RATIO = 0.9;
-
-function isResumeLag(
+// 累積が前回より減ったか。減ったときの扱い（積むか・基準をどうするか）は `foldUsageSnapshot` が決める
+// 前回にあって今回に無いモデルは、原則「変化なし」で減少にしない: 載るモデルの組は呼び出しごとに食い違いうる（セッションを畳む直前の `sessionModelUsage()` とターン末の `result.modelUsage` など）ため
+// 例外は、欠けたモデルの前回 cost の合計（欠落ぶん）が、今回の全モデルの cost 合計より大きいとき（欠落が支配的）だけ減少とする。haiku のような小さな欠落は変化なし（下の判定を参照）
+// 少なく数える側の誤りは残る: 欠落が支配的でない数え直し（合計が前回以上になる、など）は拾えず、基準に残った前回の値に追いつくまでの消費が積まれない
+function hasDecreased(
   prev: Record<string, UsageTotals>,
   next: Record<string, UsageTotals>,
-): boolean {
-  if (hasUnreadableCost(next)) return false;
-  const before = sumCostUsd(prev);
-  return before > 0 && sumCostUsd(next) >= before * RESUME_LAG_RATIO;
-}
-
-function detectReset(
-  prev: Record<string, UsageTotals>,
-  next: Record<string, UsageTotals>,
-  tolerateResumeLag: boolean,
 ): boolean {
   for (const [model, before] of Object.entries(prev)) {
     const after = next[model];
@@ -211,12 +192,12 @@ function detectReset(
       after.webSearchRequests < before.webSearchRequests ||
       after.costUsd < before.costUsd
     ) {
-      return !(tolerateResumeLag && isResumeLag(prev, next));
+      return true;
     }
   }
-  // 欠落したモデルが支配的なときも数え直しとする（Issue #5405）: 数え直し直後の最初の累積に主なモデルが載らず別のモデルだけが載ると、載ったモデルが前回以上で上の判定に掛からず、基準に残った前回の主なモデルに追いつくまでの消費が積まれない
-  // 「合計の減少」にしない: haiku のような小さなモデルが欠けただけの累積（#5402 の本番事象。opus がほぼ増えない再送に近い読み）も合計が haiku の cost ぶん減り、約 108 億の二重計上が再発するため
-  // 今回に無い基準のモデルの前回 cost の合計（欠落ぶん）が、今回の全モデルの cost 合計より大きいときだけ。厳密な `>` なので等しい読みは数え直しにしない。欠落が無ければ働かない
+  // 欠落したモデルが支配的なときも減少とする（Issue #5405）: 数え直し直後の最初の累積に主なモデルが載らず別のモデルだけが載ると、載ったモデルが前回以上で上の判定に掛からず、基準に残った前回の主なモデルに追いつくまでの消費が積まれない
+  // 「合計の減少」にしない: haiku のような小さなモデルが欠けただけの累積（#5402 の本番事象。opus がほぼ増えない再送に近い読み）を減少と読むと、基準が下がって積み損ねが出るため
+  // 今回に無い基準のモデルの前回 cost の合計（欠落ぶん）が、今回の全モデルの cost 合計より大きいときだけ。厳密な `>` なので等しい読みは減少にしない。欠落が無ければ働かない
   // 今回に cost の読めなかった欄が在るときは見ない: 読めない cost は 0 で書かれ、今回の合計が見かけ上小さくなるため
   if (hasUnreadableCost(next)) return false;
   let missing = 0;
@@ -228,33 +209,6 @@ function detectReset(
 
 function hasUnreadableCost(models: Record<string, UsageTotals>): boolean {
   return Object.values(models).some((m) => (m.unreadable?.costUsd ?? 0) > 0);
-}
-
-// 遅れて減った読み（`isResumeLag`）のとき基準を下げない: 下げると、前回までに積んだ分をもう一度追い越すときに同じ分が増分になるため
-function mergeHighWater(
-  prev: Record<string, UsageTotals>,
-  next: Record<string, UsageTotals>,
-): Record<string, UsageTotals> {
-  const merged: Record<string, UsageTotals> = { ...prev };
-  for (const [model, after] of Object.entries(next)) {
-    const before = prev[model];
-    merged[model] =
-      before === undefined
-        ? after
-        : {
-            ...after,
-            inputTokens: Math.max(after.inputTokens, before.inputTokens),
-            outputTokens: Math.max(after.outputTokens, before.outputTokens),
-            cacheReadInputTokens: Math.max(after.cacheReadInputTokens, before.cacheReadInputTokens),
-            cacheCreationInputTokens: Math.max(
-              after.cacheCreationInputTokens,
-              before.cacheCreationInputTokens,
-            ),
-            webSearchRequests: Math.max(after.webSearchRequests, before.webSearchRequests),
-            costUsd: Math.max(after.costUsd, before.costUsd),
-          };
-  }
-  return merged;
 }
 
 function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
@@ -306,14 +260,18 @@ export function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
   return Object.values(models).some((totals) => !isZero(totals));
 }
 
-// 数え直しの増分を 0 にせず全量にする: 新しい累積は 0 から始まっており、載っている分はまだ台帳に無い消費で、0 にすると resume 後の1ターンぶんが黙って消えるため
+// 累積が減ったとき、全量を増分にしてよいのは「0 から数え直した」と言えるときだけ（セッション id が替わった。alteroid は forkSession を使わないので、新しい id の累積は 0 から始まる）
+// 同じ id（または id が読めない）のまま減ったときは、増分を積まず基準だけ今回の累積へ下げる（`skipped: decreased`）:
+// 「a resumed or forked session continues from the total its transcript saved」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、resume 後の累積は「保存済みの transcript の累積 + 再開後の消費」になる。
+// 保存済みの累積がどれだけ古いかは分からず、減った幅から 0 からの数え直しと見分けられない。比で線を引くと、線を越える遅れのたびに記録済みの累積の全量がもう一度積まれる
+// （2026-11-14 は 2411.69 → 2403.43 で #6833 が 9 割の線を入れた。2026-11-25 03:19Z は再起動後の resume で 923.76 → 814.74（約 0.88）と線を越え、$814.74 が 1 ターンとして積まれた）。
+// 積まない側に倒す: 誤って全量を積むと累積の全部（数百〜数千ドル）が二重になるのに対し、積まずに落とすのは減った読みのその回の増分だけ（通常 1 ターンぶん）で済む。
+// 基準を前回の高さに残さない（下げる）: 残すと、再開後の消費が前回の高さを追い越すまで（上の例では約 109 ドルぶん）何も積まれない。
 // 全部ゼロのスナップショットは情報なしとして捨てる（基準を持っているとき）: 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、数え直しとして採ると基準が 0 まで下がり、次の本物の累積がまるごと増分になって二重計上になるため。累積値なので捨てても取りこぼさない
 export function foldUsageSnapshot(
   baseline: UsageBaseline | null,
   snapshot: UsageSnapshot,
   at: string,
-  // 古い runner の控えとの比べでは false にする: あそこは減ったら積まず `skipped: decreased` と報せる契約で、遅れの許容は基準（現役の runner）の側だけに要る
-  tolerateResumeLag = true,
 ): UsageFold {
   const prev = baseline?.models ?? {};
   const next = snapshot.models;
@@ -322,7 +280,26 @@ export function foldUsageSnapshot(
     return { delta: {}, baseline };
   }
 
-  const reset = baseline !== null && detectReset(prev, next, tolerateResumeLag);
+  const decreased = baseline !== null && hasDecreased(prev, next);
+  const reset =
+    decreased &&
+    baseline.sessionId !== undefined &&
+    snapshot.sessionId !== undefined &&
+    baseline.sessionId !== snapshot.sessionId;
+
+  if (decreased && !reset) {
+    return {
+      delta: {},
+      baseline: {
+        ...baseline,
+        sessionId: snapshot.sessionId ?? baseline.sessionId,
+        // 今回に無かったモデルの前回値は引き継ぐ: 落とすと、そのモデルが前回の累積のまま次に現れたときに全量が積まれるため
+        models: { ...prev, ...next },
+        updatedAt: at,
+      },
+      skipped: { reason: 'decreased', fromCostUsd: sumCostUsd(prev), toCostUsd: sumCostUsd(next) },
+    };
+  }
 
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(next)) {
@@ -341,7 +318,7 @@ export function foldUsageSnapshot(
       managerId: baseline?.managerId ?? '',
       sessionId: snapshot.sessionId ?? baseline?.sessionId,
       // 今回に無かったモデルの前回値を引き継ぐ: 落とすと、そのモデルが次に現れたときの差分が全量になり二重に積まれるため。数え直しのときだけ引き継がない（古い累積は無効）
-      models: reset ? next : mergeHighWater(prev, next),
+      models: reset ? next : { ...prev, ...next },
       updatedAt: at,
       resets: (baseline?.resets ?? 0) + (reset ? 1 : 0),
       lastResetAt: reset ? at : baseline?.lastResetAt,
@@ -449,19 +426,13 @@ export function foldRecordForStore(
       };
     };
     if (previous === undefined) return keep({ reason: 'unknown-runner' });
+    // 控えは sessionId を持たせずに比べる: 古い runner の累積は id が替わっても数え直しと見なさず、減ったら積まない契約（`skipped: decreased`）のため
     const own = foldUsageSnapshot(
       { ...identity, models: previous, updatedAt: input.at, resets: 0 },
       input.snapshot,
       input.at,
-      false,
     );
-    if (own.reset !== undefined) {
-      return keep({
-        reason: 'decreased',
-        fromCostUsd: own.reset.fromCostUsd,
-        toCostUsd: own.reset.toCostUsd,
-      });
-    }
+    if (own.skipped?.reason === 'decreased') return keep(own.skipped);
     return keep(undefined, own.delta);
   }
 

@@ -209,7 +209,17 @@ export class UsageReceiver {
         'inbound',
         `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 消費の累積が数え直された` +
           `（$${fold.reset.fromCostUsd.toFixed(4)} → $${fold.reset.toCostUsd.toFixed(4)}）。` +
-          'resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
+          'セッションが替わり SDK 側の累積が 0 から始まったため。記録済みの分は保持している。',
+      );
+    }
+
+    // 減ったのに積まなかった回も黙って通さない: 増分が空なので `turn_usage` の行が無く、この記録が無いと積み損ねの回が辿れない。
+    if (fold.skipped?.reason === 'decreased') {
+      await this.#journalExchange(
+        'inbound',
+        `${EXCHANGE_KIND_GAUGE_PREFIX}[${event.managerId}] 消費の累積が前回より減っていた` +
+          `（$${fold.skipped.fromCostUsd.toFixed(4)} → $${fold.skipped.toCostUsd.toFixed(4)}）。` +
+          '同じセッションの resume で保存済みの古い累積から続いたとみられ、この回の増分は分からないので積まず、基準を新しい累積へ下げた。',
       );
     }
   }
