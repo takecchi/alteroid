@@ -404,9 +404,12 @@ describe('PgUsageStore の不変条件（並行の record は直列化される�
       ),
     );
 
+    // 到着順が前後して累積が減った回は、同じ session id なので数え直しではなく `skipped: decreased` になる（#6868）。前任者はその `fromCostUsd` から読む
     const predecessors = results.map((r, k) => {
       const own = calls[k]!;
-      return r.reset !== undefined ? r.reset.fromCostUsd : own - (r.delta['opus']?.costUsd ?? 0);
+      if (r.reset !== undefined) return r.reset.fromCostUsd;
+      if (r.skipped?.reason === 'decreased') return r.skipped.fromCostUsd;
+      return own - (r.delta['opus']?.costUsd ?? 0);
     });
     expect(new Set(predecessors).size).toBe(calls.length);
     const byPredecessor = new Map(predecessors.map((p, k) => [p, calls[k]!]));
