@@ -35,6 +35,7 @@ import type {
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
+import { PeerCreditsHold } from './peer-credits-hold.js';
 import { describeRunWatchRewrite, planRunWatchCompact } from './bash-run-watch-compact.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { resolveEffectiveBashEnvGuard } from './bash-env-guard.js';
@@ -837,6 +838,9 @@ class Host implements RunnerHost {
   #peerOpening: PeerOpening = { open: [], closed: [] };
   /** 判定を1本ずつ流す鎖（鍵と ChatGPT ログインが同時に降りても、ソケットを2回開かず名乗りが前後しない）。 */
   #peerChain: Promise<void> = Promise.resolve();
+  /** 残高切れで閉じている peer と、クローンへ知らせ済みかの記録。 */
+  readonly #creditsHold = new PeerCreditsHold();
+  #creditsReopenTimer: ReturnType<typeof setTimeout> | null = null;
   // 起こすたびに評価し直さない: 評価はプロセスを1本起こす操作で、人間のスクリプト次第で委譲そのものが遅くなるため
   readonly #profile: ProfileApplier | undefined;
   /** 最後に名乗った（起動時は構築時に読んだ）接続先の表示行。器だけの状態からの変化だけを名乗るための基準。 */
@@ -992,7 +996,7 @@ class Host implements RunnerHost {
     this.#codexAuthTimer = codexAuthTimer;
     // 起動時の判定（多くは閉じていて、デーモンが繋いで資格を降ろしたときに開く）
     if (this.#peer !== undefined) {
-      const initial = resolvePeerOpening(this.#peerPresence());
+      const initial = resolvePeerOpening(this.#peerPresence(), this.#creditsHold.closed());
       // 開く側はソケットを開いてから立てる（`#refreshPeers`）。閉じている側は最初から名乗れる
       if (initial.open.length === 0) this.#peerOpening = initial;
       else void this.#refreshPeers();
@@ -1318,7 +1322,10 @@ class Host implements RunnerHost {
       }
     }
     this.#announceAnthropicRoute();
-    // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる
+    // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる。鍵が置き直されたら残高切れの閉じも解く（人間が残高を足した鍵かもしれない）
+    if (before.get(CODEX_API_KEY_ENV_NAME) !== after.get(CODEX_API_KEY_ENV_NAME)) {
+      this.#resetCreditsHold();
+    }
     await this.#refreshPeers();
     return fingerprints;
   }
@@ -1357,7 +1364,7 @@ class Host implements RunnerHost {
     const peer = this.#peer;
     if (peer === undefined) return Promise.resolve();
     const run = async (): Promise<void> => {
-      let opening = resolvePeerOpening(this.#peerPresence());
+      let opening = resolvePeerOpening(this.#peerPresence(), this.#creditsHold.closed());
       if (opening.open.length > 0 && this.#peerSocket === undefined) {
         try {
           this.#peerSocket = await peer.openSocket();
@@ -1386,6 +1393,45 @@ class Host implements RunnerHost {
     const next = this.#peerChain.then(run, run);
     this.#peerChain = next.catch(() => undefined);
     return next;
+  }
+
+  #closedPeerReason(provider: AgentProviderId): string | undefined {
+    return this.#peerOpening.closed.find((entry) => entry.provider === provider)?.reason;
+  }
+
+  #onPeerCredits(provider: AgentProviderId, detail: string): { notify: boolean } {
+    const held = this.#creditsHold.hold(provider, detail, Date.now());
+    void this.#refreshPeers();
+    this.#armCreditsReopen();
+    return held;
+  }
+
+  #onPeerSucceeded(provider: AgentProviderId): void {
+    if (!this.#creditsHold.succeeded(provider)) return;
+    void this.#refreshPeers();
+  }
+
+  // 閉じている間の最短の開き直しの時刻に1本だけ張る。発火したら外して判定し直し、まだ閉じているものがあれば張り直す
+  #armCreditsReopen(): void {
+    if (this.#creditsReopenTimer !== null) clearTimeout(this.#creditsReopenTimer);
+    this.#creditsReopenTimer = null;
+    const at = this.#creditsHold.nextReopenAt();
+    if (at === undefined) return;
+    const timer = setTimeout(
+      () => {
+        this.#creditsReopenTimer = null;
+        if (this.#creditsHold.reopenDue(Date.now())) void this.#refreshPeers();
+        this.#armCreditsReopen();
+      },
+      Math.max(0, at - Date.now()),
+    );
+    timer.unref?.();
+    this.#creditsReopenTimer = timer;
+  }
+
+  #resetCreditsHold(): void {
+    if (!this.#creditsHold.reset()) return;
+    this.#armCreditsReopen();
   }
 
   /** セッションへ渡す peer（開いている provider が無い・ソケットが無いなら `undefined` = 道具を出さない）。 */
@@ -1608,7 +1654,9 @@ class Host implements RunnerHost {
   }
 
   async setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus> {
+    const revisionBefore = this.#codexAuth.status().revision;
     await this.#codexAuth.set(push);
+    if (this.#codexAuth.status().revision !== revisionBefore) this.#resetCreditsHold();
     // ログインが届いた・外れた（ログアウト）なら peer の開閉が変わる。トークンの更新では変わらない
     await this.#refreshPeers();
     return this.#codexAuth.status();
@@ -1661,7 +1709,15 @@ class Host implements RunnerHost {
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
       // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため
-      ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
+      ...(this.#peer === undefined
+        ? {}
+        : {
+            peer: () => this.#sessionPeer(),
+            peerClosedReason: (provider: AgentProviderId) => this.#closedPeerReason(provider),
+            onPeerCredits: (provider: AgentProviderId, detail: string) =>
+              this.#onPeerCredits(provider, detail),
+            onPeerSucceeded: (provider: AgentProviderId) => this.#onPeerSucceeded(provider),
+          }),
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
@@ -2304,6 +2360,8 @@ class Host implements RunnerHost {
     this.#scratchTimer = null;
     if (this.#codexAuthTimer !== null) clearInterval(this.#codexAuthTimer);
     this.#codexAuthTimer = null;
+    if (this.#creditsReopenTimer !== null) clearTimeout(this.#creditsReopenTimer);
+    this.#creditsReopenTimer = null;
     this.#scratchAbort.abort();
     // どの段が失敗しても後の待ちと閉じは必ず走らせる（#5972）: `Promise.all` は1本の拒否で抜け、peer の口・道具の口が開いたまま残る。
     // 失敗は stderr に残し、最後に最初の1件を投げ直す: 呼び手（apps/runner の停止）は `.catch` で受けて口を閉じる側へ進み、投げ直しで落ちない。黙らせると、畳みが不完全だったことを呼び手が知れない
@@ -2478,6 +2536,10 @@ interface RunnerSessionOptions {
   permissionRules: () => readonly string[];
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため
   peer?: () => RunnerPeerOptions | undefined;
+  // `peer` は閉じていると undefined になるので、閉じた理由を引く口と、残高切れ・成功を host へ返す口は別に持つ
+  peerClosedReason?: (provider: AgentProviderId) => string | undefined;
+  onPeerCredits?: (provider: AgentProviderId, detail: string) => { notify: boolean };
+  onPeerSucceeded?: (provider: AgentProviderId) => void;
   managerTools?: RunnerManagerToolsOptions;
   // 終わり方は `#finish()` を通ったときだけ渡る（`stop()` は渡さない）: 落ちた・失効した CLI の木と、人間・畳みの停止の木を host が見分けるため。
   // 例外は鍵の付け替えの畳みで背景処理を畳んだ回（`abandonTree`。#5044）: 結果の受け手が居なくなった木で、守ると畳んだ後も走り続けるため
@@ -2547,6 +2609,9 @@ class RunnerSession {
   readonly #reportEmitter: RunnerReportEmitter;
   readonly #requestQueue: RunnerRequestQueue;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
+  readonly #peerClosedReason: ((provider: AgentProviderId) => string | undefined) | undefined;
+  readonly #onPeerCredits: RunnerSessionOptions['onPeerCredits'];
+  readonly #onPeerSucceeded: RunnerSessionOptions['onPeerSucceeded'];
   readonly #onPeersParked: ((parked: ParkedPeers) => void) | undefined;
   readonly #onCloseRescue: ((rescue: Promise<unknown>) => void) | undefined;
   readonly #managerTools: RunnerManagerToolsOptions | undefined;
@@ -2731,6 +2796,9 @@ class RunnerSession {
     this.#onPeersParked = options.onPeersParked;
     this.#onCloseRescue = options.onCloseRescue;
     this.#peer = options.peer;
+    this.#peerClosedReason = options.peerClosedReason;
+    this.#onPeerCredits = options.onPeerCredits;
+    this.#onPeerSucceeded = options.onPeerSucceeded;
     this.#managerTools = options.managerTools;
     this.#codexAuth = options.codexAuth;
     this.#queryFn = options.queryFn;
@@ -3232,6 +3300,31 @@ class RunnerSession {
     this.#onClosed(abandonTree ? { abandonTree: true } : undefined);
   }
 
+  #onPeerTurnSettled(event: {
+    provider: AgentProviderId;
+    ok: boolean;
+    failureKind?: 'auth' | 'credits';
+    detail: string;
+  }): void {
+    if (event.ok) {
+      this.#onPeerSucceeded?.(event.provider);
+      return;
+    }
+    if (event.failureKind !== 'credits') return;
+    const held = this.#onPeerCredits?.(event.provider, event.detail);
+    if (held === undefined || !held.notify) return;
+    // 日誌だけにしない: 残高を足せるのは人間だけで、クローンが頼む案件のため。同じ状態の間は1度だけ（`PeerCreditsHold`）
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `この器で担当 [${this.#id}] の peer（${event.provider}）が残高切れで断られた。Codex の原文: ${event.detail}。` +
+        '人間が残高を足すまで peer は閉じる。30 分おきに1度開き直して試す（資格を置き直しても開き直す）。' +
+        '人間に Codex のワークスペースへ残高を足すよう頼むこと',
+      notifyClone: true,
+    });
+  }
+
   // この担当の note を出す。追加の欄（notifyClone・stall・workerLimit など）を持つ note は `#emit` を直に呼ぶ
   #note(text: string): void {
     this.#emit({ type: 'note', managerId: this.#id, text });
@@ -3448,10 +3541,14 @@ class RunnerSession {
       },
       ...(peer.models === undefined ? {} : { models: peer.models }),
       // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
-      closedReason: (provider) =>
-        binding.session.#peer?.()?.peers.includes(provider) === true
-          ? undefined
-          : `この器では peer（${provider}）がいま閉じている（資格が外れた。理由は runner_list の peer の行に出る）`,
+      closedReason: (provider) => {
+        if (binding.session.#peer?.()?.peers.includes(provider) === true) return undefined;
+        const reason = binding.session.#peerClosedReason?.(provider);
+        return reason === undefined
+          ? `この器では peer（${provider}）がいま閉じている（資格が外れた。理由は runner_list の peer の行に出る）`
+          : `この器では peer（${provider}）がいま閉じている（${reason}）。Codex へは送っていない`;
+      },
+      onTurnSettled: (event) => binding.session.#onPeerTurnSettled(event),
       askApproval: (source, request) =>
         binding.parked
           ? new Promise<AgentPermissionDecision>((resolve) => {

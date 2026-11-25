@@ -16,7 +16,10 @@ import type {
   AgentUserInput,
 } from './agent-session.js';
 import type { AgentProviderId } from './agent-ports.js';
-import { CODEX_PEER_AUTH_EXPIRED_NOTICE } from './agent-provider-peers.js';
+import {
+  CODEX_PEER_AUTH_EXPIRED_NOTICE,
+  CODEX_PEER_CREDITS_EXHAUSTED_NOTICE,
+} from './agent-provider-peers.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { reasonOf } from './dropped-record.js';
 import { excerptLine } from './excerpt.js';
@@ -94,6 +97,13 @@ export interface PeerBrokerDeps {
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   /** 道具を出した後に資格が外れたとき、`peer_run` は相手を起こさずにこの理由で断る。 */
   readonly closedReason?: (provider: AgentProviderId) => string | undefined;
+  /** ターンの結末（成功・失敗とその種類）。残高切れで閉じる側が受ける。投げても peer の作業は止めない。 */
+  readonly onTurnSettled?: (event: {
+    provider: AgentProviderId;
+    ok: boolean;
+    failureKind?: 'auth' | 'credits';
+    detail: string;
+  }) => void;
   readonly driverOf: (provider: AgentProviderId) => AgentManagerDriver;
   readonly makeSpec: (
     provider: AgentProviderId,
@@ -720,6 +730,18 @@ class PeerSession {
         await this.#scanWorkdir();
         if (event.failure !== undefined || !event.succeeded) {
           const lines = event.errorLines.length > 0 ? `: ${event.errorLines.join(' / ')}` : '';
+          this.#settle({
+            ok: false,
+            ...(event.failureKind === undefined ? {} : { failureKind: event.failureKind }),
+            detail: event.errorLines.join(' / '),
+          });
+          if (event.failureKind === 'credits') {
+            this.#finishTurn({
+              ok: false,
+              text: `${CODEX_PEER_CREDITS_EXHAUSTED_NOTICE}（peer のターンが失敗した（${event.outcome ?? '失敗'}）${lines}）`,
+            });
+            return;
+          }
           if (event.failureKind === 'auth') {
             this.#finishTurn({
               ok: false,
@@ -733,12 +755,23 @@ class PeerSession {
           });
           return;
         }
+        this.#settle({ ok: true, detail: '' });
         const body = event.body.length > 0 ? event.body : this.#turnText.join('\n');
         this.#finishTurn({ ok: true, text: body });
         return;
       }
       default:
         return;
+    }
+  }
+
+  #settle(event: Omit<Parameters<NonNullable<PeerBrokerDeps['onTurnSettled']>>[0], 'provider'>): void {
+    try {
+      this.#deps.onTurnSettled?.({ provider: this.provider, ...event });
+    } catch (error) {
+      this.#deps.onNote(
+        `peer（${this.provider}）[${this.id}] のターンの結末を知らせられなかった: ${reasonOf(error)}`,
+      );
     }
   }
 
@@ -1101,7 +1134,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
   ): Promise<PeerCallResult | undefined> => {
     const known = deps.resumable?.get(sessionId);
     if (known === undefined || !allowed.has(known.provider)) return undefined;
-    if (deps.closedReason?.(known.provider) !== undefined) return undefined;
+    const closed = deps.closedReason?.(known.provider);
+    if (closed !== undefined) return closed;
     if (options.background === true && deps.onBackgroundStop === undefined) {
       return '背景へ回す口が無い（run_in_background を外して呼ぶこと）';
     }
@@ -1164,6 +1198,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       );
     }
     if (session.busy) return `peer のセッション ${sessionId} は前のターンの応答を待っている`;
+    const closed = deps.closedReason?.(session.provider);
+    if (closed !== undefined) return closed;
     return follow(
       session,
       options.background === true,
@@ -1192,6 +1228,9 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
 
   const render = renderPeerCall;
 
+  const closedNote =
+    '資格切れ・残高切れなどでこの器の peer が閉じているときは、相手を起こさずに理由つきで断る' +
+    '（理由は返る文と runner_list の peer の行に出る。閉じた peer の道具は次の組み直しで消える）。';
   const providerList = deps.allowed.join(' / ');
   const approvalNote =
     '相手のセッションで確認が要る操作（書き込み・コマンドの実行など）が出ると、呼び出しは確認の中身と approval_id を' +
@@ -1262,6 +1301,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                 '（ファイルの作成・編集・コマンドの実行を含む。調査・レビュー・相談にも使える）。' +
                 '相手は別の担い手で、あなたの文脈を持たない——必要な前提（作業ディレクトリ・完了の条件）は prompt に書くこと。' +
                 approvalNote +
+                closedNote +
                 '続きは返ってきた session_id を peer_reply へ渡す。' +
                 `同時に生きているセッションは ${String(limits.maxLiveSessions)} 本までで、超えるといちばん長く使われていないものを、` +
                 `${String(Math.round(limits.idleMs / 60_000))} 分使われなかったものも閉じる` +
@@ -1288,7 +1328,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                 `セッションは上限（${String(limits.maxLiveSessions)} 本）を超えたとき、または ${String(Math.round(limits.idleMs / 60_000))} 分使われなかったときに閉じる。` +
                 '閉じたセッションへの続きは、器の入れ替わりの前から記録が残っている相手なら、この呼び出しで続きから起こせることがある' +
                 '（起こせないときは「頼み直す」と返る。そのときは peer_run で新しく頼み直すこと。前の文脈は引き継がれない）。' +
-                approvalNote,
+                approvalNote +
+                closedNote,
               {
                 session_id: z.string().min(1).describe('peer_run が返した session_id'),
                 message: z.string().min(1).describe('相手への続きの指示'),

@@ -40,15 +40,27 @@ export const CODEX_PEER_AUTH_EXPIRED_NOTICE =
   'peer（codex）の認証が切れている。' +
   `${CODEX_LOGIN_BY_HUMAN}ログインし直すまで、同じ依頼を繰り返しても失敗する。人間へ知らせて待つこと`;
 
+/** peer（codex）が残高切れで断られたときにマネージャーへ返す案内。 */
+export const CODEX_PEER_CREDITS_EXHAUSTED_NOTICE =
+  'peer（codex）は残高切れで断られた。人間が Codex のワークスペースに残高を足すまで、同じ依頼を繰り返しても通らない。' +
+  'この器の peer は閉じ、クローンへ知らせた。peer を使わずに進めるか、人間の対応を待つこと';
+
 export const CODEX_PEER_CLOSED_REASON =
   'Codex の資格がこの器に届いていない（ChatGPT ログインも CODEX_API_KEY も無い）。' +
   `${CODEX_LOGIN_BY_HUMAN}ログインするか、` +
   '`alteroid credential set CODEX_API_KEY` で鍵を置くと、再起動なしで開く';
 
 /** 届いている資格から、開いている peer と閉じている peer（理由つき）を決める。**純粋関数。** */
-export function resolvePeerOpening(presence: PeerCredentialPresence): PeerOpening {
-  if (presence.codexApiKey || presence.codexChatgptLogin) return { open: ['codex'], closed: [] };
-  return { open: [], closed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }] };
+export function resolvePeerOpening(
+  presence: PeerCredentialPresence,
+  held: readonly PeerClosed[] = [],
+): PeerOpening {
+  if (!presence.codexApiKey && !presence.codexChatgptLogin) {
+    return { open: [], closed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }] };
+  }
+  const heldCodex = held.find((h) => h.provider === 'codex');
+  if (heldCodex !== undefined) return { open: [], closed: [heldCodex] };
+  return { open: ['codex'], closed: [] };
 }
 
 /** 2つの開き具合が同じか（名乗り直しと、セッションの組み直しの要否に使う）。 */
