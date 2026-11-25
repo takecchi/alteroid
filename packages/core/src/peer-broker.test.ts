@@ -3,6 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from './agent-events.js';
+import { CODEX_PEER_CREDITS_EXHAUSTED_NOTICE } from './agent-provider-peers.js';
 import type {
   AgentManagerDriver,
   AgentManagerSession,
@@ -87,6 +88,7 @@ function makeBroker(
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
     closedReason?: PeerBrokerDeps['closedReason'];
+    onTurnSettled?: PeerBrokerDeps['onTurnSettled'];
     noBackground?: boolean;
     cwd?: string;
     scanWorkdir?: PeerBrokerDeps['scanWorkdir'];
@@ -128,6 +130,7 @@ function makeBroker(
     ...(options.models === undefined ? {} : { models: options.models }),
     onTurn: (event) => turns.push(event),
     ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
+    ...(options.onTurnSettled === undefined ? {} : { onTurnSettled: options.onTurnSettled }),
     ...(options.noBackground === true
       ? {}
       : {
@@ -441,6 +444,71 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     closed = undefined;
     expect(typeof (await broker.run('codex', 'x'))).not.toBe('string');
     expect(seen.specs).toHaveLength(1);
+    broker.closeAll();
+  });
+
+  it('生きているセッションへの peer_reply も、閉じていれば相手を起こさずに理由で断り、開けば続けられる', async () => {
+    let closed: string | undefined;
+    let sent = 0;
+    const { broker } = makeBroker(
+      () => {
+        sent += 1;
+        return [turnEnded(`答え${String(sent)}`)];
+      },
+      { closedReason: () => closed },
+    );
+    const first = foreground(await broker.run('codex', '調べて'));
+    closed = 'この器では peer（codex）がいま閉じている（残高切れ）。Codex へは送っていない';
+    expect(await broker.reply(first.sessionId, '続き')).toBe(closed);
+    expect(sent).toBe(1);
+    closed = undefined;
+    expect(foreground(await broker.reply(first.sessionId, '続き')).text).toBe('答え2');
+    broker.closeAll();
+  });
+
+  it('残高切れ（failureKind: credits）で落ちたターンは案内つきで返り、onTurnSettled が credits で呼ばれる', async () => {
+    const settledEvents: Parameters<NonNullable<PeerBrokerDeps['onTurnSettled']>>[0][] = [];
+    const { broker } = makeBroker(
+      () => [
+        {
+          type: 'turn_ended',
+          succeeded: false,
+          failure: { via: 'result_subtype', code: 'failed', text: 'out of credits' },
+          failureKind: 'credits',
+          body: '',
+          outcome: 'failed',
+          errorLines: ['Your workspace is out of credits.'],
+          denials: [],
+        } as AgentEvent,
+      ],
+      { onTurnSettled: (event) => settledEvents.push(event) },
+    );
+    const result = foreground(await broker.run('codex', '調べて'));
+    expect(result.ok).toBe(false);
+    expect(result.text).toBe(
+      `${CODEX_PEER_CREDITS_EXHAUSTED_NOTICE}（peer のターンが失敗した（failed）: Your workspace is out of credits.）`,
+    );
+    expect(settledEvents).toEqual([
+      {
+        provider: 'codex',
+        ok: false,
+        failureKind: 'credits',
+        detail: 'Your workspace is out of credits.',
+      },
+    ]);
+    broker.closeAll();
+  });
+
+  it('成功したターンは onTurnSettled に ok: true で届き、onTurnSettled が投げても peer の作業は止まらない', async () => {
+    const { broker, notes } = makeBroker(() => [turnEnded('答え')], {
+      onTurnSettled: () => {
+        throw new Error('受け口が壊れた');
+      },
+    });
+    const result = foreground(await broker.run('codex', '調べて'));
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe('答え');
+    expect(notes.some((note) => note.includes('受け口が壊れた'))).toBe(true);
     broker.closeAll();
   });
 

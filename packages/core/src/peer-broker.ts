@@ -765,7 +765,9 @@ class PeerSession {
     }
   }
 
-  #settle(event: Omit<Parameters<NonNullable<PeerBrokerDeps['onTurnSettled']>>[0], 'provider'>): void {
+  #settle(
+    event: Omit<Parameters<NonNullable<PeerBrokerDeps['onTurnSettled']>>[0], 'provider'>,
+  ): void {
     try {
       this.#deps.onTurnSettled?.({ provider: this.provider, ...event });
     } catch (error) {

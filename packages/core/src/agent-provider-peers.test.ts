@@ -42,6 +42,21 @@ describe('peer を開く条件は Codex の資格である（#4118）', () => {
     expect(CODEX_PEER_CLOSED_REASON).toContain('再起動なし');
   });
 
+  it('資格が在っても、残高切れで預かっている provider は閉じ、預かった理由を返す', () => {
+    const held = [{ provider: CODEX, reason: '残高切れで閉じている（テスト）' }];
+    expect(resolvePeerOpening({ codexApiKey: true, codexChatgptLogin: false }, held)).toEqual({
+      open: [],
+      closed: held,
+    });
+  });
+
+  it('資格が無いときは、預かりより資格の理由が勝つ', () => {
+    const opening = resolvePeerOpening({ codexApiKey: false, codexChatgptLogin: false }, [
+      { provider: CODEX, reason: '残高切れで閉じている（テスト）' },
+    ]);
+    expect(opening.closed).toEqual([{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }]);
+  });
+
   it('samePeerOpening は開閉と理由の両方で比べる', () => {
     const open = resolvePeerOpening({ codexApiKey: true, codexChatgptLogin: false });
     const closed = resolvePeerOpening({ codexApiKey: false, codexChatgptLogin: false });

@@ -853,7 +853,10 @@ export function isCodexCreditsExhausted(
   message: string | undefined,
   reachedType: string | undefined,
 ): boolean {
-  if (message !== undefined && (/\bout of (?:usage )?credits\b/i.test(message) || /credits[_ ]depleted/i.test(message))) {
+  if (
+    message !== undefined &&
+    (/\bout of (?:usage )?credits\b/i.test(message) || /credits[_ ]depleted/i.test(message))
+  ) {
     return true;
   }
   return reachedType !== undefined && reachedType.endsWith('_credits_depleted');
