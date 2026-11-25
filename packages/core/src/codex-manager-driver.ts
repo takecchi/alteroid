@@ -718,15 +718,25 @@ class CodexManagerSession implements AgentManagerSession {
     if (unauthorized) {
       this.#chatgptAuth?.reportFailure(`Codex のターンが認証の失敗で落ちた: ${text}`);
     }
-    return this.#failedTurnEvent(text, turn.status, turn.id, unauthorized);
+    const failureKind = unauthorized
+      ? ('auth' as const)
+      : isCodexCreditsExhausted(text, this.#rateLimitReached)
+        ? ('credits' as const)
+        : undefined;
+    return this.#failedTurnEvent(text, turn.status, turn.id, failureKind);
   }
 
-  #failedTurnEvent(text: string, code: string, id?: string, unauthorized = false): AgentEvent {
+  #failedTurnEvent(
+    text: string,
+    code: string,
+    id?: string,
+    failureKind?: 'auth' | 'credits',
+  ): AgentEvent {
     return {
       type: 'turn_ended',
       succeeded: false,
       failure: { via: 'result_subtype', code, text },
-      ...(unauthorized ? { failureKind: 'auth' as const } : {}),
+      ...(failureKind === undefined ? {} : { failureKind }),
       body: '',
       outcome: code,
       errorLines: [text],
@@ -836,6 +846,20 @@ export function isUnauthorizedCodexError(info: unknown): boolean {
       detail !== null &&
       (detail as { httpStatusCode?: unknown }).httpStatusCode === 401,
   );
+}
+
+/** Codex の失敗が残高切れ（ワークスペースのクレジット枯渇）か。`reachedType` は直近の `rateLimitReachedType`。 */
+export function isCodexCreditsExhausted(
+  message: string | undefined,
+  reachedType: string | undefined,
+): boolean {
+  if (
+    message !== undefined &&
+    (/\bout of (?:usage )?credits\b/i.test(message) || /credits[_ ]depleted/i.test(message))
+  ) {
+    return true;
+  }
+  return reachedType !== undefined && reachedType.endsWith('_credits_depleted');
 }
 
 // 画像を一時ファイル（localImage）にしない: 書き出しと後片付けが要らず、app-server が別のファイル系にいても届き、ターンの途中で落ちても残骸が出ないため

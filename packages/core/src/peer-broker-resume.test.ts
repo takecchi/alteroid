@@ -24,6 +24,7 @@ function setup(
     resumable?: Record<string, PeerResumable>;
     maxLiveSessions?: number;
     prepareResume?: PeerBrokerDeps['prepareResume'];
+    closedReason?: PeerBrokerDeps['closedReason'];
     transcriptLocation?: string;
   } = {},
 ) {
@@ -83,6 +84,7 @@ function setup(
     onThread: (event) => thread.push(event),
     resumable,
     ...(options.prepareResume === undefined ? {} : { prepareResume: options.prepareResume }),
+    ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
     ...(options.maxLiveSessions === undefined
       ? {}
       : { limits: { maxLiveSessions: options.maxLiveSessions, idleMs: 3_600_000 } }),
@@ -120,6 +122,17 @@ describe('peer-broker: 器の入れ替わりの後に peer を続きから起こ
     const result = await broker.reply('peer-zzzz', '続き');
     expect(typeof result).toBe('string');
     expect(result).toContain('peer セッションは無い');
+    expect(specs).toHaveLength(0);
+    broker.closeAll();
+  });
+
+  it('peer が閉じているとき、記録から起こせる id への peer_reply は「無い」ではなく閉じた理由を返し、相手を起こさない', async () => {
+    const reason = 'この器では peer（codex）がいま閉じている（残高切れ）。Codex へは送っていない';
+    const { broker, specs } = setup({
+      resumable: { 'peer-aaaa': { provider: 'codex', threadId: 'thr-old-1' } },
+      closedReason: () => reason,
+    });
+    expect(await broker.reply('peer-aaaa', '続き')).toBe(reason);
     expect(specs).toHaveLength(0);
     broker.closeAll();
   });
