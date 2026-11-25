@@ -71,7 +71,10 @@ function usageRunner() {
 
   return {
     runner,
-    usage(models: Record<string, UsageTotals>, extra: { answered?: boolean } = {}): void {
+    usage(
+      models: Record<string, UsageTotals>,
+      extra: { answered?: boolean; sessionId?: string } = {},
+    ): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
       emit({
         type: 'usage',
@@ -140,13 +143,14 @@ describe('累積の usage は届いた順に積む（#3015）', () => {
     await s.pool.stop();
   });
 
+  // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけ全量を数えるので、2つ目の累積に別の session id を持たせた（同じ id で減ったら積まない）
   it('本物の数え直し（届いた順に累積が 0 から始まり直す）は今までどおり全量を数える', async () => {
     const stores = createMemoryStores();
     const s = await setup({ stores });
 
     s.fake.usage({ opus: totals({ costUsd: 9 }) });
     await expect.poll(() => costOf(stores), { timeout: 2000 }).toBe(9);
-    s.fake.usage({ opus: totals({ costUsd: 3 }) });
+    s.fake.usage({ opus: totals({ costUsd: 3 }) }, { sessionId: 'sess-2' });
     await expect.poll(() => costOf(stores), { timeout: 2000 }).toBe(12);
 
     await s.pool.stop();

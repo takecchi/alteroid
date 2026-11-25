@@ -2426,6 +2426,7 @@ describe('消費を台帳へ積む', () => {
 
   it('累積が数え直されても記録済みは減らず、数え直したことが日誌に残る', async () => {
     // 基準を下げて引き算しない: resume で SDK 側の累積が 0 から始まるので、引くと記録済みの分が消える。
+    // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけ数え直しなので、2つ目の累積に別の session id（sess-2）を持たせた
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -2435,7 +2436,7 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
 
-    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-1');
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-2');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(8);
 
     const entries = await stores.journal.list({ limit: 50 });
@@ -2545,10 +2546,11 @@ describe('消費を台帳へ積む', () => {
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
 
+    // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけなので、2つ目の累積に別の session id（sess-2）を持たせた
     fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
 
-    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-1');
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-2');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(8);
 
     const all = await stores.journal.list({ limit: 50 });
@@ -2564,6 +2566,41 @@ describe('消費を台帳へ積む', () => {
     if (resetEntry === undefined) throw new Error('reset 付きの turn_usage が無い');
     expect(resetEntry.reset).toEqual({ fromCostUsd: 5, toCostUsd: 3 });
     expect(resetEntry.models.opus?.costUsd).toBe(3);
+
+    await s.pool.stop();
+  });
+
+  it('同じ session id のまま累積が減った回は積まず、turn_usage も書かれず、「前回より減っていた」gauge の exchange が1件だけ残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(runningJob);
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 923.7569934 }) }, 'sess-1');
+    await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBeCloseTo(923.7569934, 6);
+
+    fake.usage('mgr-spend', { opus: usage({ costUsd: 814.7398492 }) }, 'sess-1');
+    await expect
+      .poll(
+        async () => {
+          const entries = await stores.journal.list({ limit: 50 });
+          return entries.filter(
+            (entry) => 'text' in entry && entry.text.includes('前回より減っていた'),
+          ).length;
+        },
+        { timeout: 2000 },
+      )
+      .toBe(1);
+
+    expect(await totalCostUsd(stores)).toBeCloseTo(923.7569934, 6);
+    const all = await stores.journal.list({ limit: 50 });
+    expect(all.filter((entry) => entry.type === 'turn_usage')).toHaveLength(1);
+    expect(all.some((entry) => 'text' in entry && entry.text.includes('数え直された'))).toBe(false);
+    const note = all.find((entry) => 'text' in entry && entry.text.includes('前回より減っていた'));
+    if (note === undefined || !('text' in note)) throw new Error('gauge の exchange が無い');
+    expect(note.text).toContain('[mgr-spend] 消費の累積が前回より減っていた');
+    expect(note.text).toContain('$923.7570 → $814.7398');
 
     await s.pool.stop();
   });

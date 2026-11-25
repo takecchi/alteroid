@@ -92,10 +92,11 @@ describe('累積スナップショットを増分へ畳む', () => {
   });
 
   describe('数え直し（resume / mid-session の /clear）', () => {
+    // 経緯: 以前は減っただけで数え直しとしていた。いまは session id が替わったときだけ数え直し（同じ id で減った読みは「下げて積まない」。下の describe）。この試験は数え直しの扱いを確かめるので、2つ目の累積に別の session id を持たせた
     it('減ったら数え直しとして扱い、記録済みの分は保持したまま新しい累積を全量足す', () => {
       const fold = foldUsageSnapshot(
-        baseline({ opus: totals({ outputTokens: 500, costUsd: 5 }) }),
-        { models: { opus: totals({ outputTokens: 300, costUsd: 3 }) } },
+        baseline({ opus: totals({ outputTokens: 500, costUsd: 5 }) }, { sessionId: 'sess-a' }),
+        { sessionId: 'sess-b', models: { opus: totals({ outputTokens: 300, costUsd: 3 }) } },
         LATER,
       );
       expect(fold.delta).toEqual({ opus: totals({ outputTokens: 300, costUsd: 3 }) });
@@ -103,8 +104,8 @@ describe('累積スナップショットを増分へ畳む', () => {
         at: LATER,
         fromCostUsd: 5,
         toCostUsd: 3,
-        fromSessionId: undefined,
-        toSessionId: undefined,
+        fromSessionId: 'sess-a',
+        toSessionId: 'sess-b',
       });
     });
 
@@ -114,45 +115,67 @@ describe('累積スナップショットを増分へ畳む', () => {
       const BIG = { cacheReadInputTokens: 10_000_000_000, costUsd: 2411.69 };
       const LAGGED = { cacheReadInputTokens: 9_966_000_000, costUsd: 2403.43 };
 
-      it('わずかに減っても数え直しにならず、増分は空で、基準は高い側のまま', () => {
+      // 反転した試験（2026-11-25 の本番事象、#6833 の 9 割の線の廃止）: 以前は「基準は高い側のまま」だった。9 割の線を越える遅れ（923.76 → 814.74）で全量が二重に積まれたため、同じ session id で減った読みは基準を今回へ下げる（増分は空・skipped: decreased）へ改めた
+      it('わずかに減っても数え直しにならず、増分は空で、基準は下がる（skipped: decreased）', () => {
         const fold = foldUsageSnapshot(
-          baseline({ opus: totals(BIG) }),
-          { models: { opus: totals(LAGGED) } },
+          baseline({ opus: totals(BIG) }, { sessionId: 'sess-a' }),
+          { sessionId: 'sess-a', models: { opus: totals(LAGGED) } },
           LATER,
         );
         expect(fold.reset).toBeUndefined();
         expect(fold.delta).toEqual({});
-        expect(nextBaseline(fold).models).toEqual({ opus: totals(BIG) });
+        expect(fold.skipped).toEqual({
+          reason: 'decreased',
+          fromCostUsd: 2411.69,
+          toCostUsd: 2403.43,
+        });
+        expect(nextBaseline(fold).models).toEqual({ opus: totals(LAGGED) });
         expect(nextBaseline(fold).resets).toBe(0);
       });
 
-      it('遅れた後の累積が前回までを追い越すまで積まず、追い越した分だけ積む（二重にも取りこぼしにもならない）', () => {
+      // 反転した試験: 以前は「前回までを追い越すまで積まず、追い越した分だけ積む」だった。いまは基準が下がるので、次の読みからは下がった基準との差が積まれる
+      it('遅れた後の累積は、下がった基準との差が積まれる（二重にも取りこぼしにもならない）', () => {
         const lagged = foldUsageSnapshot(
-          baseline({ opus: totals(BIG) }),
-          { models: { opus: totals(LAGGED) } },
+          baseline({ opus: totals(BIG) }, { sessionId: 'sess-a' }),
+          { sessionId: 'sess-a', models: { opus: totals(LAGGED) } },
           LATER,
         );
         const still = foldUsageSnapshot(
           nextBaseline(lagged),
-          { models: { opus: totals({ cacheReadInputTokens: 9_990_000_000, costUsd: 2409 }) } },
+          {
+            sessionId: 'sess-a',
+            models: { opus: totals({ cacheReadInputTokens: 9_990_000_000, costUsd: 2409 }) },
+          },
           LATER,
         );
-        expect(still.delta).toEqual({});
+        expect(still.delta).toEqual({
+          opus: totals({
+            cacheReadInputTokens: 9_990_000_000 - 9_966_000_000,
+            costUsd: 2409 - 2403.43,
+          }),
+        });
+        expect(still.skipped).toBeUndefined();
         const past = foldUsageSnapshot(
           nextBaseline(still),
-          { models: { opus: totals({ cacheReadInputTokens: 10_100_000_000, costUsd: 2420 }) } },
+          {
+            sessionId: 'sess-a',
+            models: { opus: totals({ cacheReadInputTokens: 10_100_000_000, costUsd: 2420 }) },
+          },
           LATER,
         );
         expect(past.delta).toEqual({
-          opus: totals({ cacheReadInputTokens: 100_000_000, costUsd: 2420 - 2411.69 }),
+          opus: totals({ cacheReadInputTokens: 110_000_000, costUsd: 2420 - 2409 }),
         });
         expect(past.reset).toBeUndefined();
       });
 
-      it('0 付近から始まる本物の数え直し（2412.65 → 0.51）は従来どおり全量を積む', () => {
+      it('0 付近から始まる本物の数え直し（2412.65 → 0.51。session id が替わる）は従来どおり全量を積む', () => {
         const fold = foldUsageSnapshot(
-          baseline({ opus: totals(BIG) }),
-          { models: { opus: totals({ cacheReadInputTokens: 200_000, costUsd: 0.51 }) } },
+          baseline({ opus: totals(BIG) }, { sessionId: 'sess-a' }),
+          {
+            sessionId: 'sess-b',
+            models: { opus: totals({ cacheReadInputTokens: 200_000, costUsd: 0.51 }) },
+          },
           LATER,
         );
         expect(fold.reset).toBeDefined();
@@ -183,17 +206,18 @@ describe('累積スナップショットを増分へ畳む', () => {
       const haiku = (n: number) => totals({ outputTokens: n, costUsd: n });
 
       it('今回に主なモデルが無く、載ったモデルが前回以上でも、欠落ぶんが支配的なら数え直しで、全量が増分・基準は今回だけになる', () => {
+        // session id が替わっている形に限る（同じ id なら skipped: decreased。下の describe の (f)）
         const fold = foldUsageSnapshot(
-          baseline({ opus: opus(100), haiku: haiku(2) }),
-          { models: { haiku: haiku(3) } },
+          baseline({ opus: opus(100), haiku: haiku(2) }, { sessionId: 'sess-a' }),
+          { sessionId: 'sess-b', models: { haiku: haiku(3) } },
           LATER,
         );
         expect(fold.reset).toEqual({
           at: LATER,
           fromCostUsd: 102,
           toCostUsd: 3,
-          fromSessionId: undefined,
-          toSessionId: undefined,
+          fromSessionId: 'sess-a',
+          toSessionId: 'sess-b',
         });
         expect(fold.delta).toEqual({ haiku: haiku(3) });
         expect(nextBaseline(fold).models).toEqual({ haiku: haiku(3) });
@@ -202,8 +226,8 @@ describe('累積スナップショットを増分へ畳む', () => {
 
       it('その次に主なモデルが現れて累積しても、積まれるのは差分だけ（二重計上しない）', () => {
         const reset = foldUsageSnapshot(
-          baseline({ opus: opus(100), haiku: haiku(2) }),
-          { models: { haiku: haiku(3) } },
+          baseline({ opus: opus(100), haiku: haiku(2) }, { sessionId: 'sess-a' }),
+          { sessionId: 'sess-b', models: { haiku: haiku(3) } },
           AT,
         );
         const appeared = foldUsageSnapshot(
@@ -266,8 +290,11 @@ describe('累積スナップショットを増分へ畳む', () => {
 
     it('今回にもあるモデルが減れば、他のモデルが消えていても数え直しで、基準は今回の累積だけになる', () => {
       const fold = foldUsageSnapshot(
-        baseline({ opus: totals({ costUsd: 5 }), haiku: totals({ costUsd: 1 }) }),
-        { models: { opus: totals({ costUsd: 2 }) } },
+        baseline(
+          { opus: totals({ costUsd: 5 }), haiku: totals({ costUsd: 1 }) },
+          { sessionId: 'sess-a' },
+        ),
+        { sessionId: 'sess-b', models: { opus: totals({ costUsd: 2 }) } },
         LATER,
       );
       expect(fold.reset).toBeDefined();
@@ -315,8 +342,11 @@ describe('累積スナップショットを増分へ畳む', () => {
 
     it('数え直しを数えて時刻を残す（黙って数え直さない）', () => {
       const fold = foldUsageSnapshot(
-        baseline({ opus: totals({ costUsd: 5 }) }, { resets: 2, lastResetAt: AT }),
-        { models: { opus: totals({ costUsd: 1 }) } },
+        baseline(
+          { opus: totals({ costUsd: 5 }) },
+          { resets: 2, lastResetAt: AT, sessionId: 'sess-a' },
+        ),
+        { sessionId: 'sess-b', models: { opus: totals({ costUsd: 1 }) } },
         LATER,
       );
       expect(nextBaseline(fold).resets).toBe(3);
@@ -333,21 +363,36 @@ describe('累積スナップショットを増分へ畳む', () => {
       expect(nextBaseline(fold).lastResetAt).toBe(AT);
     });
 
-    it('session id が変わったことも記録に添える（ただし判定には使わない）', () => {
+    // 反転した試験: 以前は「session id が変わったことも記録に添える（ただし判定には使わない）」で、同じ id でも減れば reset だった。いまは判定に使う（同じ id で減った読みは reset にしない。resume は同じ id のまま累積が減りうるため）
+    it('session id が変わったことを記録に添える（判定にも使う。同じ id で減っても数え直しにしない）', () => {
       const same = foldUsageSnapshot(
         baseline({ opus: totals({ costUsd: 5 }) }, { sessionId: 's1' }),
         { sessionId: 's1', models: { opus: totals({ costUsd: 1 }) } },
         LATER,
       );
-      expect(same.reset?.fromSessionId).toBe('s1');
-      expect(same.reset?.toSessionId).toBe('s1');
+      expect(same.reset).toBeUndefined();
+      expect(same.skipped).toEqual({ reason: 'decreased', fromCostUsd: 5, toCostUsd: 1 });
+      const changed = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 5 }) }, { sessionId: 's1' }),
+        { sessionId: 's2', models: { opus: totals({ costUsd: 1 }) } },
+        LATER,
+      );
+      expect(changed.reset?.fromSessionId).toBe('s1');
+      expect(changed.reset?.toSessionId).toBe('s2');
     });
 
     it('増分は負にならない（一部のフィールドだけ減っても台帳を汚さない）', () => {
       const fold = foldUsageSnapshot(
-        baseline({ opus: totals({ inputTokens: 10, outputTokens: 100, costUsd: 1 }) }),
+        baseline(
+          { opus: totals({ inputTokens: 10, outputTokens: 100, costUsd: 1 }) },
+          { sessionId: 'sess-a' },
+        ),
         // cost も前回の 9 割を下回らせる: 同じ cost のままの微減は resume の遅れ（上の describe）で、増分が空になる
-        { models: { opus: totals({ inputTokens: 10, outputTokens: 90, costUsd: 0.5 }) } },
+        // （追記: 9 割の線は廃止。いまは session id が替わるときだけ増分が出るので、別の session id を持たせる）
+        {
+          sessionId: 'sess-b',
+          models: { opus: totals({ inputTokens: 10, outputTokens: 90, costUsd: 0.5 }) },
+        },
         LATER,
       );
       const opus = fold.delta.opus;
@@ -360,6 +405,219 @@ describe('累積スナップショットを増分へ畳む', () => {
     const fold = foldUsageSnapshot(null, { models: { opus: { ...ZERO_USAGE } } }, AT);
     expect(fold.delta).toEqual({});
     expect(fold.reset).toBeUndefined();
+  });
+
+  // 数字は 2026-11-25T03:19Z の本番事象から取る: 再起動後の resume で opus の累積が 923.7569934 → 814.7398492 へ下がり、$814.74 が 1 ターンとして積まれた
+  describe('累積が減ったときは session id で決める（同じ id なら下げて積まない。替わったときだけ数え直し）', () => {
+    const OPUS_BEFORE = {
+      cacheReadInputTokens: 3_000_000_000,
+      outputTokens: 4_000_000,
+      costUsd: 923.7569934,
+    };
+    const OPUS_DROPPED = {
+      cacheReadInputTokens: 2_650_000_000,
+      outputTokens: 3_600_000,
+      costUsd: 814.7398492,
+    };
+
+    // (a)
+    it('同じ session id のまま累積が下がると、増分は空・数え直しなし・skipped: decreased で、基準は今回へ下がる', () => {
+      const fold = foldUsageSnapshot(
+        baseline(
+          { opus: totals(OPUS_BEFORE) },
+          { sessionId: 'sess-a', resets: 2, lastResetAt: AT },
+        ),
+        { sessionId: 'sess-a', models: { opus: totals(OPUS_DROPPED) } },
+        LATER,
+      );
+      expect(fold.delta).toEqual({});
+      expect(fold.reset).toBeUndefined();
+      expect(fold.skipped).toEqual({
+        reason: 'decreased',
+        fromCostUsd: 923.7569934,
+        toCostUsd: 814.7398492,
+      });
+      const next = nextBaseline(fold);
+      expect(next.models).toEqual({ opus: totals(OPUS_DROPPED) });
+      expect(next.models.opus?.costUsd).toBeCloseTo(814.74, 2);
+      expect(next.resets).toBe(2);
+      expect(next.lastResetAt).toBe(AT);
+    });
+
+    it('下がった次の読みからは、下がった基準との差（+2.0677274）が積まれる', () => {
+      const dropped = foldUsageSnapshot(
+        baseline({ opus: totals(OPUS_BEFORE) }, { sessionId: 'sess-a' }),
+        { sessionId: 'sess-a', models: { opus: totals(OPUS_DROPPED) } },
+        AT,
+      );
+      const grown = foldUsageSnapshot(
+        nextBaseline(dropped),
+        {
+          sessionId: 'sess-a',
+          models: {
+            opus: totals({
+              cacheReadInputTokens: 2_650_000_000 + 1_000_000,
+              outputTokens: 3_600_000 + 500,
+              costUsd: 816.8075766,
+            }),
+          },
+        },
+        LATER,
+      );
+      expect(grown.skipped).toBeUndefined();
+      expect(grown.reset).toBeUndefined();
+      expect(grown.delta.opus?.costUsd).toBeCloseTo(2.0677274, 7);
+      expect(grown.delta.opus?.cacheReadInputTokens).toBe(1_000_000);
+      expect(grown.delta.opus?.outputTokens).toBe(500);
+    });
+
+    // (b)
+    it('0 付近へ戻っても同じ session id なら増分は空で skipped: decreased。続く 0.9 では 0.39 だけ積む', () => {
+      const fold = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 2412.65 }) }, { sessionId: 'sess-a' }),
+        { sessionId: 'sess-a', models: { opus: totals({ costUsd: 0.51 }) } },
+        LATER,
+      );
+      expect(fold.delta).toEqual({});
+      expect(fold.reset).toBeUndefined();
+      expect(fold.skipped).toEqual({ reason: 'decreased', fromCostUsd: 2412.65, toCostUsd: 0.51 });
+      const after = foldUsageSnapshot(
+        nextBaseline(fold),
+        { sessionId: 'sess-a', models: { opus: totals({ costUsd: 0.9 }) } },
+        LATER,
+      );
+      expect(after.skipped).toBeUndefined();
+      expect(after.delta.opus?.costUsd).toBeCloseTo(0.39, 10);
+    });
+
+    // (c)
+    it('0 付近へ戻り session id も替わったときは数え直しで、全量（0.51）が増分になり resets が 1 増える', () => {
+      const fold = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 2412.65 }) }, { sessionId: 'sess-a', resets: 1 }),
+        { sessionId: 'sess-b', models: { opus: totals({ costUsd: 0.51 }) } },
+        LATER,
+      );
+      expect(fold.skipped).toBeUndefined();
+      expect(fold.delta).toEqual({ opus: totals({ costUsd: 0.51 }) });
+      expect(fold.reset).toEqual({
+        at: LATER,
+        fromCostUsd: 2412.65,
+        toCostUsd: 0.51,
+        fromSessionId: 'sess-a',
+        toSessionId: 'sess-b',
+      });
+      expect(nextBaseline(fold).resets).toBe(2);
+      expect(nextBaseline(fold).lastResetAt).toBe(LATER);
+      expect(nextBaseline(fold).models).toEqual({ opus: totals({ costUsd: 0.51 }) });
+    });
+
+    // (d)
+    it('session id が基準に無い・今回に無いときに減ったら、数え直しにせず skipped: decreased', () => {
+      const noCurrent = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 2412.65 }) }, { sessionId: 'sess-a' }),
+        { models: { opus: totals({ costUsd: 0.51 }) } },
+        LATER,
+      );
+      expect(noCurrent.reset).toBeUndefined();
+      expect(noCurrent.delta).toEqual({});
+      expect(noCurrent.skipped).toEqual({
+        reason: 'decreased',
+        fromCostUsd: 2412.65,
+        toCostUsd: 0.51,
+      });
+      expect(nextBaseline(noCurrent).resets).toBe(0);
+
+      const noBaseline = foldUsageSnapshot(
+        baseline({ opus: totals({ costUsd: 2412.65 }) }),
+        { sessionId: 'sess-b', models: { opus: totals({ costUsd: 0.51 }) } },
+        LATER,
+      );
+      expect(noBaseline.reset).toBeUndefined();
+      expect(noBaseline.delta).toEqual({});
+      expect(noBaseline.skipped).toEqual({
+        reason: 'decreased',
+        fromCostUsd: 2412.65,
+        toCostUsd: 0.51,
+      });
+      expect(nextBaseline(noBaseline).resets).toBe(0);
+    });
+
+    // (e)
+    it('単調に増える累積は、毎回差分どおりに積まれ、skipped も reset も出ない', () => {
+      const readings = [10.5, 12.75, 20, 20.25];
+      let current: UsageBaseline | null = null;
+      let previous = 0;
+      for (const cost of readings) {
+        const fold: UsageFold = foldUsageSnapshot(
+          current,
+          {
+            sessionId: 'sess-a',
+            models: { opus: totals({ outputTokens: cost * 100, costUsd: cost }) },
+          },
+          LATER,
+        );
+        expect(fold.skipped).toBeUndefined();
+        expect(fold.reset).toBeUndefined();
+        expect(fold.delta).toEqual({
+          opus: totals({ outputTokens: cost * 100 - previous * 100, costUsd: cost - previous }),
+        });
+        current = nextBaseline(fold);
+        expect(current.resets).toBe(0);
+        previous = cost;
+      }
+    });
+
+    // (f)
+    it('減った回に今回に無いモデルの前回値は基準へ引き継がれ、次にそのモデルが同じ累積で現れても積まれない', () => {
+      const haiku = totals({ outputTokens: 809, costUsd: 0.5 });
+      const dropped = foldUsageSnapshot(
+        baseline({ opus: totals(OPUS_BEFORE), haiku }, { sessionId: 'sess-a' }),
+        { sessionId: 'sess-a', models: { opus: totals(OPUS_DROPPED) } },
+        AT,
+      );
+      expect(dropped.skipped?.reason).toBe('decreased');
+      expect(nextBaseline(dropped).models).toEqual({ opus: totals(OPUS_DROPPED), haiku });
+      const back = foldUsageSnapshot(
+        nextBaseline(dropped),
+        { sessionId: 'sess-a', models: { opus: totals(OPUS_DROPPED), haiku } },
+        LATER,
+      );
+      expect(back.delta).toEqual({});
+      expect(back.skipped).toBeUndefined();
+    });
+
+    // foldRecordForStore 経由（3実装が通る口）
+    it('台帳へ畳む口（現役の runner）でも、同じ session id の減少は増分が空・基準と控えが今回へ下がる', () => {
+      const runner = { id: 'r1', superseded: false };
+      const input = (sessionId: string, cost: number) => ({
+        layer: 'manager' as const,
+        managerId: 'm1',
+        snapshot: { sessionId, models: { opus: totals({ costUsd: cost }) } },
+        at: LATER,
+        accumulation: 'cumulative' as const,
+        runner,
+      });
+      const first = foldRecordForStore(null, input('sess-a', 923.7569934));
+      const dropped = foldRecordForStore(first.nextBaseline, input('sess-a', 814.7398492));
+      expect(dropped.fold.delta).toEqual({});
+      expect(dropped.fold.reset).toBeUndefined();
+      expect(dropped.fold.skipped).toEqual({
+        reason: 'decreased',
+        fromCostUsd: 923.7569934,
+        toCostUsd: 814.7398492,
+      });
+      expect(dropped.nextBaseline?.resets).toBe(0);
+      expect(dropped.nextBaseline?.models.opus?.costUsd).toBe(814.7398492);
+      expect(dropped.nextBaseline?.byRunner?.r1?.opus?.costUsd).toBe(814.7398492);
+      const grown = foldRecordForStore(dropped.nextBaseline, input('sess-a', 816.8075766));
+      expect(grown.fold.skipped).toBeUndefined();
+      expect(grown.fold.delta.opus?.costUsd).toBeCloseTo(2.0677274, 7);
+
+      const replaced = foldRecordForStore(grown.nextBaseline, input('sess-b', 0.51));
+      expect(replaced.fold.reset).toBeDefined();
+      expect(replaced.fold.delta).toEqual({ opus: totals({ costUsd: 0.51 }) });
+      expect(replaced.nextBaseline?.resets).toBe(1);
+    });
   });
 
   describe('クラッシュのゼロ値', () => {
@@ -383,11 +641,11 @@ describe('累積スナップショットを増分へ畳む', () => {
     });
 
     it('ゼロを捨てても、本物の数え直しは次の非ゼロで拾える', () => {
-      const before = baseline({ opus: totals({ costUsd: 5 }) });
+      const before = baseline({ opus: totals({ costUsd: 5 }) }, { sessionId: 'sess-a' });
       const dropped = foldUsageSnapshot(before, { models: { opus: { ...ZERO_USAGE } } }, LATER);
       const next = foldUsageSnapshot(
         dropped.baseline,
-        { models: { opus: totals({ costUsd: 3 }) } },
+        { sessionId: 'sess-b', models: { opus: totals({ costUsd: 3 }) } },
         LATER,
       );
       expect(next.reset).toBeDefined();
@@ -407,11 +665,12 @@ describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの�
     base: UsageBaseline | null,
     models: Record<string, UsageTotals>,
     runner?: { id: string; superseded: boolean },
+    sessionId?: string,
   ) =>
     foldRecordForStore(base, {
       layer: 'manager',
       managerId: 'm1',
-      snapshot: { models },
+      snapshot: sessionId === undefined ? { models } : { sessionId, models },
       at: AT,
       accumulation: 'cumulative',
       ...(runner === undefined ? {} : { runner }),
@@ -452,8 +711,9 @@ describe('台帳へ畳む（foldRecordForStore）で累積に載るモデルの�
   // Issue #5405: 数え直し直後に主なモデルが載らず、載ったモデルが前回以上でも、欠落ぶんが支配的なら数え直し
   it('現役の runner: 欠落ぶんが支配的なら数え直しで、全量を積み、基準と控えは今回だけになる', () => {
     const runner = { id: 'r1', superseded: false };
-    const first = store(null, { opus: opus(100), haiku: haiku(2) }, runner);
-    const reset = store(first.nextBaseline, { haiku: haiku(3) }, runner);
+    // session id が替わる形に限る（同じ id なら skipped: decreased）
+    const first = store(null, { opus: opus(100), haiku: haiku(2) }, runner, 'sess-a');
+    const reset = store(first.nextBaseline, { haiku: haiku(3) }, runner, 'sess-b');
     expect(reset.fold.reset).toBeDefined();
     expect(reset.fold.delta).toEqual({ haiku: haiku(3) });
     expect(reset.nextBaseline?.models).toEqual({ haiku: haiku(3) });

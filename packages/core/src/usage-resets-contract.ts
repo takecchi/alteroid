@@ -16,7 +16,13 @@ export async function verifyUsageResetsContract(usage: UsageStore): Promise<void
   const models = (costUsd: number): Record<string, UsageTotals> => ({
     opus: { ...ZERO_USAGE, inputTokens: costUsd * 100, costUsd },
   });
-  const record = async (layer: UsageLayer, managerId: string, cost: number): Promise<string> => {
+  // 数え直しは session id が替わったときだけ数える（同じ id のまま減った読みは積まず、resets も増やさない）ので、数え直す回の session id を替える
+  const record = async (
+    layer: UsageLayer,
+    managerId: string,
+    cost: number,
+    sessionId = 'sess',
+  ): Promise<string> => {
     const when = at();
     await usage.record({
       layer,
@@ -24,7 +30,7 @@ export async function verifyUsageResetsContract(usage: UsageStore): Promise<void
       managerId,
       date,
       at: when,
-      snapshot: { sessionId: 'sess', models: models(cost) },
+      snapshot: { sessionId, models: models(cost) },
       accumulation: 'cumulative',
     });
     return when;
@@ -35,12 +41,12 @@ export async function verifyUsageResetsContract(usage: UsageStore): Promise<void
 
   // a: 数え直しが2回（10 → 3 → 1）、b: 1度も無い、clone 層: 1回（5 → 2）
   await record('manager', 'mgr-resets-a', 10);
-  await record('manager', 'mgr-resets-a', 3);
-  const lastA = await record('manager', 'mgr-resets-a', 1);
+  await record('manager', 'mgr-resets-a', 3, 'sess-2');
+  const lastA = await record('manager', 'mgr-resets-a', 1, 'sess-3');
   await record('manager', 'mgr-resets-b', 5);
   await record('manager', 'mgr-resets-b', 7);
   await record('clone', 'mgr-resets-clone', 5);
-  const lastClone = await record('clone', 'mgr-resets-clone', 2);
+  const lastClone = await record('clone', 'mgr-resets-clone', 2, 'sess-2');
 
   const expected: UsageResetRow[] = [
     { layer: 'clone', managerId: 'mgr-resets-clone', resets: 1, lastResetAt: lastClone },

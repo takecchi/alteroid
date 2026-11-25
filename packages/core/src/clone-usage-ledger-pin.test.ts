@@ -292,10 +292,12 @@ describe('turn_usage の行の欄', () => {
     await s.clone.stop();
   });
 
+  // 経緯: 以前は減っただけで reset だった。いまは session id が替わったときだけ reset なので、2回目の result に別の session id（sess-b）を持たせた。gauge の文言は「resume か /clear で」→「セッションが替わり」へ改めた意図した変更
   it('累積が数え直された回: reset の欄は fromCostUsd と toCostUsd の2つだけで、turn_usage の行が先、数え直しの行（gauge）が後に載る', async () => {
     let n = 0;
     const s = build({
       sdk: {
+        resultSessionId: (turnIndex) => (turnIndex === 0 ? 'sess-a' : 'sess-b'),
         modelUsage: () => {
           n += 1;
           return n === 1
@@ -337,7 +339,7 @@ describe('turn_usage の行の欄', () => {
           "fromCostUsd": 5,
           "toCostUsd": 3.1234567,
         },
-        "sessionId": "sess-fake",
+        "sessionId": "sess-b",
         "site": "session",
         "type": "turn_usage",
       }
@@ -345,7 +347,7 @@ describe('turn_usage の行の欄', () => {
 
     expect(await selfExchangeTexts(s.stores, '数え直された')).toMatchInlineSnapshot(`
       [
-        "outbound: [計器] 自分の消費の累積が数え直された（5.0000 → 3.1235）。resume か /clear で SDK 側の累積が 0 から始まったため。記録済みの分は保持している。",
+        "outbound: [計器] 自分の消費の累積が数え直された（5.0000 → 3.1235）。セッションが替わり SDK 側の累積が 0 から始まったため。記録済みの分は保持している。",
       ]
     `);
 
@@ -356,6 +358,33 @@ describe('turn_usage の行の欄', () => {
         : [],
     );
     expect(order).toEqual(['turn_usage', 'turn_usage', 'exchange']);
+    await s.clone.stop();
+  });
+
+  // 同じ session id のまま減った回（2026-11-25T03:19Z の本番事象の形）: 増分が空なので turn_usage の行は書かれず、「前回より減っていた」gauge が1件だけ残る
+  it('同じ session id で累積が減った回: turn_usage の行は増えず、減って積まなかった旨の gauge が1件だけ載る（reset の gauge は載らない）', async () => {
+    let n = 0;
+    const s = build({
+      sdk: {
+        modelUsage: () => {
+          n += 1;
+          return n === 1
+            ? usageOf('claude-fable-5', 923.7569934, 10)
+            : usageOf('claude-fable-5', 814.7398492, 9);
+        },
+        getContextUsage: () => CONTEXT_USAGE,
+      },
+    });
+    await turn(s, '1回目', 1);
+    await turn(s, '2回目', 2);
+
+    expect(await turnUsageRows(s.stores)).toHaveLength(1);
+    expect(await selfExchangeTexts(s.stores, '数え直された')).toEqual([]);
+    expect(await selfExchangeTexts(s.stores, '前回より減っていた')).toMatchInlineSnapshot(`
+      [
+        "outbound: [計器] 自分の消費の累積が前回より減っていた（923.7570 → 814.7398）。同じセッションの resume で保存済みの古い累積から続いたとみられ、この回の増分は分からないので積まず、基準を新しい累積へ下げた。",
+      ]
+    `);
     await s.clone.stop();
   });
 

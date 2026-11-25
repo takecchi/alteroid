@@ -262,7 +262,7 @@ export function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
 
 // 累積が減ったとき、全量を増分にしてよいのは「0 から数え直した」と言えるときだけ（セッション id が替わった。alteroid は forkSession を使わないので、新しい id の累積は 0 から始まる）
 // 同じ id（または id が読めない）のまま減ったときは、増分を積まず基準だけ今回の累積へ下げる（`skipped: decreased`）:
-// 「a resumed or forked session continues from the total its transcript saved」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、resume 後の累積は「保存済みの transcript の累積 + 再開後の消費」になる。
+// 「a resumed or forked session continues from the total its transcript saved」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、resume 後の累積は保存済みの transcript の累積に再開後の消費を足したものになる。
 // 保存済みの累積がどれだけ古いかは分からず、減った幅から 0 からの数え直しと見分けられない。比で線を引くと、線を越える遅れのたびに記録済みの累積の全量がもう一度積まれる
 // （2026-11-14 は 2411.69 → 2403.43 で #6833 が 9 割の線を入れた。2026-11-25 03:19Z は再起動後の resume で 923.76 → 814.74（約 0.88）と線を越え、$814.74 が 1 ターンとして積まれた）。
 // 積まない側に倒す: 誤って全量を積むと累積の全部（数百〜数千ドル）が二重になるのに対し、積まずに落とすのは減った読みのその回の増分だけ（通常 1 ターンぶん）で済む。

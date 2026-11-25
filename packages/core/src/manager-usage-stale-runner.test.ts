@@ -38,11 +38,14 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-function usageEvent(costUsd: number): RunnerEvent {
+// 経緯: これらの試験は「引き取り先の runner-b の最初の累積（1）が、runner-a の 10 から 0 から数え直した全量」として積まれる前提だった。以前は減っただけで数え直しだったが、いまは session id が替わったときだけ数え直しなので、runner-b の最初の累積には別の session id（RELOCATED_SESSION）を持たせる
+const RELOCATED_SESSION = 'sess-after-relocate';
+
+function usageEvent(costUsd: number, sessionId = 'sess-before-relocate'): RunnerEvent {
   return {
     type: 'usage',
     managerId: 'mgr-race',
-    sessionId: 'sess-before-relocate',
+    sessionId,
     models: { opus: totals(costUsd) },
   } as unknown as RunnerEvent;
 }
@@ -223,7 +226,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     expect(await costOf(stores)).toBe(10);
 
     await relocate(s);
-    runnerB.emit?.(usageEvent(1));
+    runnerB.emit?.(usageEvent(1, RELOCATED_SESSION));
     await settle();
     expect(await costOf(stores)).toBe(11);
 
@@ -238,7 +241,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     runnerA.emit?.(usageEvent(10));
     await settle();
     await relocate(s);
-    runnerB.emit?.(usageEvent(1));
+    runnerB.emit?.(usageEvent(1, RELOCATED_SESSION));
     await settle();
 
     runnerA.emit?.(usageEvent(12));
@@ -261,7 +264,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     const s = await setupRelocated();
     const { stores, runnerA, runnerB } = s;
     await relocate(s);
-    runnerB.emit?.(usageEvent(1));
+    runnerB.emit?.(usageEvent(1, RELOCATED_SESSION));
     await settle();
 
     runnerA.emit?.(usageEvent(10));
@@ -275,7 +278,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
     runnerA.emit?.(usageEvent(10));
     await settle();
     await relocate(s);
-    runnerB.emit?.(usageEvent(1));
+    runnerB.emit?.(usageEvent(1, RELOCATED_SESSION));
     await settle();
 
     runnerA.emit?.(usageEvent(4));
@@ -313,7 +316,7 @@ describe('引き取り後に届く古い runner の usage は、過大に数え�
 
     const after = await boot();
     await after.pool.reattachRunner('runner-b');
-    after.runnerB.emit?.(usageEvent(1));
+    after.runnerB.emit?.(usageEvent(1, RELOCATED_SESSION));
     await settle();
     expect(await costOf(stores)).toBe(11);
 

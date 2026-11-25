@@ -19,6 +19,7 @@ export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void
     cost: number,
     runner?: { id: string; superseded: boolean },
     id: string = managerId,
+    sessionId = 'sess',
   ) =>
     usage.record({
       layer: 'manager',
@@ -26,7 +27,7 @@ export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void
       managerId: id,
       date,
       at: at(),
-      snapshot: { sessionId: 'sess', models: models(cost) },
+      snapshot: { sessionId, models: models(cost) },
       accumulation: 'cumulative',
       ...(runner === undefined ? {} : { runner }),
     });
@@ -41,7 +42,8 @@ export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void
   };
 
   await record(10, { id: 'runner-a', superseded: false });
-  await record(1, { id: 'runner-b', superseded: false });
+  // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけ数え直しなので、runner-b の累積には別の session id を持たせる
+  await record(1, { id: 'runner-b', superseded: false }, managerId, 'sess-b');
   await expectTotal(11, '現役の runner が切り替わった（数え直し）');
 
   const same = await record(10, { id: 'runner-a', superseded: true });

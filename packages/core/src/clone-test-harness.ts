@@ -40,6 +40,8 @@ export function fakeSdk(
     afterReply?: (input: string) => Promise<unknown> | undefined;
     failWith?: string;
     modelUsage?: (callIndex: number) => Record<string, unknown> | undefined;
+    /** result の `session_id`（台帳が「セッションが替わったか」を読む。既定は 'sess-fake' の固定） */
+    resultSessionId?: (turnIndex: number) => string | undefined;
     resultUsage?: (callIndex: number) => Record<string, unknown> | undefined;
     /** result の `num_turns`（そのターンでモデルへ出した要求の本数） */
     numTurns?: (callIndex: number) => number | undefined;
@@ -168,7 +170,7 @@ export function fakeSdk(
         type: 'result',
         subtype: resultOverride?.subtype ?? options.resultSubtype ?? 'success',
         result: resultOverride?.text ?? options.resultText ?? text,
-        session_id: 'sess-fake',
+        session_id: options.resultSessionId?.(turnIndex) ?? 'sess-fake',
         uuid: 'uuid-result',
         ...(resultOverride?.isError === undefined ? {} : { is_error: resultOverride.isError }),
         ...(resultOverride?.apiErrorStatus === undefined

@@ -29,8 +29,8 @@ function totals(over: Partial<UsageTotals>): UsageTotals {
   return { ...ZERO_USAGE, ...over };
 }
 
-function snapshot(models: Record<string, UsageTotals>): UsageSnapshot {
-  return { models };
+function snapshot(models: Record<string, UsageTotals>, sessionId?: string): UsageSnapshot {
+  return sessionId === undefined ? { models } : { sessionId, models };
 }
 
 function record(input: {
@@ -89,22 +89,60 @@ describe('FsUsageStore.record', () => {
     expect(rows[0]?.totals).toEqual(totals({ outputTokens: 250, costUsd: 3 }));
   });
 
+  // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけ数え直しなので、2つ目の累積に別の session id を持たせた（同じ id で減ったら積まない。下の試験）
   it('累積が減っても、記録済みの合計は減らない（新しい累積の全量を足す）', async () => {
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
-      snapshot: snapshot({ opus: totals({ costUsd: 5 }) }),
+      snapshot: snapshot({ opus: totals({ costUsd: 5 }) }, 'sess-a'),
     });
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
-      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }),
+      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }, 'sess-b'),
     });
 
     const { rows } = await store.aggregate({});
     expect(rows[0]?.totals.costUsd).toBe(8);
+  });
+
+  // 2026-11-25T03:19Z の本番事象の形: 同じ session id のまま 923.7569934 → 814.7398492 へ下がった読みは積まず、基準だけ下げる
+  it('同じ session id のまま累積が減ったら積まず（skipped: decreased）、基準が下がり、次の読みから差分が積まれる', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 923.7569934 }) }, 'sess-a'),
+    });
+    const dropped = await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T11:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 814.7398492 }) }, 'sess-a'),
+    });
+    expect(dropped.reset).toBeUndefined();
+    expect(dropped.delta).toEqual({});
+    expect(dropped.skipped).toEqual({
+      reason: 'decreased',
+      fromCostUsd: 923.7569934,
+      toCostUsd: 814.7398492,
+    });
+    expect(dropped.baseline?.resets).toBe(0);
+    expect((await store.aggregate({})).rows[0]?.totals.costUsd).toBeCloseTo(923.7569934, 7);
+
+    const grown = await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T12:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 816.8075766 }) }, 'sess-a'),
+    });
+    expect(grown.delta.opus?.costUsd).toBeCloseTo(2.0677274, 7);
+    expect((await store.aggregate({})).rows[0]?.totals.costUsd).toBeCloseTo(
+      923.7569934 + 2.0677274,
+      7,
+    );
   });
 
   it('同じ日にモデルをまたいで積んでも別の行になる', async () => {
@@ -145,18 +183,19 @@ describe('FsUsageStore.record', () => {
     expect(second.delta.opus?.costUsd).toBe(2);
   });
 
+  // 経緯: 以前は減っただけで reset だった。いまは session id が替わったときだけなので、2つ目の累積に別の session id を持たせた
   it('数え直しが起きたら reset を返す（呼び出し側が日誌へ落とす材料）', async () => {
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
-      snapshot: snapshot({ opus: totals({ costUsd: 5 }) }),
+      snapshot: snapshot({ opus: totals({ costUsd: 5 }) }, 'sess-a'),
     });
     const fold = await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
-      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }),
+      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }, 'sess-b'),
     });
 
     expect(fold.reset).toBeDefined();

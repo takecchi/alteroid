@@ -1939,6 +1939,7 @@ describe('HTTP API', () => {
       managerId: string,
       at: string,
       usd: number,
+      sessionId?: string,
     ) => {
       await stores.usage.record({
         layer,
@@ -1948,6 +1949,8 @@ describe('HTTP API', () => {
         date: '2026-08-14',
         at,
         snapshot: {
+          // 経緯: 以前は減っただけで数え直しだった。いまは session id が替わったときだけなので、数え直す回には別の session id を渡す
+          ...(sessionId === undefined ? {} : { sessionId }),
           models: {
             'claude-opus-5': {
               inputTokens: 1,
@@ -1966,8 +1969,8 @@ describe('HTTP API', () => {
     };
     expect(((await (await app.request('/usage')).json()) as ResetsBody).resets).toBeUndefined();
 
-    await record('manager', 'mgr-1', '2026-08-14T10:00:00.000Z', 5);
-    await record('manager', 'mgr-1', '2026-08-14T11:00:00.000Z', 2);
+    await record('manager', 'mgr-1', '2026-08-14T10:00:00.000Z', 5, 'sess-a');
+    await record('manager', 'mgr-1', '2026-08-14T11:00:00.000Z', 2, 'sess-b');
     await record('clone', 'clone', '2026-08-14T12:00:00.000Z', 3);
 
     const all = (await (await app.request('/usage')).json()) as ResetsBody;

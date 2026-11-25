@@ -51,7 +51,8 @@ exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と 
 
 exports[`clone.ts の、日誌へ with: self の1行を書く箇所の role と text の式を固定する（#journalSelf へ寄せる前後で変わらないことの歯） > clone-usage-ledger.ts: 書き込み箇所の一覧（囲むメソッド・role・text の式）が変わらない 1`] = `
 [
-  "recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（\${fold.reset.fromCostUsd.toFixed(4)} → \` + \`\${fold.reset.toCostUsd.toFixed(4)}）。resume か /clear で SDK 側の累積が \` + '0 から始まったため。記録済みの分は保持している。'",
+  "recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が数え直された（\${fold.reset.fromCostUsd.toFixed(4)} → \` + \`\${fold.reset.toCostUsd.toFixed(4)}）。セッションが替わり SDK 側の累積が \` + '0 から始まったため。記録済みの分は保持している。'",
+  "recordUsage 'outbound' \`\${EXCHANGE_KIND_GAUGE_PREFIX}自分の消費の累積が前回より減っていた（\${fold.skipped.fromCostUsd.toFixed(4)} → \` + \`\${fold.skipped.toCostUsd.toFixed(4)}）。同じセッションの resume で保存済みの古い累積から続いたとみられ、\` + 'この回の増分は分からないので積まず、基準を新しい累積へ下げた。'",
   "recordUsage 'outbound' \`\${EXCHANGE_KIND_FAILURE_PREFIX}[site=\${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）: \${reasonOf(error)}\`",
 ]
 `;

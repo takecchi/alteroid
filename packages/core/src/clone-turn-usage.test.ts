@@ -78,9 +78,11 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     await s.clone.stop();
   });
 
+  // 経緯: 以前は減っただけで reset だった。いまは session id が替わったときだけ reset なので、2回目の result に別の session id を持たせる（同じ id で減った回は下の試験）
   it('累積が数え直された回は turn_usage に reset が付く（models は差分ではなく新しい累積の先頭）', async () => {
     let turnCount = 0;
     const s = setup(undefined, createMemoryStores(), {
+      resultSessionId: (turnIndex) => (turnIndex === 0 ? 'sess-a' : 'sess-b'),
       modelUsage: () => {
         turnCount += 1;
         return turnCount === 1
@@ -112,6 +114,44 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     if (resetEntry?.type !== 'turn_usage') throw new Error('reset 付きの turn_usage が無い');
     expect(resetEntry.reset).toEqual({ fromCostUsd: 5, toCostUsd: 3 });
     expect(resetEntry.models['claude-fable-5']?.costUsd).toBe(3);
+
+    await s.clone.stop();
+  });
+
+  it('同じ session id のまま累積が減った回は turn_usage の行を書かず、「前回より減っていた」gauge の exchange が1件だけ残る', async () => {
+    let turnCount = 0;
+    const s = setup(undefined, createMemoryStores(), {
+      modelUsage: () => {
+        turnCount += 1;
+        return turnCount === 1
+          ? usageOf('claude-fable-5', { costUsd: 923.7569934 })
+          : usageOf('claude-fable-5', { costUsd: 814.7398492 });
+      },
+    });
+
+    s.clone.post(humanMessage('1回目'));
+    await waitForDone(s.events);
+
+    s.clone.post(humanMessage('2回目'));
+    await waitFor(
+      () => s.events.filter((event) => event.type === 'done').length === 2,
+      'done イベントが2件届く',
+    );
+
+    const all = await s.stores.journal.list({ limit: 50 });
+    expect(all.filter((entry) => entry.type === 'turn_usage')).toHaveLength(1);
+    const decreased = all.filter(
+      (entry) => entry.type === 'exchange' && entry.text.includes('前回より減っていた'),
+    );
+    expect(decreased).toHaveLength(1);
+    const note = decreased[0];
+    if (note?.type !== 'exchange') throw new Error('exchange が日誌に無い');
+    expect(note.with).toBe('self');
+    expect(note.text).toContain('自分の消費の累積が前回より減っていた（923.7570 → 814.7398）');
+    expect(note.text).toContain('積まず');
+    expect(
+      all.some((entry) => entry.type === 'exchange' && entry.text.includes('数え直された')),
+    ).toBe(false);
 
     await s.clone.stop();
   });
