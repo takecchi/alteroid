@@ -1470,6 +1470,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: "#981 で決めた（入れ子のどの階層も跡へ出さない）。理由は `dropped-record.ts` の `case 'context_usage'` の doc に1箇所だけ書いてある。",
       },
+      numTurns: {
+        emit: 'never',
+        why: '数で、跡の見分け（どのターンの行が落ちたか）には managerId と turnSucceeded で足りる。`turn_timing.sdk` と同じ判断。',
+      },
+      mainLoop: { emit: 'never', why: '`numTurns` と同じ判断。' },
     },
     turn_timing: {
       triggers: { emit: 'tag', token: 'triggers' },
@@ -1898,6 +1903,8 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       sessionId: 'sess-1',
       turnSucceeded: false,
       contextUsage: FULL_CONTEXT_USAGE,
+      numTurns: 3,
+      mainLoop: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 },
     },
     turn_timing: {
       type: 'turn_timing',

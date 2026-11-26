@@ -10,7 +10,10 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
 interface FakeSession {
-  finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
+  finish(
+    text: string,
+    options?: { subtype?: string; isError?: boolean; numTurns?: number; usage?: unknown },
+  ): Promise<void>;
 }
 
 function fixedModelUsage() {
@@ -49,6 +52,8 @@ function fakeSdk(options: { getContextUsage?: (callIndex: number) => unknown } =
           uuid: `uuid-result-${(finishes += 1)}`,
           modelUsage: fixedModelUsage(),
           ...(finishOptions.isError === undefined ? {} : { is_error: finishOptions.isError }),
+          ...(finishOptions.numTurns === undefined ? {} : { num_turns: finishOptions.numTurns }),
+          ...(finishOptions.usage === undefined ? {} : { usage: finishOptions.usage }),
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
@@ -223,6 +228,74 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     } finally {
       await host.shutdown();
     }
+  });
+
+  describe('要求の本数とメインループの消費（context_usage の出来事の直下）', () => {
+    async function contextUsageEventAfter(finishOptions?: {
+      numTurns?: number;
+      usage?: unknown;
+    }): Promise<RunnerEvent | undefined> {
+      const { fn, sessions } = fakeSdk({
+        getContextUsage: () => ({ totalTokens: 12_000, rawMaxTokens: 200_000, percentage: 6 }),
+      });
+      const events: RunnerEvent[] = [];
+      const host = createRunnerHost({
+        runnerId: 'runner-test',
+        workspacePath: '/work/project',
+        emit: (event) => events.push(event),
+        queryFn: fn,
+        env: { PATH: '/usr/bin' },
+      });
+      try {
+        await host.resume({
+          managerId: 'mgr-wire',
+          sessionId: 'sess-mgr',
+          cwd: '/work/project',
+          request: '調べて',
+          entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+        });
+        const session = await firstSession(sessions);
+        await session.finish('できました', finishOptions);
+        await vi.waitFor(() => {
+          if (!events.some((event) => event.type === 'context_usage'))
+            throw new Error('context_usage がまだ出ていない');
+        });
+        return events.find((event) => event.type === 'context_usage');
+      } finally {
+        await host.shutdown();
+      }
+    }
+
+    it('⭐ result に num_turns と usage が在れば、出来事の直下に numTurns と mainLoop として載る', async () => {
+      const event = await contextUsageEventAfter({
+        numTurns: 42,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 2,
+          cache_read_input_tokens: 3_000,
+          cache_creation_input_tokens: 4,
+        },
+      });
+      expect(event).toMatchObject({
+        type: 'context_usage',
+        numTurns: 42,
+        mainLoop: { input: 1, output: 2, cacheRead: 3_000, cacheCreation: 4 },
+      });
+      expect(event).not.toHaveProperty('contextUsage.numTurns');
+    });
+
+    it('⭐ 取れない回は欄ごと無い（0 を埋めない）', async () => {
+      const event = await contextUsageEventAfter();
+      expect(event?.type).toBe('context_usage');
+      expect(event).not.toHaveProperty('numTurns');
+      expect(event).not.toHaveProperty('mainLoop');
+    });
+
+    it('整数でない num_turns は欄を作らない（境界で出来事ごと落ちないため）', async () => {
+      const event = await contextUsageEventAfter({ numTurns: 1.5 });
+      expect(event?.type).toBe('context_usage');
+      expect(event).not.toHaveProperty('numTurns');
+    });
   });
 
   it('messageBreakdown は畳まれて context_usage.contextUsage に載り、SDK が返さない回は欄を作らない', async () => {

@@ -90,6 +90,22 @@ function describeContextLine(context: ContextUsageRow): string {
   );
 }
 
+// 在る欄だけを言う（無いものを 0 と書かない）。割り算は要求の本数が在って 0 でないときだけ
+function describeCallsLine(entry: Extract<JournalEntry, { type: 'context_usage' }>): string {
+  const parts: string[] = [];
+  if (entry.numTurns !== undefined) parts.push(`要求 ${entry.numTurns.toLocaleString('en-US')} 本`);
+  if (entry.mainLoop !== undefined) {
+    const perCall =
+      entry.numTurns === undefined || entry.numTurns === 0
+        ? ''
+        : `（1本あたり 約 ${Math.round(entry.mainLoop.cacheRead / entry.numTurns).toLocaleString('en-US')}）`;
+    parts.push(
+      `本体の読み cacheRead ${entry.mainLoop.cacheRead.toLocaleString('en-US')}${perCall}`,
+    );
+  }
+  return parts.length === 0 ? '' : `\n${parts.join(' / ')}。`;
+}
+
 function describeContextBreakdown(context: ContextUsageRow): string {
   const parts: string[] = [];
   if (context.systemPromptTokens !== undefined) {
@@ -365,7 +381,7 @@ function renderJournalEntry(
           `[context_usage ${entry.layer}/${entry.site} ${field(entry.managerId)} ` +
           `${entry.turnSucceeded ? '成功' : '失敗'}]` +
           (context.percentage === undefined ? '' : ` 文脈 ${context.percentage}%`),
-        body: describeContextLine(context).replace(/^\n/, ''),
+        body: describeContextLine(context).replace(/^\n/, '') + describeCallsLine(entry),
       };
     }
     case 'turn_timing':
