@@ -280,6 +280,8 @@ export class UsageReceiver {
       ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
       turnSucceeded: event.turnSucceeded,
       contextUsage: event.contextUsage,
+      ...(event.numTurns === undefined ? {} : { numTurns: event.numTurns }),
+      ...(event.mainLoop === undefined ? {} : { mainLoop: event.mainLoop }),
     });
   }
 

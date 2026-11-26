@@ -4731,6 +4731,38 @@
                           },
                           "required": ["durationMs"],
                           "additionalProperties": false
+                        },
+                        "numTurns": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "mainLoop": {
+                          "type": "object",
+                          "properties": {
+                            "input": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "output": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheRead": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheCreation": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["input", "output", "cacheRead", "cacheCreation"],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -10244,6 +10276,38 @@
                                 },
                                 "required": ["durationMs"],
                                 "additionalProperties": false
+                              },
+                              "numTurns": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "mainLoop": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheCreation": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["input", "output", "cacheRead", "cacheCreation"],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -12190,6 +12254,38 @@
                             }
                           },
                           "required": ["durationMs"],
+                          "additionalProperties": false
+                        },
+                        "numTurns": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "mainLoop": {
+                          "type": "object",
+                          "properties": {
+                            "input": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "output": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheRead": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheCreation": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["input", "output", "cacheRead", "cacheCreation"],
                           "additionalProperties": false
                         }
                       },
@@ -16455,6 +16551,38 @@
                                   },
                                   "required": ["durationMs"],
                                   "additionalProperties": false
+                                },
+                                "numTurns": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "mainLoop": {
+                                  "type": "object",
+                                  "properties": {
+                                    "input": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "output": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheRead": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheCreation": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": ["input", "output", "cacheRead", "cacheCreation"],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
@@ -18274,6 +18402,38 @@
                                     }
                                   },
                                   "required": ["durationMs"],
+                                  "additionalProperties": false
+                                },
+                                "numTurns": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "mainLoop": {
+                                  "type": "object",
+                                  "properties": {
+                                    "input": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "output": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheRead": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "cacheCreation": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": ["input", "output", "cacheRead", "cacheCreation"],
                                   "additionalProperties": false
                                 }
                               },
@@ -20095,6 +20255,38 @@
                                 },
                                 "required": ["durationMs"],
                                 "additionalProperties": false
+                              },
+                              "numTurns": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "mainLoop": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheCreation": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["input", "output", "cacheRead", "cacheCreation"],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -21905,6 +22097,38 @@
                                   }
                                 },
                                 "required": ["durationMs"],
+                                "additionalProperties": false
+                              },
+                              "numTurns": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "mainLoop": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheCreation": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["input", "output", "cacheRead", "cacheCreation"],
                                 "additionalProperties": false
                               }
                             },

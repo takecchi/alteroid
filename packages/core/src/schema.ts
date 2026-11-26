@@ -387,6 +387,14 @@ export const contextUsageObservationSchema = z.object({
 
 export type ContextUsageObservation = z.infer<typeof contextUsageObservationSchema>;
 
+// マネージャー本体（メインループ）だけの、そのターンの消費。形は `turn_timing.tokens` に合わせる。作業者の分は混ざらない
+export const mainLoopTokensSchema = z.object({
+  input: z.number().int().nonnegative(),
+  output: z.number().int().nonnegative(),
+  cacheRead: z.number().int().nonnegative(),
+  cacheCreation: z.number().int().nonnegative(),
+});
+
 // `DroppedSignalDigest`（`dropped-signals.ts`）の写し。型の対応は `dropped-signals.ts` が `satisfies` で縛る
 const droppedSignalDigestSchema = z.object({
   id: z.string(),
@@ -660,6 +668,9 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     sessionId: z.string().optional(),
     turnSucceeded: z.boolean(),
     contextUsage: contextUsageObservationSchema,
+    // そのターンでモデルへ出した要求の本数と、メインループだけの消費。取れなかった回は欄ごと無い（0 を埋めない）。古い行・古い runner は持たない
+    numTurns: z.number().int().nonnegative().optional(),
+    mainLoop: mainLoopTokensSchema.optional(),
   }),
   // クローンの1ターンを段に分けた時間（#5086）。1ターン1行。段の名前と意味は `turn-timing.ts` の `TurnTimingPhase`。
   // 欄を `.optional()` にして既定値で埋めない: 測れなかった段を「0 秒だった」と読ませないため

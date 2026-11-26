@@ -91,7 +91,7 @@ function usageRunner() {
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
       emit(parsed.data);
     },
-    contextUsage(turnSucceeded: boolean, contextUsage: unknown): void {
+    contextUsage(turnSucceeded: boolean, contextUsage: unknown, extra: object = {}): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
       const raw = {
         type: 'context_usage',
@@ -99,6 +99,7 @@ function usageRunner() {
         sessionId: 'sess-ctx',
         turnSucceeded,
         contextUsage,
+        ...extra,
       };
       const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -184,6 +185,49 @@ describe('マネージャーの文脈占有は context_usage の行にだけ書�
     expect(rows[0]?.turnSucceeded).toBe(false);
     expect(rows[0]?.contextUsage).toEqual(SAMPLE_CONTEXT_USAGE);
     expect(await turnUsageRows(stores)).toHaveLength(0);
+
+    await s.pool.stop();
+  });
+
+  it('⭐ 境界を通った numTurns と mainLoop が日誌の context_usage の行まで届く', async () => {
+    const stores = createMemoryStores();
+    const s = await setup(stores);
+
+    s.fake.contextUsage(true, SAMPLE_CONTEXT_USAGE, {
+      numTurns: 120,
+      mainLoop: { input: 5, output: 6, cacheRead: 7_000_000, cacheCreation: 8 },
+    });
+
+    const rows = await vi.waitFor(async () => {
+      const found = await contextUsageRows(stores);
+      if (found.length === 0) throw new Error('context_usage がまだ日誌に無い');
+      return found;
+    });
+    expect(rows[0]?.numTurns).toBe(120);
+    expect(rows[0]?.mainLoop).toEqual({
+      input: 5,
+      output: 6,
+      cacheRead: 7_000_000,
+      cacheCreation: 8,
+    });
+
+    await s.pool.stop();
+  });
+
+  it('古い形（欄なし）でも行は書かれ、numTurns と mainLoop の欄は作らない', async () => {
+    const stores = createMemoryStores();
+    const s = await setup(stores);
+
+    s.fake.contextUsage(true, SAMPLE_CONTEXT_USAGE);
+
+    const rows = await vi.waitFor(async () => {
+      const found = await contextUsageRows(stores);
+      if (found.length === 0) throw new Error('context_usage がまだ日誌に無い');
+      return found;
+    });
+    expect(rows[0]?.contextUsage).toEqual(SAMPLE_CONTEXT_USAGE);
+    expect(rows[0]).not.toHaveProperty('numTurns');
+    expect(rows[0]).not.toHaveProperty('mainLoop');
 
     await s.pool.stop();
   });

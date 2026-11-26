@@ -320,6 +320,9 @@ const KINDS: Append[] = [
     managerId: 'clone',
     turnSucceeded: true,
     contextUsage: CTX_FULL,
+    // 要求の本数とメインループの消費（在るときだけ出す行）。24・25 は欄なし（古い形）、27 は要求 0 本（割り算をしない）
+    numTurns: 120,
+    mainLoop: { input: 5, output: 6, cacheRead: 7_000_000, cacheCreation: 8 },
   } as Append,
   /* 27 */ {
     type: 'context_usage',
@@ -328,6 +331,8 @@ const KINDS: Append[] = [
     managerId: 'mgr-1',
     turnSucceeded: false,
     contextUsage: CTX_BARE,
+    numTurns: 0,
+    mainLoop: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
   } as Append,
   /* 28 */ {
     type: 'turn_timing',

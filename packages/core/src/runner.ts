@@ -4574,12 +4574,33 @@ class RunnerSession {
         const contextUsage = await this.#observeContextUsage();
         // 成否分岐の外で無条件に emit する: 文脈占有は `usage`（成功したターンだけ）に載せず、失敗したターンも残すため
         if (contextUsage !== undefined) {
+          // 取れたときだけ載せる: 欄ごと無ければ「測れなかった」であり、0 を埋めると「要求 0 本」「読み 0」と読まれる
+          // 整数でない・負の値は取れなかったことにする: 境界のスキーマ（非負の整数）に落ちると、文脈占有の出来事ごと失われるため
+          const isCount = (value: number | undefined): value is number =>
+            value !== undefined && Number.isSafeInteger(value) && value >= 0;
+          const numTurns = event.usage?.numTurns;
+          const mainLoop = event.usage?.mainLoopUsage;
           this.#emit({
             type: 'context_usage',
             managerId: this.#id,
             sessionId,
             turnSucceeded: event.succeeded,
             contextUsage,
+            ...(isCount(numTurns) ? { numTurns } : {}),
+            ...(mainLoop !== undefined &&
+            isCount(mainLoop.inputTokens) &&
+            isCount(mainLoop.outputTokens) &&
+            isCount(mainLoop.cacheReadInputTokens) &&
+            isCount(mainLoop.cacheCreationInputTokens)
+              ? {
+                  mainLoop: {
+                    input: mainLoop.inputTokens,
+                    output: mainLoop.outputTokens,
+                    cacheRead: mainLoop.cacheReadInputTokens,
+                    cacheCreation: mainLoop.cacheCreationInputTokens,
+                  },
+                }
+              : {}),
           });
         }
       })

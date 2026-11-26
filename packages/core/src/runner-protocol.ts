@@ -19,6 +19,7 @@ import {
   contextUsageObservationSchema,
   externalOutputSchema,
   jobStatusSchema,
+  mainLoopTokensSchema,
   rescueWorktreeSchema,
 } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
@@ -1125,6 +1126,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionId: z.string().optional(),
     turnSucceeded: z.boolean(),
     contextUsage: contextUsageObservationSchema,
+    // 古い runner は送らないので optional。取れなかった回は欄ごと無い
+    numTurns: z.number().int().nonnegative().optional(),
+    mainLoop: mainLoopTokensSchema.optional(),
   }),
   /** 文言は言い換えずそのまま運ぶ: claude.ai の画面と人間が突き合わせられなくなるため。 */
   z.object({
