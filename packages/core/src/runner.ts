@@ -259,6 +259,7 @@ import { RunnerBashGuard } from './runner-bash-guard.js';
 import { OWNER_RECORDABLE_TASK_TYPES } from './runner-background-task-rows.js';
 import { RunnerStopObserver } from './runner-stop-observer.js';
 import { RunnerSubagentStopObserver } from './runner-subagent-stop.js';
+import { owedWakeReopenedNudge, RunnerOwedWake } from './runner-owed-wake.js';
 import { RunnerDenialJudge } from './runner-denial-judge.js';
 import { RunnerDenialNotice } from './runner-denial-notice.js';
 import { RunnerFailureClassifier, resultTextOf } from './runner-failure-classify.js';
@@ -2776,6 +2777,7 @@ class RunnerSession {
   readonly #cutOffWorkers = new RunnerCutOffWorkers();
   readonly #stopState = new RunnerSubagentStopState();
   readonly #turnTally = new RunnerTurnTally();
+  readonly #owedWake = new RunnerOwedWake();
   readonly #sdkSession = new RunnerSdkSession();
 
   constructor(options: RunnerSessionOptions) {
@@ -4297,9 +4299,24 @@ class RunnerSession {
     });
     // `#open()` が印を下ろすので先に読む
     const nudge = this.#workerLimitOnPreRotationKey;
+    // 開く前に読む: 新しいセッションの出来事が借りの帳面を動かす前の、前のプロセスで返っていない借りを取るため
+    const owed = this.#owedWake.takeOwed().map((task) => {
+      const command = this.#stopState.backgroundTaskCommand(task.id);
+      return {
+        ...task,
+        ...(command === undefined ? {} : { command }),
+        outputFile: this.#sdkSession.backgroundWaiters.outputFileOf(task.id),
+      };
+    });
     this.#open(sessionId);
     // 回転前の鍵で作業者が落ちていたなら、続きを促す（#5046）。担当は知らせに従ってターンを終えて待っているので、入れないと止まったままになる
-    if (nudge) this.push(WORKER_LIMIT_REOPENED_NUDGE);
+    // 背景処理の完了で CLI が起こすはずだったターンを回す前に畳んだなら、その知らせの代わりを入れる。入れないと新しいセッションは入力を待って黙る
+    // 2つを1通にまとめる: 別々に push すると、1つ目のターンの後にもう1ターン回るため
+    const nudges = [
+      ...(nudge ? [WORKER_LIMIT_REOPENED_NUDGE] : []),
+      ...(owed.length === 0 ? [] : [owedWakeReopenedNudge(owed)]),
+    ];
+    if (nudges.length > 0) this.push(nudges.join('\n\n'));
   }
 
   #markProgressed(): void {
@@ -4390,7 +4407,8 @@ class RunnerSession {
       }
 
       case 'background_tasks': {
-        // 差分計算をしない（REPLACE 意味論）
+        // 借りの帳面は差し替える前の一覧と比べる（消えた分が借り）。在り高そのものは差分計算をしない（REPLACE 意味論）
+        this.#owedWake.noteLiveSet(event.tasks);
         this.#sdkSession.replaceLiveBackgroundTasks(event.tasks);
         // 起こしを `'result'` の枝だけに任せない: 背景処理の完了は新しい入力を伴わない単独のイベントとしてターンの外で届きうるため
         //    [sdk-verbatim SDKBackgroundTasksChangedMessage]
@@ -4436,7 +4454,9 @@ class RunnerSession {
     // > The level is per-process: nothing is emitted at startup, so consumers must reset to the empty set whenever the session's CLI process (re)starts and let the next membership change repopulate it.
     if (this.#resumeState.observeSessionStarted(event.sessionId)) {
       this.#sdkSession.resetLiveBackgroundTasks();
+      this.#owedWake.resetLiveSet();
     }
+    this.#owedWake.noteTurnActivity();
     // `pluginLoad` が null（init に `plugins` が無い）なら欄ごと省く: 「読み込み結果を観測していない」を空の結果として運ばないため
     this.#emit({
       type: 'session',
@@ -4453,6 +4473,7 @@ class RunnerSession {
   #applyAssistantMessage(event: Extract<AgentEvent, { type: 'assistant_message' }>): void {
     // 作業者の本文を混ぜない: `parentToolUseId` が付いたものは Task の中の別の層の発言のため
     if (event.parentToolUseId === null) {
+      this.#owedWake.noteTurnActivity();
       const said = assistantText(event.blocks);
       // 「応答ではない」と印の付いたメッセージを報告に混ぜない: 上限の英語文言がそのまま「マネージャーの報告」として台帳・日誌・受信箱へ流れるため
       const rejected = assistantFailureOf(event.errorCode, said);
@@ -4489,6 +4510,9 @@ class RunnerSession {
     // の文脈占有が測れなくなる。
     // 文脈占有の観測（SDK への1往復。最大 `CONTEXT_USAGE_READ_TIMEOUT_MS`）は待たず、`report` の後ろで直列に走らせる（積むだけで `await` しない）。
     this.#scheduleContextUsage(event);
+
+    // 成否で絞らない: 失敗で終わったターンでも、CLI が完了の知らせを読んだことに変わりはないため
+    this.#owedWake.noteTurnEnded();
 
     // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
     const {
@@ -4683,6 +4707,7 @@ class RunnerSession {
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
     if (taskId !== undefined) {
+      this.#owedWake.noteTaskFinished(taskId);
       this.#sdkSession.backgroundWaiters.noteFinished(
         taskId,
         typeof event.outputFile === 'string' ? event.outputFile : null,
