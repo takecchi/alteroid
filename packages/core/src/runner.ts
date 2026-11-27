@@ -20,6 +20,7 @@ import type {
   AgentDelegationNotified,
   AgentDelegationStarted,
   AgentEvent,
+  AgentLiveBackgroundTask,
 } from './agent-events.js';
 import type {
   AgentContextOutcome,
@@ -4727,7 +4728,7 @@ class RunnerSession {
   }
 
   /** SDK の背景処理と、背景で流れている peer のターンを合わせた一覧（作業者の背景処理と同じ形）。 */
-  #liveBackgroundTasks(): readonly { id: string; taskType: string }[] {
+  #liveBackgroundTasks(): readonly AgentLiveBackgroundTask[] {
     const peers = this.#peerBroker?.backgroundTasks() ?? [];
     return peers.length === 0
       ? this.#sdkSession.liveBackgroundTasks

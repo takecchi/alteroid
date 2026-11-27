@@ -20,6 +20,7 @@ import type {
 import type {
   AgentContentBlock,
   AgentEvent,
+  AgentLiveBackgroundTask,
   AgentPermissionDenial,
   AgentPluginLoad,
   AgentRuntimeFacts,
@@ -1158,18 +1159,26 @@ function pluginLoadOf(rawPlugins: unknown, rawErrors: unknown): AgentPluginLoad 
 // [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]
 // > True for tasks that are not activity (every skip_transcript task, plus every live-update watcher, requested or auto-started); hosts should exclude them from activity indicators.
 // `task_type` が文字列でなければ `'(不明)'` を当てる: 欄自体が壊れていても、要素の存在（背景処理が1件在ること）までは捨てないため
-function liveBackgroundTasksOf(raw: unknown): readonly { id: string; taskType: string }[] | null {
+// [sdk-verbatim SDKBackgroundTasksChangedMessage.parent_task_id]
+// > task_id of the subagent (local_agent) task whose agent launched this subagent, shell, monitor or workflow task.
+// `parent_task_id` は空でない文字列のときだけ運ぶ: 担当の待ちから「終わった作業者が残したもの」を外す材料で、読めない形を親と見なすと担当自身の背景処理まで外すため
+function liveBackgroundTasksOf(raw: unknown): readonly AgentLiveBackgroundTask[] | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const tasks = (raw as { tasks?: unknown }).tasks;
   if (!Array.isArray(tasks)) return null;
-  const result: { id: string; taskType: string }[] = [];
+  const result: AgentLiveBackgroundTask[] = [];
   for (const entry of tasks) {
     if (typeof entry !== 'object' || entry === null) continue;
     const taskId = (entry as { task_id?: unknown }).task_id;
     if (typeof taskId !== 'string') continue;
     if ((entry as { ambient?: unknown }).ambient === true) continue;
     const taskType = (entry as { task_type?: unknown }).task_type;
-    result.push({ id: taskId, taskType: typeof taskType === 'string' ? taskType : '(不明)' });
+    const parentTaskId = (entry as { parent_task_id?: unknown }).parent_task_id;
+    result.push({
+      id: taskId,
+      taskType: typeof taskType === 'string' ? taskType : '(不明)',
+      ...(typeof parentTaskId === 'string' && parentTaskId !== '' ? { parentTaskId } : {}),
+    });
   }
   return result;
 }

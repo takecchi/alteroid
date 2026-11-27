@@ -1,3 +1,4 @@
+import type { AgentLiveBackgroundTask } from './agent-events.js';
 import type { AgentManagerSession, AgentUserInput } from './agent-session.js';
 import { InputQueue } from './input-queue.js';
 import { RunnerBackgroundWaiters } from './runner-background-waiters.js';
@@ -82,9 +83,9 @@ export class RunnerSdkSession {
    * REPLACE 意味論: 届いた `tasks` で丸ごと入れ替える。差分計算しない
    * （取りこぼした終了通知で古い「実行中」表示が居座らないため）。
    */
-  #liveBackgroundTasks: readonly { id: string; taskType: string }[] = [];
+  #liveBackgroundTasks: readonly AgentLiveBackgroundTask[] = [];
 
-  get liveBackgroundTasks(): readonly { id: string; taskType: string }[] {
+  get liveBackgroundTasks(): readonly AgentLiveBackgroundTask[] {
     return this.#liveBackgroundTasks;
   }
 
@@ -92,7 +93,7 @@ export class RunnerSdkSession {
     this.#liveBackgroundTasks = [];
   }
 
-  replaceLiveBackgroundTasks(tasks: readonly { id: string; taskType: string }[]): void {
+  replaceLiveBackgroundTasks(tasks: readonly AgentLiveBackgroundTask[]): void {
     this.#liveBackgroundTasks = tasks;
     this.#backgroundWaiters.recheck();
   }
