@@ -454,7 +454,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'zero-vs-unreadable',
     covers:
-      '「取れなかった」と 0 の区別: 全部 0 で読めた記録は台帳に行を作らないので「その範囲には記録が無い」になり（合計 $0 とは出ない。いまの振る舞い）、「取れなかった」の行も出ない。取れなかった欄が在る行（unreadable）は 0 円でも行が残り「$0.0000」と出て、「⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: …）」が付き、欄ごとの回数が出る。Web検索が 0 のときは欄を作らない（2 回なら「Web検索 2回（費用は合計に含む）」）',
+      '「取れなかった」と 0 の区別: 全部 0 で読めた記録は台帳に行を作らないので「その範囲には記録が無い」になり（合計 $0 とは出ない。いまの振る舞い）、「取れなかった」の行も出ない。取れなかった欄が在る行（unreadable）は 0 円でも行が残り「$0.0000」と出て、「⚠ 一部の区切りで、消費の報告元（Claude は SDK、peer の Codex は app-server）から値が取れなかった（0 ではなく取れなかった。取れなかった数: …）」が付き、欄ごとの回数が出る。Web検索が 0 のときは欄を作らない（2 回なら「Web検索 2回（費用は合計に含む）」）',
     seed: [],
     account: 'absent',
     managers: [],
@@ -1478,7 +1478,7 @@ describe('usage_read の出力の固定（場面ごとの全文と字数・読�
     expect(text('zero-vs-unreadable#1')).not.toContain('⚠ 一部の区切り');
     expect(text('zero-vs-unreadable#2')).toContain('  mgr-001: $0.0000 / 1回 / 1回 $0.0000');
     expect(text('zero-vs-unreadable#2')).toContain(
-      '⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: ',
+      '⚠ 一部の区切りで、消費の報告元（Claude は SDK、peer の Codex は app-server）から値が取れなかった（0 ではなく取れなかった。取れなかった数: ',
     );
     expect(text('zero-vs-unreadable#2')).toContain('入力 1回');
     expect(text('zero-vs-unreadable#2')).toContain('費用 2回');

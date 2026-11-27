@@ -80,7 +80,7 @@ describe('費用の欄が無い使用量は、0 として合計に混ざらず�
     expect(rows[0]?.totals.unreadable).toEqual({ costUsd: 1 });
 
     expect(describeUnreadableUsage(summarizeUsage(rows, turnRows).total)).toEqual([
-      '⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: 費用 1回）。',
+      '⚠ 一部の区切りで、消費の報告元（Claude は SDK、peer の Codex は app-server）から値が取れなかった（0 ではなく取れなかった。取れなかった数: 費用 1回）。',
     ]);
   });
 
