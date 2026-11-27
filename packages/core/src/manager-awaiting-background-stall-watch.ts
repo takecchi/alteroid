@@ -14,7 +14,8 @@ import {
  *   だから正常なら、10 分のあいだ何も来ないことは無い。
  * - 畳んだ報告をクローンへまとめて配る 30 分（`WITHHELD_REPORT_FLUSH_MS`）より前に知らせる意味がある。
  * - ターンの終わりの見回り（`TURN_END_PROBE_QUIET_MS`、10 分）と揃う。
- * - 進んでいる長いターンは道具の出来事を出すので、誤報にならない。
+ * - 進んでいる長いターンのうち、道具が走っている途中（最後の出来事が `tool_use` / `tool_running`）は判定から外す。
+ *   前景の長い道具は出来事が頭の 1 回だけで `lastEventAt` が止まるため、外さないと誤報になる（`#stalledShape`）。
  */
 export const MANAGER_AWAITING_BACKGROUND_STALL_NOTICE_MS = 10 * 60_000;
 
@@ -112,6 +113,10 @@ export class AwaitingBackgroundStallWatch {
     if (record.job.status !== 'done') return false;
     if (!record.attached) return false;
     if (withheld === undefined) return false;
+    // 道具が走っている途中のターンは止まっていない: CLI が自分で起こしたターンでも runner の status は done のままで、
+    // 前景の長い道具（10 分超の検証など）は背景処理 0 本のまま、出来事は頭の tool_use 1 回だけ（tool_running も一度きりで心拍ではない）。
+    // 止まった担当の最後の出来事は report / note / session で、道具の途中では終わらない
+    if (record.lastEventType === 'tool_use' || record.lastEventType === 'tool_running') return false;
     return this.#liveBackgroundTasks(record) === 0;
   }
 

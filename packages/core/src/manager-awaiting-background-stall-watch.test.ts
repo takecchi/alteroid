@@ -166,6 +166,26 @@ describe('背景処理待ちで畳んだまま、背景処理 0 本から 10 分
     expect(env.reports).toHaveLength(1);
   });
 
+  it('最後の出来事が tool_use / tool_running（前景の長い道具の途中）なら、10 分を超えても出ない。次の出来事から新しく数える', async () => {
+    for (const type of ['tool_use', 'tool_running']) {
+      const env = setup();
+      env.event(type);
+      await env.sweep();
+      env.advance(THRESHOLD_MS * 3);
+      await env.sweep();
+      expect(env.reports).toEqual([]);
+
+      env.event('tool_end');
+      await env.sweep(); // 観測を捨てていたので、ここが最初の観測
+      env.advance(THRESHOLD_MS - SECOND);
+      await env.sweep();
+      expect(env.reports).toEqual([]);
+      env.advance(SECOND);
+      await env.sweep();
+      expect(env.reports).toHaveLength(1);
+    }
+  });
+
   it('在庫が無い（背景処理待ちでない）done では出ない', async () => {
     const env = setup();
     env.setWithheld(undefined);
