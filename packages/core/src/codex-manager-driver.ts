@@ -86,6 +86,12 @@ import type { CodexUsageForPricing } from './codex-pricing.js';
 import { toCodexMcpServersConfig } from './codex-mcp-config.js';
 import { foldCodexRateLimits } from './codex-rate-limits.js';
 import { isCodexToolItem, toCodexToolAudit } from './codex-tool-audit.js';
+import {
+  addRequestToStats,
+  foldRequestStats,
+  newRequestStats,
+  type RequestStatsAccumulator,
+} from './codex-request-stats.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { reasonOf } from './dropped-record.js';
 import type { PermissionModeName } from './permission-mode.js';
@@ -200,7 +206,14 @@ class CodexManagerSession implements AgentManagerSession {
   #child: AgentChildProcess | undefined;
   #client: CodexAppServerClient | undefined;
   #threadId: string | undefined;
-  #turn: { id: string | undefined; done: Deferred<CodexTurn>; lastText: string } | undefined;
+  #turn:
+    | {
+        id: string | undefined;
+        done: Deferred<CodexTurn>;
+        lastText: string;
+        requestStats: RequestStatsAccumulator;
+      }
+    | undefined;
 
   #model: string | undefined;
   #audit: Promise<void> = Promise.resolve();
@@ -462,6 +475,8 @@ class CodexManagerSession implements AgentManagerSession {
         id: undefined as string | undefined,
         done: deferred<CodexTurn>(),
         lastText: '',
+        // ターンごとに作り直す: 前のターンの first が残ると、このターンの最初の呼び出しが別物になる
+        requestStats: newRequestStats(),
       };
       this.#turn = turn;
       let started;
@@ -485,7 +500,7 @@ class CodexManagerSession implements AgentManagerSession {
       this.#turn = undefined;
       // 道具の監査が済む前にターンの終わりを流さない。turn_ended を消費側が処理し終えるまで次の入力を引かない: SDK の順序に合わせるため
       await this.#audit;
-      await this.#emit(this.#turnEndedEvent(finished, turn.lastText));
+      await this.#emit(this.#turnEndedEvent(finished, turn.lastText, turn.requestStats));
     }
   }
 
@@ -663,6 +678,8 @@ class CodexManagerSession implements AgentManagerSession {
   }
 
   #recordLast(last: CodexTokenUsageBreakdown): void {
+    // ターンの外（turn/start の前後）に届いた分は統計に入れない: どのターンのものか決められないため
+    if (this.#turn !== undefined) addRequestToStats(this.#turn.requestStats, last);
     this.#lastInputTokens = last.inputTokens;
     const model = this.#model;
     // モデル名が分からない回は名前の無い箱へ入れる: 価格を推測せず「読めなかった」にするため
@@ -688,14 +705,16 @@ class CodexManagerSession implements AgentManagerSession {
     return models;
   }
 
-  #turnEndedEvent(turn: CodexTurn, lastText: string): AgentEvent {
+  #turnEndedEvent(turn: CodexTurn, lastText: string, stats: RequestStatsAccumulator): AgentEvent {
     if (turn.status === 'completed') {
       const models = this.#cumulativeModels();
+      const requestStats = foldRequestStats(stats);
       return {
         type: 'turn_ended',
         succeeded: true,
         body: lastText,
         errorLines: [],
+        ...(requestStats === undefined ? {} : { requestStats }),
         ...(models === undefined
           ? {}
           : {

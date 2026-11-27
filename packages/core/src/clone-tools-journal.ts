@@ -367,11 +367,27 @@ function renderJournalEntry(
                   `${compaction.postTokens?.toLocaleString('en-US') ?? '不明'}`,
               )
               .join(' / ');
+      // 無い欄は書かない（取れなかった値を 0 に見せない）
+      const stats = entry.requestStats;
+      const requestStatsLine =
+        stats === undefined
+          ? ''
+          : `\nrequests=${stats.requests}` +
+            (stats.maxInputTokens === undefined ? '' : ` maxIn=${stats.maxInputTokens}`) +
+            (stats.firstRequestInputTokens === undefined
+              ? ''
+              : ` firstIn=${stats.firstRequestInputTokens}`) +
+            (stats.firstRequestCachedInputTokens === undefined
+              ? ''
+              : ` firstCached=${stats.firstRequestCachedInputTokens}`) +
+            (stats.firstRequestCacheHitRatio === undefined
+              ? ''
+              : ` firstHit=${stats.firstRequestCacheHitRatio.toFixed(2)}`);
       return {
         head:
           `[turn_usage ${entry.layer}/${entry.site} ${field(entry.managerId)}]` +
           (entry.reset === undefined ? '' : ' ⚠reset'),
-        body: `${modelLines}${resetLine}${compactionLine}`,
+        body: `${modelLines}${resetLine}${compactionLine}${requestStatsLine}`,
       };
     }
     case 'context_usage': {

@@ -4518,6 +4518,38 @@
                             "required": ["trigger", "preTokens"],
                             "additionalProperties": false
                           }
+                        },
+                        "requestStats": {
+                          "type": "object",
+                          "properties": {
+                            "requests": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestCachedInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestCacheHitRatio": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            }
+                          },
+                          "required": ["requests"],
+                          "additionalProperties": false
                         }
                       },
                       "required": ["type", "id", "at", "layer", "site", "managerId", "models"],
@@ -10055,6 +10087,38 @@
                                   "required": ["trigger", "preTokens"],
                                   "additionalProperties": false
                                 }
+                              },
+                              "requestStats": {
+                                "type": "object",
+                                "properties": {
+                                  "requests": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "maxInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCachedInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCacheHitRatio": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  }
+                                },
+                                "required": ["requests"],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -12042,6 +12106,38 @@
                             "required": ["trigger", "preTokens"],
                             "additionalProperties": false
                           }
+                        },
+                        "requestStats": {
+                          "type": "object",
+                          "properties": {
+                            "requests": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestCachedInputTokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "firstRequestCacheHitRatio": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            }
+                          },
+                          "required": ["requests"],
+                          "additionalProperties": false
                         }
                       },
                       "required": ["type", "id", "at", "layer", "site", "managerId", "models"],
@@ -16333,6 +16429,38 @@
                                     "required": ["trigger", "preTokens"],
                                     "additionalProperties": false
                                   }
+                                },
+                                "requestStats": {
+                                  "type": "object",
+                                  "properties": {
+                                    "requests": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "maxInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestCachedInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestCacheHitRatio": {
+                                      "type": "number",
+                                      "minimum": 0,
+                                      "maximum": 1
+                                    }
+                                  },
+                                  "required": ["requests"],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
@@ -18185,6 +18313,38 @@
                                     "required": ["trigger", "preTokens"],
                                     "additionalProperties": false
                                   }
+                                },
+                                "requestStats": {
+                                  "type": "object",
+                                  "properties": {
+                                    "requests": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "maxInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestCachedInputTokens": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "firstRequestCacheHitRatio": {
+                                      "type": "number",
+                                      "minimum": 0,
+                                      "maximum": 1
+                                    }
+                                  },
+                                  "required": ["requests"],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
@@ -20037,6 +20197,38 @@
                                   "required": ["trigger", "preTokens"],
                                   "additionalProperties": false
                                 }
+                              },
+                              "requestStats": {
+                                "type": "object",
+                                "properties": {
+                                  "requests": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "maxInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCachedInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCacheHitRatio": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  }
+                                },
+                                "required": ["requests"],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -21880,6 +22072,38 @@
                                   "required": ["trigger", "preTokens"],
                                   "additionalProperties": false
                                 }
+                              },
+                              "requestStats": {
+                                "type": "object",
+                                "properties": {
+                                  "requests": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "maxInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCachedInputTokens": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "firstRequestCacheHitRatio": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                  }
+                                },
+                                "required": ["requests"],
+                                "additionalProperties": false
                               }
                             },
                             "required": [

@@ -260,6 +260,8 @@ export class UsageReceiver {
           managerId: event.managerId,
           ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
           models: fold.delta,
+          // 台帳（usage ストア）には入れない: 集計の軸ではなく、日誌の行を読む人が原因を切り分けるための数のため
+          ...(event.requestStats === undefined ? {} : { requestStats: event.requestStats }),
         });
       }
     } catch (error) {

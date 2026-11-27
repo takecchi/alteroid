@@ -41,6 +41,22 @@ export type AgentContentBlock =
   | { type: 'tool_use'; name: string; id?: string; unparsedInputLen?: number }
   | { type: 'other' };
 
+/**
+ * そのターンでモデルを呼んだ回ごとの数から畳んだ、ターンごとの数個の数（配列は残さない）。
+ * 読めない値は欄を置かない（0 を埋めない）。provider が回ごとの入力を報告しないなら、`turn_ended` に載せない。
+ */
+export interface AgentRequestStats {
+  /** モデルを呼んだ回数 */
+  requests: number;
+  /** 1回の呼び出しの入力（キャッシュ込み）の最大値＝文脈の最大 */
+  maxInputTokens?: number;
+  firstRequestInputTokens?: number;
+  /** ターンの最初の呼び出しの入力のうちキャッシュに当たった数 */
+  firstRequestCachedInputTokens?: number;
+  /** 0〜1。最初の入力が 0 か、どちらかが読めなければ置かない */
+  firstRequestCacheHitRatio?: number;
+}
+
 export interface AgentTurnUsage {
   models: Record<string, UsageTotals>;
   sessionId?: string;
@@ -168,6 +184,8 @@ export interface AgentTurnEnded {
   outcome?: string;
   errorLines: readonly string[];
   usage?: AgentTurnUsage;
+  // 取れる provider だけが載せる（Claude の driver は載せない＝取れない）
+  requestStats?: AgentRequestStats;
   // provider が測ったそのターンの所要時間（#5086。SDK の `duration_ms` / `duration_api_ms`）。数値でなければ置かない（0 を埋めない）
   timing?: { durationMs?: number; durationApiMs?: number };
   id?: string;

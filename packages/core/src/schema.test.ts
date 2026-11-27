@@ -299,6 +299,46 @@ describe('過去の評定のキーを持つ行が読める（#2699）', () => {
   });
 });
 
+describe('turn_usage.requestStats（peer のターンごとのモデル呼び出しの統計）', () => {
+  const base = {
+    type: 'turn_usage' as const,
+    id: 'j-1',
+    at: '2026-11-27T00:00:00.000Z',
+    layer: 'manager' as const,
+    site: 'peer' as const,
+    managerId: 'mgr-1',
+    models: {},
+  };
+
+  it('欄を持つ行は読め、値がそのまま残る', () => {
+    const requestStats = {
+      requests: 2,
+      maxInputTokens: 900,
+      firstRequestInputTokens: 500,
+      firstRequestCachedInputTokens: 400,
+      firstRequestCacheHitRatio: 0.8,
+    };
+    const parsed = journalEntrySchema.safeParse({ ...base, requestStats });
+    expect(parsed.success).toBe(true);
+    if (parsed.success)
+      expect((parsed.data as { requestStats?: unknown }).requestStats).toEqual(requestStats);
+  });
+
+  it('欄の無い古い行も読め、欄は作られない', () => {
+    const parsed = journalEntrySchema.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect('requestStats' in parsed.data).toBe(false);
+  });
+
+  it('範囲外の比（1 超）は通さない', () => {
+    const parsed = journalEntrySchema.safeParse({
+      ...base,
+      requestStats: { requests: 1, firstRequestCacheHitRatio: 1.5 },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 describe('外した欄を持つ古い行が読める（#6048）', () => {
   it('inboxEventSchema: commitmentExempt を持つ古い受信箱の行は通り、その欄は捨てられる', () => {
     const parsed = inboxEventSchema.safeParse({

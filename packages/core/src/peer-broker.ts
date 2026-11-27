@@ -5,7 +5,7 @@ import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { withoutSchemaKey } from './mcp-lean-schema.js';
 import { z } from 'zod';
 
-import type { AgentEvent } from './agent-events.js';
+import type { AgentEvent, AgentRequestStats } from './agent-events.js';
 import type {
   AgentManagerDriver,
   AgentManagerSession,
@@ -89,6 +89,8 @@ export interface PeerUsageReport {
   readonly sessionId?: string;
   readonly models: Record<string, UsageTotals>;
   readonly unmetered: boolean;
+  /** そのターンのモデル呼び出しの統計。取れる provider（Codex）だけ。台帳には入れず日誌の行にだけ載る。 */
+  readonly requestStats?: AgentRequestStats;
 }
 
 export interface PeerBrokerDeps {
@@ -806,12 +808,14 @@ class PeerSession {
         at,
       );
       this.#baseline = fold.baseline;
+      // 増分が空の回は統計も送らない: 日誌の `turn_usage` 行が書かれない回で、統計だけを持ち込む先が無いため
       if (Object.keys(fold.delta).length === 0) return;
       this.#deps.onUsage({
         provider: this.provider,
         ...(this.#providerSessionId === undefined ? {} : { sessionId: this.#providerSessionId }),
         models: fold.delta,
         unmetered: false,
+        ...(event.requestStats === undefined ? {} : { requestStats: event.requestStats }),
       });
     } catch (error) {
       this.#deps.onNote(

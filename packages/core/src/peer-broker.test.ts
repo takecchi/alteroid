@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-events.js';
+import type { AgentEvent, AgentRequestStats } from './agent-events.js';
 import { CODEX_PEER_CREDITS_EXHAUSTED_NOTICE } from './agent-provider-peers.js';
 import type {
   AgentManagerDriver,
@@ -33,7 +33,11 @@ function totals(input: number, output: number): UsageTotals {
   };
 }
 
-function turnEnded(body: string, models?: Record<string, UsageTotals>): AgentEvent {
+function turnEnded(
+  body: string,
+  models?: Record<string, UsageTotals>,
+  requestStats?: AgentRequestStats,
+): AgentEvent {
   return {
     type: 'turn_ended',
     succeeded: true,
@@ -41,6 +45,7 @@ function turnEnded(body: string, models?: Record<string, UsageTotals>): AgentEve
     errorLines: [],
     denials: [],
     ...(models === undefined ? {} : { usage: { models } }),
+    ...(requestStats === undefined ? {} : { requestStats }),
   };
 }
 
@@ -843,6 +848,41 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     await broker.reply(first.sessionId, 'b');
     expect(usage.map((u) => u.models['gpt-5']?.inputTokens)).toEqual([100, 150]);
     expect(usage.every((u) => !u.unmetered)).toBe(true);
+    broker.closeAll();
+  });
+
+  it('turn_ended の requestStats をそのターンの report に載せる。載せない provider の report には欄を作らない', async () => {
+    const stats: AgentRequestStats = {
+      requests: 3,
+      maxInputTokens: 5000,
+      firstRequestInputTokens: 1000,
+      firstRequestCachedInputTokens: 800,
+      firstRequestCacheHitRatio: 0.8,
+    };
+    const { broker, usage } = makeBroker((turn) => [
+      turnEnded(
+        'ok',
+        { 'gpt-5': totals(turn === 1 ? 100 : 250, 10) },
+        turn === 1 ? stats : undefined,
+      ),
+    ]);
+    const first = await broker.run('codex', 'a');
+    if (typeof first === 'string') throw new Error(first);
+    await broker.reply(first.sessionId, 'b');
+    expect(usage[0]?.requestStats).toEqual(stats);
+    expect(usage[1]).not.toHaveProperty('requestStats');
+    broker.closeAll();
+  });
+
+  it('増分が空のターンは report を出さない（統計だけを持ち込まない）', async () => {
+    const stats: AgentRequestStats = { requests: 1 };
+    const { broker, usage } = makeBroker(() => [
+      turnEnded('ok', { 'gpt-5': totals(100, 10) }, stats),
+    ]);
+    const first = await broker.run('codex', 'a');
+    if (typeof first === 'string') throw new Error(first);
+    await broker.reply(first.sessionId, 'b');
+    expect(usage).toHaveLength(1);
     broker.closeAll();
   });
 
