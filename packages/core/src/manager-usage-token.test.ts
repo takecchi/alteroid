@@ -75,7 +75,10 @@ function usageRunner() {
 
   return {
     runner,
-    peerUsage(models: Record<string, UsageTotals>, extra: { unmetered?: boolean } = {}): void {
+    peerUsage(
+      models: Record<string, UsageTotals>,
+      extra: { unmetered?: boolean; requestStats?: Record<string, number> } = {},
+    ): void {
       if (emit === null) throw new Error('connect されていない');
       emit({
         type: 'peer_usage',
@@ -213,6 +216,41 @@ describe('peer の消費（#486 S7）', () => {
       .poll(async () => (await stores.usage.aggregate({})).unmeteredRows?.length, { timeout: 2000 })
       .toBe(1);
     expect(await rowsOf(stores)).toHaveLength(0);
+    await s.pool.stop();
+  });
+});
+
+describe('peer のターンの requestStats は日誌の turn_usage 行（site: peer）にだけ載る', () => {
+  const turnUsageOf = async (stores: Stores) => {
+    const entries = await stores.journal.list({ limit: 50 });
+    return entries.filter((e) => e.type === 'turn_usage');
+  };
+
+  it('peer_usage の requestStats が turn_usage 行に載り、台帳の行には混ざらない', async () => {
+    const stores = createMemoryStores();
+    const s = await setup({ stores });
+    const requestStats = {
+      requests: 3,
+      maxInputTokens: 5000,
+      firstRequestInputTokens: 1000,
+      firstRequestCachedInputTokens: 800,
+      firstRequestCacheHitRatio: 0.8,
+    };
+    s.fake.peerUsage({ 'gpt-5': totals({ inputTokens: 1 }) }, { requestStats });
+    await expect.poll(async () => (await turnUsageOf(stores)).length, { timeout: 2000 }).toBe(1);
+    const [row] = await turnUsageOf(stores);
+    expect(row).toMatchObject({ site: 'peer', requestStats });
+    expect(JSON.stringify(await rowsOf(stores))).not.toContain('requestStats');
+    await s.pool.stop();
+  });
+
+  it('requestStats を送らない旧い runner の peer_usage は、欄の無い行になる', async () => {
+    const stores = createMemoryStores();
+    const s = await setup({ stores });
+    s.fake.peerUsage({ 'gpt-5': totals({ inputTokens: 1 }) });
+    await expect.poll(async () => (await turnUsageOf(stores)).length, { timeout: 2000 }).toBe(1);
+    const [row] = await turnUsageOf(stores);
+    expect(row).not.toHaveProperty('requestStats');
     await s.pool.stop();
   });
 });

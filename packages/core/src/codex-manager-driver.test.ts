@@ -1031,6 +1031,88 @@ describe('CodexManagerDriver: 使用量', () => {
     expect(await h.session.sessionModelUsage()).toBeUndefined();
   });
 
+  describe('ターンごとのモデル呼び出しの統計（requestStats）', () => {
+    const run2 = async (perTurn: Json[][]) => {
+      const h = setup({ env: { CODEX_API_KEY: FAKE_KEY }, script: { model: 'gpt-5' } });
+      h.server.script.onTurn = (n, _t, turnId) => {
+        for (const last of perTurn[n - 1] ?? []) {
+          h.server.notify('thread/tokenUsage/updated', {
+            threadId: 'thr-1',
+            turnId,
+            tokenUsage: { total: usage(999_999, 0, 1), last },
+          });
+        }
+        h.server.completeTurn(turnId);
+      };
+      for (let i = 0; i < perTurn.length; i += 1) h.feed.push(`t${i}`);
+      const done = h.run();
+      await until(
+        () => h.events.filter((e) => e.type === 'turn_ended').length === perTurn.length,
+        'ターン完了',
+      );
+      h.feed.end();
+      await done;
+      return h.events.filter((e) => e.type === 'turn_ended') as Extract<
+        AgentEvent,
+        { type: 'turn_ended' }
+      >[];
+    };
+
+    it('複数回のリクエストのターンで、回数・最大入力・最初の呼び出しの入力とキャッシュ率が合う', async () => {
+      const [ended] = await run2([
+        [usage(1000, 800, 10), usage(5000, 4000, 10), usage(3000, 0, 10)],
+      ]);
+      expect(ended!.requestStats).toEqual({
+        requests: 3,
+        maxInputTokens: 5000,
+        firstRequestInputTokens: 1000,
+        firstRequestCachedInputTokens: 800,
+        firstRequestCacheHitRatio: 0.8,
+      });
+    });
+
+    it('ターンをまたいで初期化される（2ターン目の first は2ターン目の最初の呼び出し）', async () => {
+      const ended = await run2([[usage(9000, 9000, 1), usage(9500, 9000, 1)], [usage(100, 0, 1)]]);
+      expect(ended[1]!.requestStats).toEqual({
+        requests: 1,
+        maxInputTokens: 100,
+        firstRequestInputTokens: 100,
+        firstRequestCachedInputTokens: 0,
+        firstRequestCacheHitRatio: 0,
+      });
+    });
+
+    it('読めない値は 0 を作らず欄を省く', async () => {
+      const [ended] = await run2([
+        [
+          { inputTokens: 'x', cachedInputTokens: 5, outputTokens: 1 },
+          { inputTokens: 700, cachedInputTokens: 'y', outputTokens: 1 },
+        ],
+      ]);
+      // 入力が読めない最初の呼び出し: 入力・比の欄は無く、読めたキャッシュ数だけが残る。2回目は最初ではないので first に入らない
+      expect(ended!.requestStats).toEqual({
+        requests: 2,
+        maxInputTokens: 700,
+        firstRequestCachedInputTokens: 5,
+      });
+    });
+
+    it('最初の入力が 0 ならキャッシュ率の欄を作らない', async () => {
+      const [ended] = await run2([[usage(0, 0, 1)]]);
+      expect(ended!.requestStats).toEqual({
+        requests: 1,
+        maxInputTokens: 0,
+        firstRequestInputTokens: 0,
+        firstRequestCachedInputTokens: 0,
+      });
+    });
+
+    it('使用量の通知が無いターンは requestStats を付けない', async () => {
+      const [ended] = await run2([[]]);
+      expect(ended!.requestStats).toBeUndefined();
+    });
+  });
+
   it('contextUsage は作り物を返さず reject する', async () => {
     const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
     await expect(h.session.contextUsage()).rejects.toThrow();

@@ -1435,6 +1435,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         emit: 'never',
         why: 'PR #709 が別判断へ回した欄（上の `escalation.answeredAt` と同じ）。#981 で「自由文を1つも持たない」ことは確かめたので、残るのは出す価値の判断だけである。',
       },
+      requestStats: {
+        emit: 'never',
+        why: 'peer のターンごとのモデル呼び出しの統計（数だけで自由文を持たない）。落ちた記録の跡に載せる価値は `compactions` と同じ判断で見送る。',
+      },
     },
     token_rotation: {
       event: { emit: 'tag', token: 'event' },
@@ -1868,6 +1872,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       },
       reset: { fromCostUsd: 5, toCostUsd: 3 },
       compactions: [{ trigger: 'manual', preTokens: 1000 }],
+      requestStats: { requests: 2, maxInputTokens: 900 },
     },
     token_rotation: {
       type: 'token_rotation',
