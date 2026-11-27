@@ -136,7 +136,9 @@ describe('codexUsageToLedgerTotals', () => {
   });
 
   it('キャッシュ書きが数として渡った（0 を含む）ときは読めた扱い', () => {
-    const r = codexUsageToLedgerTotals('gpt-5.5', [{ ...u(1000, 50, 300), cacheWriteInputTokens: 0 }]);
+    const r = codexUsageToLedgerTotals('gpt-5.5', [
+      { ...u(1000, 50, 300), cacheWriteInputTokens: 0 },
+    ]);
     expect(r.unreadable?.cacheCreationInputTokens).toBeUndefined();
   });
 });
