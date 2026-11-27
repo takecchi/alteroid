@@ -490,6 +490,11 @@ const KINDS_BY_ENCLOSING: Record<string, Record<string, string>> = {
     '#notify': 'failure',
     '#recover': 'recovery',
   },
+  // 背景処理待ちで畳んだまま起きない担当への知らせ: 知らせた episode は failure、出来事が戻ったときの日誌は recovery（受信箱へは出さない）
+  'manager-awaiting-background-stall-watch.ts': {
+    '#notify': 'failure',
+    '#recover': 'recovery',
+  },
   // 生ログの退避の継続性の日誌（旧 `Pool#handleEvent` の archive の case）。同じ検査をここへ移した。
   'archive-receiver.ts': {
     onArchive: 'failure',
@@ -645,6 +650,7 @@ const EXCHANGE_SOURCES = [
   'clone-turn-input.ts',
   'clone-usage-ledger.ts',
   'clone.ts',
+  'manager-awaiting-background-stall-watch.ts',
   'manager-closed-front.ts',
   'manager-closed-notice.ts',
   'manager-denial.ts',
