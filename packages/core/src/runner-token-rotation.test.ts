@@ -304,9 +304,9 @@ function fakeSdkOutOfBand(): {
 
     // 入力側を読み続けるのは必須: 読まないと本物の `#inputStream` が駆動されず、境界判定が走らない。
     void (async () => {
-      const iterator = (
-        params.prompt as AsyncIterable<{ message: { content: unknown } }>
-      )[Symbol.asyncIterator]();
+      const iterator = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
+        Symbol.asyncIterator
+      ]();
       for (;;) {
         const next = await iterator.next();
         if (next.done === true) {
