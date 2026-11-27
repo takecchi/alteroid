@@ -96,7 +96,8 @@ describe('codexUsageToLedgerTotals', () => {
     const r = codexUsageToLedgerTotals('gpt-5.5', [
       { ...u(10, 3, 0), inputTokens: 10 + n, cachedInputTokens: n, outputTokens: 3 + n },
     ]);
-    expect(r.unreadable).toEqual({ webSearchRequests: 1 });
+    // キャッシュ書きが報告されない（cacheWriteInputTokens が無い）ので cacheCreationInputTokens も読めない扱い。以前は { webSearchRequests: 1 } だけで、0 が読めた値に見えていた
+    expect(r.unreadable).toEqual({ webSearchRequests: 1, cacheCreationInputTokens: 1 });
     expect(r.inputTokens).toBe(10);
     expect(r.cacheReadInputTokens).toBe(0);
     expect(r.outputTokens).toBe(3);
@@ -122,5 +123,20 @@ describe('codexUsageToLedgerTotals', () => {
       webSearchRequests: 0,
     });
     expect(r.unreadable).toEqual({ webSearchRequests: 1 });
+  });
+
+  it('キャッシュ書きが報告されないリクエストが1件でもあれば、値は 0 のまま unreadable を付ける', () => {
+    const r = codexUsageToLedgerTotals('gpt-5.5', [
+      { ...u(1000, 50, 300), cacheWriteInputTokens: 200 },
+      u(1000, 50, 300),
+    ]);
+    expect(r.cacheCreationInputTokens).toBe(200);
+    expect(r.inputTokens).toBe(500 + 700);
+    expect(r.unreadable?.cacheCreationInputTokens).toBe(1);
+  });
+
+  it('キャッシュ書きが数として渡った（0 を含む）ときは読めた扱い', () => {
+    const r = codexUsageToLedgerTotals('gpt-5.5', [{ ...u(1000, 50, 300), cacheWriteInputTokens: 0 }]);
+    expect(r.unreadable?.cacheCreationInputTokens).toBeUndefined();
   });
 });
