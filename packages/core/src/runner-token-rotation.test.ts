@@ -171,8 +171,14 @@ function fakeSdk(opts: { abortOnInputClose?: boolean; skipInit?: boolean } = {})
 }
 
 interface OutOfBandSession {
+  /** このセッションの入力（prompt のストリーム）に届いた本文。 */
+  inputs: readonly string[];
   say(text: string): void;
   backgroundTasksChanged(tasks: readonly { id: string; taskType: string }[]): void;
+  /** 背景処理の完了の知らせ（`task_notification`）。 */
+  taskNotification(taskId: string, outputFile: string): void;
+  /** CLI が自分で始めたターンの頭の `init`。 */
+  turnInit(): void;
   finish(text: string, options?: { subtype?: string; isError?: boolean }): void;
 }
 
@@ -211,7 +217,29 @@ function fakeSdkOutOfBand(): {
       }
     };
 
+    const inputs: string[] = [];
     const session: OutOfBandSession = {
+      inputs,
+      taskNotification(taskId, outputFile) {
+        push({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: 'completed',
+          output_file: outputFile,
+          summary: '完了',
+          session_id: label,
+          uuid: `uuid-task-notification-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
+      turnInit() {
+        push({
+          type: 'system',
+          subtype: 'init',
+          session_id: label,
+          uuid: `uuid-init-turn-${String(++seq)}`,
+        } as unknown as SDKMessage);
+      },
       say(text) {
         push({
           type: 'assistant',
@@ -276,7 +304,9 @@ function fakeSdkOutOfBand(): {
 
     // 入力側を読み続けるのは必須: 読まないと本物の `#inputStream` が駆動されず、境界判定が走らない。
     void (async () => {
-      const iterator = (params.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+      const iterator = (
+        params.prompt as AsyncIterable<{ message: { content: unknown } }>
+      )[Symbol.asyncIterator]();
       for (;;) {
         const next = await iterator.next();
         if (next.done === true) {
@@ -284,6 +314,7 @@ function fakeSdkOutOfBand(): {
           endOutput();
           return;
         }
+        inputs.push(String(next.value.message.content));
       }
     })();
 
@@ -721,10 +752,90 @@ describe('認証トークンを回した後、走行中のマネージャーの�
 
     first.backgroundTasksChanged([]);
 
-    await nthOutOfBandSession(s.sessions, 1);
+    const second = await nthOutOfBandSession(s.sessions, 1);
     expect(s.sessions).toHaveLength(2);
     expect(s.startedOptions[1]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-fake-new-999');
     expect(s.startedOptions[1]?.resume).toBe('sess-1');
+    // 起こしたのは CLI のプロセスまでではなく担当まで: 前のプロセスで回るはずだった完了のターンの代わりが、新しいセッションに1通届く
+    await vi.waitFor(() => {
+      expect(second.inputs).toHaveLength(1);
+    });
+    expect(second.inputs[0]).toContain('id=bg-1');
+  });
+
+  /**
+   * 開き直しが、背景処理の完了で CLI が起こすはずだったターンを潰す形（mgr-229d2118 で疑った止まり方）。
+   * 作業者を待ってターンを閉じた担当の印が立っている間に作業者が終わると、背景処理が0本になった瞬間が境界になり、
+   * 完了の知らせは畳んだ前のプロセスに残る。新しいセッションに何も入れないと、担当は `manager_send` が来るまで黙る。
+   */
+  it('⚠️ 作業者の完了の知らせを読む前に畳み直したら、新しいセッションへ代わりの一言を1通入れる（出力の置き場所つき）', async () => {
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '作業者に任せて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+
+    first.backgroundTasksChanged([{ id: 'agent-1', taskType: 'local_agent' }]);
+    first.say('作業者の完了の通知を待つ');
+    first.finish('作業者の完了の通知を待つ');
+    const [firstReport] = await reportEvents(s.events, 1);
+    expect(firstReport?.awaitingBackground).toBeDefined();
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-321' }]);
+    await tick(30);
+    expect(s.sessions).toHaveLength(1);
+
+    first.taskNotification('agent-1', '/tmp/agent-1.output');
+    first.backgroundTasksChanged([]);
+
+    const second = await nthOutOfBandSession(s.sessions, 1);
+    await vi.waitFor(() => {
+      expect(second.inputs).toHaveLength(1);
+    });
+    expect(second.inputs[0]).toContain('id=agent-1');
+    expect(second.inputs[0]).toContain('/tmp/agent-1.output');
+    expect(second.inputs[0]).toContain('待っていても来ない');
+    await tick(30);
+    expect(second.inputs).toHaveLength(1);
+  });
+
+  it('前のプロセスが完了の知らせでターンを回し終えてから閉じたなら、新しいセッションには何も入れない（二重に起こさない）', async () => {
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '作業者に任せて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+
+    first.backgroundTasksChanged([{ id: 'agent-1', taskType: 'local_agent' }]);
+    first.say('作業者の完了の通知を待つ');
+    first.finish('作業者の完了の通知を待つ');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-654' }]);
+    await tick(30);
+
+    // CLI が知らせで自分のターンを始め、その途中で一覧が空になる（境界が真になり入力が閉じる）。ターンは最後まで走って結果を出す
+    first.taskNotification('agent-1', '/tmp/agent-1.output');
+    first.turnInit();
+    first.say('作業者の結果を読んだ');
+    first.backgroundTasksChanged([]);
+    first.finish('作業者の結果を読んだ');
+
+    const reports = await reportEvents(s.events, 2);
+    expect(reports[1]?.text).toContain('作業者の結果を読んだ');
+    const second = await nthOutOfBandSession(s.sessions, 1);
+    await tick(30);
+    expect(second.inputs).toHaveLength(0);
+  });
+
+  it('背景処理を抱えていない担当の畳み直しでは、新しいセッションに何も入れない（手の空いた担当を起こさない）', async () => {
+    const s = setupOutOfBand();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthOutOfBandSession(s.sessions, 0);
+    first.say('終わった');
+    first.finish('終わった');
+    await reportEvents(s.events, 1);
+
+    await s.host.setCredentials([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'token-fake-new-987' }]);
+    const second = await nthOutOfBandSession(s.sessions, 1);
+    await tick(30);
+    expect(second.inputs).toHaveLength(0);
   });
 });
 
