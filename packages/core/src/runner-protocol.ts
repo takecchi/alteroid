@@ -20,6 +20,7 @@ import {
   externalOutputSchema,
   jobStatusSchema,
   mainLoopTokensSchema,
+  requestStatsSchema,
   rescueWorktreeSchema,
 } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
@@ -1115,6 +1116,8 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionId: z.string().optional(),
     models: z.record(z.string(), usageTotalsSchema),
     unmetered: z.boolean().optional(),
+    // 旧い runner は送らない（optional）。旧いデーモンは未知の欄を `z.object` が黙って捨てるので、新しい runner が送っても壊れない
+    requestStats: requestStatsSchema.optional(),
   }),
   /**
    * 消費（`usage`）に相乗りさせない: `usage` は `event.succeeded` の内側でしか出ず、失敗したターンの文脈占有が残らないため、

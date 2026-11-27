@@ -395,6 +395,16 @@ export const mainLoopTokensSchema = z.object({
   cacheCreation: z.number().int().nonnegative(),
 });
 
+// peer の1ターンのモデル呼び出しの統計（`AgentRequestStats` の写し）。リクエストごとの配列は持たない: 記録を大きくしないため。
+// 読めなかった欄は置かない（0 を作ると「0 トークンだった」と読めるため）。`.optional()` は旧い行・旧い runner が欄を持たないため
+export const requestStatsSchema = z.object({
+  requests: z.number().int().nonnegative(),
+  maxInputTokens: z.number().int().nonnegative().optional(),
+  firstRequestInputTokens: z.number().int().nonnegative().optional(),
+  firstRequestCachedInputTokens: z.number().int().nonnegative().optional(),
+  firstRequestCacheHitRatio: z.number().min(0).max(1).optional(),
+});
+
 // `DroppedSignalDigest`（`dropped-signals.ts`）の写し。型の対応は `dropped-signals.ts` が `satisfies` で縛る
 const droppedSignalDigestSchema = z.object({
   id: z.string(),
@@ -655,6 +665,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         }),
       )
       .optional(),
+    // peer の行（site: 'peer'）だけが持つ。取れない行（Claude の peer・旧い runner）は欄ごと無い
+    requestStats: requestStatsSchema.optional(),
     // `mainLoopUsage` は持たない: 読み手がおらず、同じ値は `turn_timing.tokens` にある。古い行に残る欄は `z.object` が黙って捨てる
   }),
   // `turn_usage` に相乗りさせない: 消費の行は増分がある回にしか書かれず、失敗したターン・増分がゼロだった回の文脈占有が落ちるため

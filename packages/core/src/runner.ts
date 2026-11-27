@@ -3607,6 +3607,7 @@ class RunnerSession {
           ...(report.sessionId === undefined ? {} : { sessionId: report.sessionId }),
           models: report.models,
           ...(report.unmetered ? { unmetered: true } : {}),
+          ...(report.requestStats === undefined ? {} : { requestStats: report.requestStats }),
         }),
       // 作られたファイルを、道具の記録に残らない作り方（コードで書いた等）でも拾う
       scanWorkdir: (dir, sinceMs) => scanPeerWorkdir(dir, sinceMs),
