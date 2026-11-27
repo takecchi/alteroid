@@ -7,7 +7,7 @@ import type { RunnerEvent } from './runner-protocol.js';
 interface FakeSession {
   say(text: string, options?: { error?: string }): Promise<void>;
   backgroundTasksChanged(
-    tasks: readonly { id: string; taskType: string; ambient?: boolean }[],
+    tasks: readonly { id: string; taskType: string; ambient?: boolean; parentTaskId?: string }[],
   ): Promise<void>;
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
   /**
@@ -55,6 +55,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
             task_type: task.taskType,
             description: '',
             ...(task.ambient === undefined ? {} : { ambient: task.ambient }),
+            ...(task.parentTaskId === undefined ? {} : { parent_task_id: task.parentTaskId }),
           })),
           session_id: 'sess-mgr',
           uuid: `uuid-bg-${String(Math.random())}`,
@@ -239,6 +240,70 @@ describe('report イベントの awaitingBackground（3条件すべてを満た�
     const [report] = await reportEvents(s.events, 1);
     expect(report?.status).toBe('waiting_human');
     expect(report?.awaitingBackground).toBeUndefined();
+  });
+
+  // [sdk-verbatim SDKBackgroundTasksChangedMessage.parent_task_id]
+  // > task_id of the subagent (local_agent) task whose agent launched this subagent, shell, monitor or workflow task.
+  it('⚠️ 終わった作業者が残した背景処理（parent_task_id の親が一覧に居ない）は、担当の待ちに数えない（配る側へ倒す）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    // 担当が背景の作業者を起こして閉じた回（これは本当の待ち）
+    await session.backgroundTasksChanged([{ id: 'agent-1', taskType: 'local_agent' }]);
+    await session.say('作業者を待つ');
+    await session.finish('作業者を待つ');
+    const [first] = await reportEvents(s.events, 1);
+    expect(first?.awaitingBackground).toEqual({ count: 1, breakdown: 'local_agent×1' });
+
+    // 作業者が背景の Bash を起こし、それを残して作業者だけ終わった
+    await session.backgroundTasksChanged([
+      { id: 'agent-1', taskType: 'local_agent' },
+      { id: 'bash-1', taskType: 'local_bash', parentTaskId: 'agent-1' },
+    ]);
+    await session.backgroundTasksChanged([
+      { id: 'bash-1', taskType: 'local_bash', parentTaskId: 'agent-1' },
+    ]);
+    // 作業者の完了で CLI が起こしたターンで、担当は報告を読んで仕事を終えた
+    await session.restart('sess-mgr');
+    await session.say('作業者の報告を確かめた。完了');
+    await session.finish('作業者の報告を確かめた。完了');
+
+    const [, second] = await reportEvents(s.events, 2);
+    expect(second?.status).toBe('done');
+    expect(second?.awaitingBackground).toBeUndefined();
+  });
+
+  it('親の作業者がまだ一覧に居る間は、その子の背景処理も待ちに数える（親子とも担当の待ち）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    await session.backgroundTasksChanged([
+      { id: 'agent-1', taskType: 'local_agent' },
+      { id: 'bash-1', taskType: 'local_bash', parentTaskId: 'agent-1' },
+    ]);
+    await session.say('作業者を待つ');
+    await session.finish('作業者を待つ');
+
+    const [report] = await reportEvents(s.events, 1);
+    expect(report?.awaitingBackground).toEqual({
+      count: 2,
+      breakdown: 'local_agent×1, local_bash×1',
+    });
+  });
+
+  it('親の id が付いていない背景処理（担当自身が起こしたもの）は、これまでどおり待ちに数える', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    await session.backgroundTasksChanged([{ id: 'bash-1', taskType: 'local_bash' }]);
+    await session.say('完了を待つ');
+    await session.finish('完了を待つ');
+
+    const [report] = await reportEvents(s.events, 1);
+    expect(report?.awaitingBackground).toEqual({ count: 1, breakdown: 'local_bash×1' });
   });
 });
 

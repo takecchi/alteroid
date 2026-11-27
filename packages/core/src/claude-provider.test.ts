@@ -480,6 +480,36 @@ describe('foldClaudeMessage — background_tasks_changed', () => {
     });
   });
 
+  it('parent_task_id は空でない文字列のときだけ parentTaskId として運ぶ', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [
+          { task_id: 'agent-1', task_type: 'local_agent', description: '' },
+          {
+            task_id: 'bash-1',
+            task_type: 'local_bash',
+            description: '',
+            parent_task_id: 'agent-1',
+          },
+          { task_id: 'bash-2', task_type: 'local_bash', description: '', parent_task_id: '' },
+          { task_id: 'bash-3', task_type: 'local_bash', description: '', parent_task_id: 7 },
+        ],
+      }),
+    );
+
+    expect(event).toEqual({
+      type: 'background_tasks',
+      tasks: [
+        { id: 'agent-1', taskType: 'local_agent' },
+        { id: 'bash-1', taskType: 'local_bash', parentTaskId: 'agent-1' },
+        { id: 'bash-2', taskType: 'local_bash' },
+        { id: 'bash-3', taskType: 'local_bash' },
+      ],
+    });
+  });
+
   it('`tasks` が配列でなければ0個を返す（「0本」と名乗らない）', () => {
     expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'background_tasks_changed' }))).toEqual(
       [],

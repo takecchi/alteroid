@@ -124,9 +124,16 @@ export interface AgentDelegationNotified {
   outputFile?: string;
 }
 
+/** 載っている背景処理の1件。`parentTaskId` は起こした作業者の task の id（担当自身が起こしたものには無い）。 */
+export interface AgentLiveBackgroundTask {
+  id: string;
+  taskType: string;
+  parentTaskId?: string;
+}
+
 interface AgentBackgroundTasksEvent {
   type: 'background_tasks';
-  tasks: readonly { id: string; taskType: string }[];
+  tasks: readonly AgentLiveBackgroundTask[];
 }
 
 interface AgentCompactionEvent {

@@ -1,4 +1,4 @@
-import type { AgentTurnEnded } from './agent-events.js';
+import type { AgentLiveBackgroundTask, AgentTurnEnded } from './agent-events.js';
 import { resultTextOf } from './runner-failure-classify.js';
 import type { RunnerEvent, RunnerOutboxFile, RunnerOutboxRejectedFile } from './runner-protocol.js';
 import type { RunnerSdkSession } from './runner-sdk-session.js';
@@ -51,7 +51,7 @@ interface RunnerReportEmitArgs {
   failedWorkerNotificationsThisTurn: number;
   failedWorkerNotificationsNamingLimitThisTurn: number;
   /** 取り込みの `await` より前に 1 回だけ読んだ背景処理の一覧。 */
-  liveBackground: readonly { id: string; taskType: string }[];
+  liveBackground: readonly AgentLiveBackgroundTask[];
   /** 出し箱の取り込みの結果（空なら `{}`）。 */
   outbox: { files?: RunnerOutboxFile[]; rejectedFiles?: RunnerOutboxRejectedFile[] };
 }
@@ -116,11 +116,13 @@ export class RunnerReportEmitter {
     this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
     if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
     // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
+    // 数えるのは担当が待っている背景処理だけ（`awaitedBackgroundTasks`）: 終わった作業者が残したものまで数えると、担当が仕事を終えた報告を誰も起こさない待ちで握り潰すため
+    const awaited = awaitedBackgroundTasks(liveBackground);
     const awaitingBackground =
-      failure === undefined && this.#sdkSession.status === 'done' && liveBackground.length > 0
+      failure === undefined && this.#sdkSession.status === 'done' && awaited.length > 0
         ? {
-            count: liveBackground.length,
-            breakdown: summarizeBackgroundTasks(liveBackground),
+            count: awaited.length,
+            breakdown: summarizeBackgroundTasks(awaited),
           }
         : undefined;
     const outwardActions = this.#outwardActions.splice(0);
@@ -154,6 +156,21 @@ export class RunnerReportEmitter {
     this.#deliverPeerNotices();
     return;
   }
+}
+
+/**
+ * 担当（本体）が完了を待っている背景処理。親の作業者（`parentTaskId`）が一覧から消えた子を外す。
+ * 子の完了は起こした作業者へ届くもので、作業者が終わっていれば、それで担当のターンが起きる保証が無い（alteroid も起こさない。
+ * 打ち切った作業者の分だけは #1554 の経路が起こす）。数えると、担当が仕事を終えた報告が「背景処理待ち」で握られ、
+ * 30分のまとめ配りまで届かない。親がまだ一覧に居る子は数える（親が待ちに入っているので、子も同じ待ちの内）。
+ * 外すのは報告の握りの判定だけで、在り高（畳み直しの境界・`liveBackgroundTasks` の観測）は変えない: 子はまだ走っており、
+ * 畳むと子ごと落ちるため。
+ */
+export function awaitedBackgroundTasks<T extends AgentLiveBackgroundTask>(
+  tasks: readonly T[],
+): readonly T[] {
+  const live = new Set(tasks.map((task) => task.id));
+  return tasks.filter((task) => task.parentTaskId === undefined || live.has(task.parentTaskId));
 }
 
 function summarizeBackgroundTasks(tasks: readonly { id: string; taskType: string }[]): string {
