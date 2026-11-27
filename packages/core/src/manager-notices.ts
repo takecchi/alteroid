@@ -790,6 +790,37 @@ export function describeSilenceNotice(input: {
   );
 }
 
+/**
+ * 背景処理待ちで畳んだ担当が、背景処理 0 本のまま次のターンを始めないときの知らせ。**自動では起こさない**（起こすかはクローンの判断）。
+ * 断定の強さは「見込みが高い」まで: runner の観測は最大 10 秒遅れ、CLI の通知の遅れも 0 ではない。
+ */
+export function describeAwaitingBackgroundStall(input: {
+  managerId: string;
+  elapsedMs: number;
+  /** 畳んだ報告の本数（在庫の `count`） */
+  withheldCount: number;
+}): string {
+  return (
+    `[${input.managerId}] 背景処理の完了待ちでターンを閉じたが、runner が数える背景処理が 0 本になってから ` +
+    `${formatDurationMinutes(input.elapsedMs)}、次のターンが始まっていない（進捗の出来事も無い）。` +
+    '完了の知らせで担当が起きていない見込みが高い。' +
+    `畳んだ報告が ${input.withheldCount} 本ある。` +
+    '`manager_send` で続きを促すこと（alteroid は自動では起こさない）。'
+  );
+}
+
+/** 背景処理待ちの停滞を知らせた episode の後に、出来事が戻ったときの日誌の本文（受信箱へは出さない）。 */
+export function describeAwaitingBackgroundStallRecovered(input: {
+  managerId: string;
+  lastEventType: string;
+  lastEventAt: string;
+}): string {
+  return (
+    `[${input.managerId}] の背景処理待ちの停滞が解けた（出来事が戻った: ${input.lastEventType}・${input.lastEventAt}）。` +
+    '受信箱には出さない。'
+  );
+}
+
 /** 無音を知らせた episode の後に、出来事が戻ったときの日誌の本文（受信箱へは出さない）。 */
 export function describeSilenceRecovered(input: {
   managerId: string;

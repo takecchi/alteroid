@@ -14,6 +14,11 @@ const STAGES = [
   { label: 'usage-wakes', method: 'settleStalledUsageWakes', chained: true },
   { label: 'denials', method: 'renotifyStalledDenials', chained: true },
   { label: 'silence', method: 'noteSilentManagers', chained: true },
+  {
+    label: 'awaiting-background-stall',
+    method: 'noteStalledAwaitingBackground',
+    chained: true,
+  },
   { label: 'held-messages', method: 'deliverHeldMessages', chained: true },
   { label: 'task-follow', method: 'repairStrandedTasks', chained: true },
 ] as const;
@@ -49,7 +54,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     setStderrSinkForTesting(null);
   });
 
-  it('呼ばれる段の集合と順序: 9 段だけが、この順で1回ずつ呼ばれる', async () => {
+  it('呼ばれる段の集合と順序: 10 段だけが、この順で1回ずつ呼ばれる', async () => {
     const { managers, calls } = recordingPool();
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
     await poller.refresh();
@@ -63,6 +68,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       'settleStalledUsageWakes',
       'renotifyStalledDenials',
       'noteSilentManagers',
+      'noteStalledAwaitingBackground',
       'deliverHeldMessages',
       'repairStrandedTasks',
     ]);
@@ -109,7 +115,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
 
   describe.each(STAGES)('段 $label が落ちても', ({ label, method }) => {
     for (const mode of ['同期で投げる', '拒否で落ちる'] as const) {
-      it(`${mode}: 他の 8 段は同じ順で走り、stderr に段の名前と理由を 1 行残す`, async () => {
+      it(`${mode}: 他の 9 段は同じ順で走り、stderr に段の名前と理由を 1 行残す`, async () => {
         const failure: Behavior =
           mode === '同期で投げる'
             ? () => {
@@ -129,7 +135,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     }
   });
 
-  it('失敗の間引きは段ごと: 全段が同じ理由で落ちても 9 段それぞれ 1 行、2 周目は書かない。成功で戻ればまた書く', async () => {
+  it('失敗の間引きは段ごと: 全段が同じ理由で落ちても 10 段それぞれ 1 行、2 周目は書かない。成功で戻ればまた書く', async () => {
     let failing = true;
     const behaviors: Record<string, Behavior> = {};
     for (const method of ALL_METHODS) {
@@ -145,14 +151,14 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     const nextRound = () => vi.setSystemTime(Date.now() + 5 * 60_000);
 
     await poller.refresh();
-    expect(lines).toHaveLength(9);
+    expect(lines).toHaveLength(10);
     for (const { label } of STAGES) {
       expect(lines.filter((line) => line.includes(`見回りの段 ${label} `))).toHaveLength(1);
     }
 
     nextRound();
     await poller.refresh();
-    expect(lines).toHaveLength(9);
+    expect(lines).toHaveLength(10);
 
     failing = false;
     nextRound();
@@ -161,7 +167,7 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
     nextRound();
     await poller.refresh();
     poller.stop();
-    expect(lines).toHaveLength(18);
+    expect(lines).toHaveLength(20);
   });
 
   describe('間隔（60 秒ごと）', () => {
@@ -178,14 +184,14 @@ describe('見回りの段の構造（表にする整理の前の固定）', () =
       poller.stop();
     });
 
-    it('intervalMs を渡せばその間隔で周回し、task-follow 以外の 8 段を周回ごとに呼ぶ', async () => {
+    it('intervalMs を渡せばその間隔で周回し、task-follow 以外の 9 段を周回ごとに呼ぶ', async () => {
       const { managers, calls } = recordingPool();
       const poller = startManagerPolling({ managers, intervalMs: 5_000 });
       await vi.advanceTimersByTimeAsync(0);
       expect(calls).toEqual(ALL_METHODS);
 
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(calls).toHaveLength(9);
+      expect(calls).toHaveLength(10);
       await vi.advanceTimersByTimeAsync(1);
       // task-follow（repairStrandedTasks）は 5 分に 1 回なので、2 周目には入らない
       expect(calls).toEqual([

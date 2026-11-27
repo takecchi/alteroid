@@ -13,6 +13,7 @@ function poolWith(
     settleStalledUsageWakes: async () => [],
     renotifyStalledDenials: async () => undefined,
     noteSilentManagers: async () => undefined,
+    noteStalledAwaitingBackground: async () => undefined,
     sweepRescueRefs: async () => undefined,
     deliverHeldMessages: async () => undefined,
     autoFoldUnderPressure: autoFold,

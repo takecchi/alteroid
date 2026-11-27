@@ -160,6 +160,7 @@ import { createWindows } from './manager-pool-windows.js';
 import type { ManagerReportApply } from './manager-report-apply.js';
 import { ManagerReattach } from './manager-reattach.js';
 import { ManagerResume } from './manager-resume.js';
+import { AwaitingBackgroundStallWatch } from './manager-awaiting-background-stall-watch.js';
 import { noteProgressEvent, SilenceWatch } from './manager-silence-watch.js';
 import {
   bucketManagersByRunner,
@@ -1136,6 +1137,13 @@ export interface ManagerPool {
    */
   noteSilentManagers(): Promise<void>;
   /**
+   * 背景処理待ちで報告を畳んだ `done` の担当のうち、runner が数える背景処理が 0 本になってから（または最後の進捗の出来事から）
+   * `MANAGER_AWAITING_BACKGROUND_STALL_NOTICE_MS`（10 分）次のターンが始まらないものを、1 episode につき 1 通だけクローンの受信箱へ知らせる。
+   * 背景処理の本数の観測が無い担当は判定しない（0 と読まない）。自動では起こさず、何も止めず、台帳にも書かない。回復は日誌のみ。
+   * 帳面はプロセス内。1件の失敗で残りを止めない。
+   */
+  noteStalledAwaitingBackground(): Promise<void>;
+  /**
    * 退避 ref（`refs/alteroid-rescue/…`）の後始末を1周する。
    * 台帳（`Job.lastRescue`）に無い ref は触らない（孤児を消さない）。消した印は `pushed.removal` に残し、
    * `pushed` は消さない。走査の間隔はここで空ける（全委譲の台帳を読むので毎分は撃たない）。
@@ -1755,6 +1763,7 @@ class Pool implements ManagerPool {
   readonly #denialRenotifier: DenialRenotifier;
   /** running のまま無音の担当への知らせ（A2）。`createFoldHeld` の外で作る: 6 協力者の束の口を動かさないため。 */
   readonly #silenceWatch: SilenceWatch;
+  readonly #awaitingBackgroundStallWatch: AwaitingBackgroundStallWatch;
   readonly #rescueSweeper: RescueSweeper;
   readonly #rescueStash: ManagerRescueStash;
   /** 枠で止まった担当の起こし直し（`UsageWake`。周回の掃き・鍵の回転の起こし・印の解除）。欄は上の `#usageStopped` などをこの `Pool` が持ち、参照を渡している。 */
@@ -1989,6 +1998,19 @@ class Pool implements ManagerPool {
         this.#emit(managerId, 'report', text);
       },
       // 呼び出しの形は `exchange-kind-coverage.test.ts` が `manager-silence-watch.ts` の中で数える
+      journalExchange: this.#journalExchange.bind(this),
+    });
+    this.#awaitingBackgroundStallWatch = new AwaitingBackgroundStallWatch({
+      records: this.#records,
+      now: () => this.#now(),
+      stopped: () => this.#stopped,
+      withheldCount: (managerId) => this.#withheld.awaitingBackgroundOf(managerId)?.withheldReports,
+      liveBackgroundTasks: (record) =>
+        this.#observedSessionField('sessionBackgroundTasks', record.job.runnerId, record.job.id),
+      emitReport: (managerId, text) => {
+        this.#emit(managerId, 'report', text);
+      },
+      // 呼び出しの形は `exchange-kind-coverage.test.ts` が `manager-awaiting-background-stall-watch.ts` の中で数える
       journalExchange: this.#journalExchange.bind(this),
     });
     this.#rescueSweeper = e.rescueSweeper;
@@ -3816,6 +3838,10 @@ class Pool implements ManagerPool {
 
   async noteSilentManagers(): Promise<void> {
     this.#silenceWatch.sweep();
+  }
+
+  async noteStalledAwaitingBackground(): Promise<void> {
+    this.#awaitingBackgroundStallWatch.sweep();
   }
 
   /**

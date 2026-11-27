@@ -2073,6 +2073,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     noteSilentManagers() {
       throw new Error('spec 生成専用のスタブ: 無音の担当は見張らない');
     },
+    noteStalledAwaitingBackground() {
+      throw new Error('spec 生成専用のスタブ: 背景処理待ちの停滞は見張らない');
+    },
     sweepRescueRefs() {
       throw new Error('spec 生成専用のスタブ: 退避 ref は掃かない');
     },

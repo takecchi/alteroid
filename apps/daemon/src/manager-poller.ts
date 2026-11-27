@@ -78,6 +78,11 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     { label: 'denials', run: () => options.managers.renotifyStalledDenials() },
     // running のまま 30 分、進捗の出来事が無い担当をクローンへ 1 回知らせる。台帳を読まず像だけを見る
     { label: 'silence', run: () => options.managers.noteSilentManagers() },
+    // 背景処理待ちで畳んだまま、背景処理 0 本から 10 分次のターンが始まらない担当を 1 回知らせる。自動では起こさない。台帳を読まず像だけを見る
+    {
+      label: 'awaiting-background-stall',
+      run: () => options.managers.noteStalledAwaitingBackground(),
+    },
     { label: 'held-messages', run: () => options.managers.deliverHeldMessages() },
     // 報告由来の `done` で waiting のまま残した task を、猶予（30 分）を過ぎてから倒す。冪等で、台帳を数えるだけなので連鎖の末尾に置く
     // 周回は 60 秒のまま、この段だけ 5 分ごと（`everyMs`）
