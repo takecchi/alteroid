@@ -474,6 +474,7 @@ export default function Usage() {
               beforeLayers={data.beforeLayers}
               beforeTokens={data.beforeTokens}
               notice={data.notice}
+              peerNotice={data.peerNotice}
               unrecordedManagers={data.unrecordedManagers}
               labels={labels}
               unreadableRows={data.unreadableRows}
@@ -601,12 +602,14 @@ function UsageBody({
   beforeLayers,
   beforeTokens,
   notice,
+  peerNotice,
   unrecordedManagers,
   labels,
   unreadableRows,
   unmeteredRows,
 }: {
   labels: IdLabels;
+  peerNotice: string | undefined;
   unreadableRows: readonly UnreadableUsageRow[] | undefined;
   unmeteredRows: readonly UsageUnmeteredRow[] | undefined;
   rows: readonly UsageRow[];
@@ -621,6 +624,8 @@ function UsageBody({
   unrecordedManagers: readonly UnrecordedManager[];
 }) {
   const summary = summarizeUsage(rows, turnRows);
+  // peer の行が結果に無いときは行も注記も出さない（`bySite` に peer が在るかで決める。注記の文言はデーモンの `peerNotice`）
+  const peerTotals = summary.bySite.find((entry) => entry.site === 'peer')?.totals;
 
   return (
     <div className="flex flex-col gap-4">
@@ -642,9 +647,23 @@ function UsageBody({
                 入力 {summary.total.inputTokens.toLocaleString('en-US')} / 出力{' '}
                 {summary.total.outputTokens.toLocaleString('en-US')} / キャッシュ読み{' '}
                 {summary.total.cacheReadInputTokens.toLocaleString('en-US')} / キャッシュ書き{' '}
+                {/* peer が読めない分を 0 に見せない。合計は「少なくとも」の値。 */}
+                {(summary.total.unreadable?.cacheCreationInputTokens ?? 0) > 0 && '少なくとも '}
                 {summary.total.cacheCreationInputTokens.toLocaleString('en-US')}
                 {describeWebSearchRequests(summary.total)}
               </p>
+              {peerTotals !== undefined && (
+                <>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    うち peer（Codex）: 入力 {peerTotals.inputTokens.toLocaleString('en-US')} /
+                    キャッシュ読み {peerTotals.cacheReadInputTokens.toLocaleString('en-US')} /
+                    キャッシュ書き 読めない
+                  </p>
+                  {peerNotice !== undefined && (
+                    <p className="mt-1 text-xs text-muted-foreground">{peerNotice}</p>
+                  )}
+                </>
+              )}
             </>
           )}
           {/* 0 と言わない。記録が始まる前の期間を「使っていない期間」と読ませない。 */}

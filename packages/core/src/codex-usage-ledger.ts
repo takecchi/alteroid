@@ -18,7 +18,9 @@ export function codexUsageToLedgerTotals(
   let cacheCreationInputTokens = 0;
   let inputUnreadable = false;
   let outputUnreadable = false;
+  let cacheWriteUnreported = false;
   for (const r of requests) {
+    if (r.cacheWriteInputTokens === undefined) cacheWriteUnreported = true;
     const write = r.cacheWriteInputTokens ?? 0;
     if (!isCount(r.inputTokens) || !isCount(r.cachedInputTokens) || !isCount(write)) {
       inputUnreadable = true;
@@ -42,6 +44,8 @@ export function codexUsageToLedgerTotals(
     unreadable.cacheReadInputTokens = 1;
     unreadable.cacheCreationInputTokens = 1;
   }
+  // キャッシュ書きも unreadable（値は 0 のまま）: app-server がキャッシュ書きを報告せず、新しく文脈に入った分は入力に積まれるため。0 を読めた値にすると Claude の行のキャッシュ書きと食い違って読まれる
+  if (cacheWriteUnreported) unreadable.cacheCreationInputTokens = 1;
   if (outputUnreadable) unreadable.outputTokens = 1;
   if (costUsd === undefined) unreadable.costUsd = 1;
 

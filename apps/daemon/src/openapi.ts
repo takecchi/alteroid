@@ -743,6 +743,8 @@ const unrecordedManagerSchema = z.object({
 // HTTP の口（`app.ts` と族のファイル。`GET /usage` は `app-routes-journal.ts`）では組まない: HTTP の口とこのファイルは循環 import で、その最上位で `unrecordedManagerSchema` を使って `.extend()` すると評価順次第で未定義のまま `z.array()` へ渡り、zod が例外を投げることがあるため。
 export const usageResponseSchema = usageAggregateSchema.extend({
   breakdown: usageBreakdownSchema,
+  // `bySite` に peer があるときだけ載せ、無ければ鍵ごと無い: peer を使っていない器の応答を変えないため。peer の行の入力とキャッシュ書きの読み方（Claude の行と足して比べない）。
+  peerNotice: z.string().optional(),
   // 台帳と足さない: こちらは claude.ai 側が言っている値で、台帳は自分で数えた推定値のため。
   account: accountUsageStateSchema,
   // `from` / `to` などの絞り込みに影響されない（全期間を突き合わせる）: 変わると、照会範囲の外の委譲が「記録が無い」に化けるため。

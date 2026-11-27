@@ -12,6 +12,7 @@ import {
   describeWebSearchRequests,
   formatUsd,
   summarizeUsage,
+  usagePeerNotice,
   usageLayerSchema,
   usageSiteSchema,
   type UsageLayer,
@@ -201,6 +202,9 @@ export function renderUsage(view: UsageView): string {
         describeWebSearchRequests(summary.total),
     );
     lines.push(...describeUnreadableUsage(summary.total));
+    // 口ごとに書き直さず core の判定をそのまま使う（peer が結果に在るときだけ）: 合計の入力・キャッシュ書きを Claude の行と足して読まれるため
+    const peerNotice = usagePeerNotice(summary.bySite);
+    if (peerNotice !== undefined) lines.push(peerNotice);
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
     lines.push(...resetLines);

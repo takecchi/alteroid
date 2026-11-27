@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE, USAGE_PEER_INPUT_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -44,10 +44,20 @@ function row(
     site: string;
     tokenId: string;
     webSearchRequests: number;
+    inputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
     unreadable: Record<string, number>;
   }> = {},
 ) {
-  const { webSearchRequests, unreadable, ...rest } = over;
+  const {
+    webSearchRequests,
+    inputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    unreadable,
+    ...rest
+  } = over;
   return {
     date: '2026-08-14',
     managerId: 'm1',
@@ -60,6 +70,9 @@ function row(
       ...ZERO_USAGE,
       costUsd,
       webSearchRequests: webSearchRequests ?? 0,
+      inputTokens: inputTokens ?? 0,
+      cacheReadInputTokens: cacheReadInputTokens ?? 0,
+      cacheCreationInputTokens: cacheCreationInputTokens ?? 0,
       ...(unreadable === undefined ? {} : { unreadable }),
     },
   };
@@ -73,6 +86,7 @@ function stubUsage(body: {
   beforeLayers?: boolean;
   beforeTokens?: boolean;
   notice?: string;
+  peerNotice?: string;
   /** 既定は `unknown`。`null` を渡すと応答から `account` を落とす。 */
   account?: unknown;
   unrecordedManagers?: unknown[];
@@ -144,6 +158,48 @@ describe('/usage 画面', () => {
     renderUsage();
 
     expect(await screen.findByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
+  });
+
+  it('peer の行が在るときだけ、合計の下に peer の行と peerNotice を出し、キャッシュ書きを「少なくとも」にする', async () => {
+    stubUsage({
+      rows: [
+        row(1, { inputTokens: 10, cacheCreationInputTokens: 5 }),
+        row(2, {
+          site: 'peer',
+          inputTokens: 3_630_000,
+          cacheReadInputTokens: 40,
+          unreadable: { cacheCreationInputTokens: 1 },
+        }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      peerNotice: USAGE_PEER_INPUT_NOTICE,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '合計' });
+    const total = axisCard('合計');
+    expect(within(total).getByText(/うち peer（Codex）: 入力 3,630,000/)).toBeTruthy();
+    expect(within(total).getByText(/キャッシュ書き 読めない/)).toBeTruthy();
+    expect(within(total).getByText(USAGE_PEER_INPUT_NOTICE)).toBeTruthy();
+    expect(within(total).getByText(/キャッシュ書き\s+少なくとも 5/)).toBeTruthy();
+  });
+
+  it('peer の行が無ければ、peer の行も peerNotice も「少なくとも」も出さない', async () => {
+    stubUsage({
+      rows: [row(1, { inputTokens: 10, cacheCreationInputTokens: 5 })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '合計' });
+    const total = axisCard('合計');
+    expect(within(total).queryByText(/うち peer/)).toBeNull();
+    expect(within(total).queryByText(USAGE_PEER_INPUT_NOTICE)).toBeNull();
+    expect(within(total).queryByText(/少なくとも/)).toBeNull();
   });
 
   it('$1 未満の金額を $0.00 に丸めない（formatUsd をそのまま使う）', async () => {

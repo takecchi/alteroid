@@ -1,5 +1,6 @@
 import {
   USAGE_ESTIMATE_NOTICE,
+  USAGE_PEER_INPUT_NOTICE,
   ZERO_USAGE,
   resolveLedgerTimeZone,
   type UsageRow,
@@ -137,6 +138,21 @@ describe('renderUsage', () => {
 
     expect(text).toContain('$0.0123');
     expect(text).not.toContain('$0.00');
+  });
+
+  it('peer の分が結果に在るときだけ、入力の読み方の注記を出す', () => {
+    const withPeer = renderUsage(
+      aggregate({
+        rows: [
+          row({ managerId: 'm1', costUsd: 1 }),
+          row({ managerId: 'm1', costUsd: 2, site: 'peer' }),
+        ],
+      }),
+    );
+    expect(withPeer).toContain(USAGE_PEER_INPUT_NOTICE);
+
+    const without = renderUsage(aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] }));
+    expect(without).not.toContain(USAGE_PEER_INPUT_NOTICE);
   });
 
   it('但し書きを必ず出す', () => {

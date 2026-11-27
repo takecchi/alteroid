@@ -437,7 +437,8 @@ export function registerReadTools(
       `\`sections\`（返す欄を選ぶ。${USAGE_SECTIONS.join(' / ')}。\`["totals"]\` なら合計だけ。既定は全部）で縮める。` +
       '切った・落とした一覧は `lists`（一覧ごとの total / returned / omitted）に出る（`breakdown.total` は切る前の全体の合計で、切った一覧の足し算とは一致しない）。' +
       '何も渡さずに上限（60000 字）を超えるときは断らず、top を減らし、最後は合計だけにして返す（`degraded` に元の大きさ・縮め方・再取得の引数の例）。' +
-      '`beforeLedger` などの印が真なら、0 ではなく「記録が無い」と読むこと。',
+      '`beforeLedger` などの印が真なら、0 ではなく「記録が無い」と読むこと。' +
+      'peer（Codex）の行の入力の読み方は `peerNotice`（peer の分が含まれるときだけ載る）。',
     usageReadInput,
     async (args) => {
       const usage = await readUsage(ctx, deps, {
