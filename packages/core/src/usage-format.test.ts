@@ -13,6 +13,8 @@ import {
   isRealUsageDate,
   USAGE_DATE_PATTERN,
   usageDate,
+  USAGE_PEER_INPUT_NOTICE,
+  usagePeerNotice,
   ZERO_USAGE,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
@@ -190,6 +192,19 @@ describe('describeUnrecordedManagers', () => {
     expect(text).toContain('running');
     expect(text).toContain('2026-08-25T13:20:00.000Z');
     expect(text).toContain('1件');
+  });
+});
+
+describe('usagePeerNotice — peer の分が結果に含まれるときだけ注記を返す', () => {
+  it('bySite に peer があれば注記、無ければ undefined', () => {
+    expect(usagePeerNotice([{ site: 'session' }, { site: 'peer' }])).toBe(USAGE_PEER_INPUT_NOTICE);
+    expect(usagePeerNotice([{ site: 'session' }, { site: 'distill' }])).toBeUndefined();
+    expect(usagePeerNotice([])).toBeUndefined();
+  });
+
+  it('注記は「キャッシュ書きは読めない（0 ではない）」と「足して比べない」を言う', () => {
+    expect(USAGE_PEER_INPUT_NOTICE).toContain('読めない（0 ではない）');
+    expect(USAGE_PEER_INPUT_NOTICE).toContain('足して比べない');
   });
 });
 

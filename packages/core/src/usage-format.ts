@@ -66,6 +66,16 @@ export function addUnreadableCounts(
 export const USAGE_ESTIMATE_NOTICE =
   'SDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。';
 
+// peer の行だけ別に言う: Codex はキャッシュ書きを報告せず、新しく文脈に入った分が入力に積まれるため、Claude の行の入力・キャッシュ書きと足して比べると誤読する
+export const USAGE_PEER_INPUT_NOTICE =
+  'peer（Codex）の行の入力（キャッシュされない入力）は、新しく文脈に入ったトークンを含み、Claude の行のキャッシュ書きに当たる。' +
+  'Codex はキャッシュ書きを報告しないので、peer の行のキャッシュ書きは読めない（0 ではない）。Claude の行と足して比べないこと。';
+
+// 結果に peer が無ければ undefined（鍵ごと載せない）: peer を使っていない器の応答と画面を変えないため
+export function usagePeerNotice(bySite: ReadonlyArray<{ site: string }>): string | undefined {
+  return bySite.some((entry) => entry.site === 'peer') ? USAGE_PEER_INPUT_NOTICE : undefined;
+}
+
 export const ZERO_USAGE: UsageTotals = {
   inputTokens: 0,
   outputTokens: 0,

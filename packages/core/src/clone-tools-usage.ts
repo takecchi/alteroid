@@ -19,6 +19,7 @@ import {
   formatUsd,
   isRealUsageDate,
   summarizeUsage,
+  usagePeerNotice,
   usageLayerSchema,
   usageSiteSchema,
   type UsageAggregate,
@@ -319,6 +320,9 @@ function renderUsage(
         describeWebSearchRequests(summary.total),
     );
     lines.push(...describeUnreadableUsage(summary.total));
+    // 入力とキャッシュ書きの合計を出すまとめ表示だけに添える: ここで peer の行を Claude の行と足して読まれるため。軸モードは合計を出さない
+    const peerNotice = usagePeerNotice(summary.bySite);
+    if (peerNotice !== undefined) lines.push(peerNotice);
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
@@ -500,6 +504,7 @@ export function usageTools(context: ToolContext, shared: CloneToolsShared) {
         `軸は${USAGE_AXES.length}つ — ${USAGE_AXES.map((axis) => `${axis}（${USAGE_AXIS_NOTES[axis]}）`).join('・')}。`,
         'token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。',
         '**推定値であり請求明細ではない。**「取れなかった」と「0」は分けて出るので、読み替えないこと。',
+        'まとめ表示に peer（Codex）の分が含まれるときは、peer の行の入力の読み方の注記が付く（peer はキャッシュ書きを報告しない）。',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
         'まとめ表示は軸ごとに打ち切る。続きは axis と cursor で辿れる（打ち切りの行にそのまま書いてある。' +
           'cursor は前回の応答に出たものをそのまま渡す——自分で組み立てない）。',

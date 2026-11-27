@@ -9,6 +9,7 @@ import {
   normalizeJournalTimeBoundary,
   summarizeUsage,
   usageDate,
+  usagePeerNotice,
   usageLayerSchema,
   usageSiteSchema,
 } from '@alteroid/core';
@@ -158,10 +159,14 @@ export async function readUsage(
     recordedManagerIds,
     aggregate.since,
   );
+  const breakdown = summarizeUsage(aggregate.rows, aggregate.turnRows);
+  const peerNotice = usagePeerNotice(breakdown.bySite);
   return {
     ...aggregate,
     // 内訳は core の1つの実装で作る（口ごとに足し直すと食い違う）。
-    breakdown: summarizeUsage(aggregate.rows, aggregate.turnRows),
+    breakdown,
+    // peer が結果に無いときは鍵ごと無い: peer を使っていない器の応答を変えないため。
+    ...(peerNotice === undefined ? {} : { peerNotice }),
     // 配線されていなければ「まだ分からない」を返す: 0 や null にすると「枠を使っていない」と読める。
     account: deps.accountUsage?.() ?? { state: 'unknown' as const },
     unrecordedManagers,
