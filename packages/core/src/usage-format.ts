@@ -220,7 +220,7 @@ export function describeUnreadableUsage(totals: UsageTotals): string[] {
   );
   if (parts.length === 0) return [];
   return [
-    `⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: ${parts.join(' / ')}）。`,
+    `⚠ 一部の区切りで、消費の報告元（Claude は SDK、peer の Codex は app-server）から値が取れなかった（0 ではなく取れなかった。取れなかった数: ${parts.join(' / ')}）。`,
   ];
 }
 
